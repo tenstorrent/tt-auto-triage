@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-echo "auto fix is disabled due to issues: https://github.com/tenstorrent-metal/tt-auto-triage/issues/3"
+echo "auto fix is disabled due to issues: https://github.com/tenstorrent/tt-auto-triage/issues/3"
 exit 0
 
 if [ $# -lt 2 ]; then

@@ -34,7 +34,7 @@ This repository provides two main capabilities:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@main
+- uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
   with:
     workflow-name: "ci.yml"
     job-name: "test-job"
@@ -57,7 +57,7 @@ That's it! The action will analyze the failure and send results to Slack.
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: tenstorrent-metal/tt-auto-triage/.github/actions/slack_output_analysis@main
+- uses: tenstorrent/tt-auto-triage/.github/actions/slack_output_analysis@main
   with:
     github_token: ${{ secrets.GITHUB_TOKEN }}
     slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
@@ -101,7 +101,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run auto-triage
-        uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@main
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
         with:
           workflow-name: "your-workflow.yml"
           job-name: "your-job-name"
@@ -171,7 +171,7 @@ jobs:
           ref: ${{ github.event.workflow_run.head_branch }}
 
       - name: Run auto-triage
-        uses: tenstorrent-metal/tt-auto-triage/.github/actions/auto-triage@main
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
         with:
           workflow-name: "ci.yml"
           job-name: ${{ github.event.workflow_run.jobs[0].name }}
@@ -196,7 +196,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Sync Slack errors to GitHub issues
-        uses: tenstorrent-metal/tt-auto-triage/.github/actions/slack_output_analysis@main
+        uses: tenstorrent/tt-auto-triage/.github/actions/slack_output_analysis@main
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
@@ -310,13 +310,15 @@ Both actions produce artifacts that can be downloaded from workflow runs:
 
 ## Contributing
 
-This repository is designed for use with the `tt-metal` repository. When making changes:
+We welcome contributions to tt-auto-triage! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on:
 
-1. Test changes in a fork or test repository first
-2. Ensure all scripts have proper error handling
-3. Update documentation for any new inputs/outputs
-4. Follow the existing code style and structure
+- Reporting bugs
+- Suggesting features
+- Submitting pull requests
+- Development guidelines
 
 ## License
 
-See LICENSE file for details.
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for the full license text.
+
+For clarification on how this license applies to hardware, models, and IP, please see [LICENSE_understanding.txt](LICENSE_understanding.txt).
