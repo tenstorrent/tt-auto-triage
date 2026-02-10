@@ -26,6 +26,22 @@ inputs:
     description: "Workflow file path (e.g., '.github/workflows/analyze-ND-failures.yml') for finding previous runs to create incremental report. Leave empty to skip incremental report."
     required: false
     default: ""
+  github_repo_owner:
+    description: "GitHub repository owner for creating issues. Defaults to the current repository owner."
+    required: false
+    default: ""
+  github_repo_name:
+    description: "GitHub repository name for creating issues. Defaults to the current repository name."
+    required: false
+    default: ""
+  project_owner:
+    description: "GitHub project owner (for project board integration). Leave empty to skip project board."
+    required: false
+    default: ""
+  project_name:
+    description: "GitHub project name (for project board integration). Leave empty to skip project board."
+    required: false
+    default: ""
 outputs:
   incremental_report_path:
     description: "Path to the incremental error report (new entries only)"
@@ -49,20 +65,33 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        
+        # Use provided values or default to current repository
+        REPO_OWNER="${{ inputs.github_repo_owner }}"
+        REPO_NAME="${{ inputs.github_repo_name }}"
+        
+        if [ -z "$REPO_OWNER" ]; then
+          REPO_OWNER="${{ github.repository_owner }}"
+        fi
+        
+        if [ -z "$REPO_NAME" ]; then
+          REPO_NAME="${{ github.event.repository.name }}"
+        fi
+        
         cat > "${{ github.action_path }}/secrets.json" << EOF
         {
           "github_token": "${{ inputs.github_token }}",
-          "github_repo_owner": "ebanerjeeTT",
-          "github_repo_name": "issue_dump",
+          "github_repo_owner": "$REPO_OWNER",
+          "github_repo_name": "$REPO_NAME",
           "slack_token": "${{ inputs.slack_token }}",
           "channel_id": "${{ inputs.channel_id }}",
-          "project_owner": "ebanerjeeTT",
-          "project_name": "issue dump test",
+          "project_owner": "${{ inputs.project_owner }}",
+          "project_name": "${{ inputs.project_name }}",
           "project_number": "",
           "project_field_id": ""
         }
         EOF
-        echo "Created secrets.json with repo: ebanerjeeTT/issue_dump and project: issue dump test"
+        echo "Created secrets.json with repo: $REPO_OWNER/$REPO_NAME"
       working-directory: ${{ github.action_path }}
 
     - name: Delete existing build_slack_export_with_threads.json if it exists

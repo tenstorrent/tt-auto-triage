@@ -1,0 +1,36 @@
+tt-auto-triage
+Copyright © 2024-2025 Tenstorrent AI ULC
+
+This product includes software developed at Tenstorrent AI ULC (https://tenstorrent.com/).
+
+This software includes the following third-party components:
+
+-------------------------------------------------------------------------------
+requests - Apache License 2.0
+Copyright (c) Kenneth Reitz
+https://github.com/psf/requests
+
+-------------------------------------------------------------------------------
+slack-sdk - MIT License
+Copyright (c) Slack Technologies, LLC
+https://github.com/slackapi/python-slack-sdk
+
+-------------------------------------------------------------------------------
+sentence-transformers - Apache License 2.0
+Copyright (c) 2019 UKPLab
+https://github.com/UKPLab/sentence-transformers
+
+-------------------------------------------------------------------------------
+scikit-learn - BSD 3-Clause License
+Copyright (c) 2007-2024 The scikit-learn developers
+https://github.com/scikit-learn/scikit-learn
+
+-------------------------------------------------------------------------------
+rapidfuzz - MIT License
+Copyright (c) 2020 Max Bachmann
+https://github.com/rapidfuzz/RapidFuzz
+
+-------------------------------------------------------------------------------
+numpy - BSD 3-Clause License
+Copyright (c) 2005-2024 NumPy Developers
+https://numpy.org/

@@ -151,7 +151,7 @@ def load_secrets():
         print("""
 {
   "github_token": "your_token_here",
-  "github_repo_owner": "tenstorrent-metal",
+  "github_repo_owner": "tenstorrent",
   "github_repo_name": "tt-auto-triage",
   "project_owner": "",
   "project_number": "",
