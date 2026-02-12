@@ -1,0 +1,25 @@
+# Smoke tests for auto-triage lib (common.sh and shared utilities)
+# Runs on push/PR to catch regressions in the refactoring foundation.
+name: Test Auto-Triage Lib
+
+on:
+  push:
+    paths:
+      - '.github/actions/auto-triage/auto_triage/lib/**'
+      - '.github/actions/auto-triage/auto_triage/tests/**'
+  pull_request:
+    paths:
+      - '.github/actions/auto-triage/auto_triage/lib/**'
+      - '.github/actions/auto-triage/auto_triage/tests/**'
+
+jobs:
+  test-lib:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run lib/common.sh smoke tests
+        run: |
+          cd .github/actions/auto-triage/auto_triage
+          chmod +x tests/lib/common_test.sh
+          ./tests/lib/common_test.sh
