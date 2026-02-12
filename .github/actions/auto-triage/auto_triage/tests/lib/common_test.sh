@@ -1,79 +1,103 @@
 #!/bin/bash
 #
-# Basic smoke tests for lib/common.sh
-# Run from auto_triage/ directory: ./tests/lib/common_test.sh
+# Smoke tests for lib/common.sh
+# Run:  cd .github/actions/auto-triage/auto_triage && ./tests/lib/common_test.sh
 #
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AUTO_TRIAGE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-LIB_DIR="$AUTO_TRIAGE_DIR/lib"
+LIB_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)/lib"
 
-export AUTO_TRIAGE_ROOT="$AUTO_TRIAGE_DIR"
+export AUTO_TRIAGE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$LIB_DIR/common.sh"
 
-TESTS_PASSED=0
-TESTS_FAILED=0
+# -----------------------------------------------------------------------------
+# Minimal test harness
+# -----------------------------------------------------------------------------
+_pass=0 _fail=0
 
-run_test() {
-    local name="$1"
-    shift
-    if "$@"; then
-        echo "  OK: $name"
-        TESTS_PASSED=$((TESTS_PASSED + 1))
-        return 0
+assert() {                       # assert "description" <command...>
+    local desc="$1"; shift
+    if "$@" 2>/dev/null; then
+        echo "  PASS  $desc"; _pass=$((_pass + 1))
     else
-        echo "  FAIL: $name"
-        TESTS_FAILED=$((TESTS_FAILED + 1))
-        return 1
+        echo "  FAIL  $desc"; _fail=$((_fail + 1))
     fi
 }
 
-echo "=== lib/common.sh smoke tests ==="
+assert_eq() {                    # assert_eq "description" "actual" "expected"
+    local desc="$1" actual="$2" expected="$3"
+    if [ "$actual" = "$expected" ]; then
+        echo "  PASS  $desc"; _pass=$((_pass + 1))
+    else
+        echo "  FAIL  $desc  (got '$actual', expected '$expected')"; _fail=$((_fail + 1))
+    fi
+}
 
-run_test "root is set" test -n "${AUTO_TRIAGE_ROOT:-}"
+assert_fails() {                 # assert_fails "description" <command...>
+    local desc="$1"; shift
+    if ! ("$@" 2>/dev/null); then
+        echo "  PASS  $desc"; _pass=$((_pass + 1))
+    else
+        echo "  FAIL  $desc  (expected failure)"; _fail=$((_fail + 1))
+    fi
+}
 
-run_test "get_data_dir" test -n "$(get_data_dir)" -a "$(get_data_dir)" = "${AUTO_TRIAGE_ROOT}/auto_triage/data"
+echo "=== lib/common.sh ==="
 
-run_test "get_output_dir" test -n "$(get_output_dir)" -a "$(get_output_dir)" = "${AUTO_TRIAGE_ROOT}/auto_triage/output"
+# -- root detection -----------------------------------------------------------
+assert "AUTO_TRIAGE_ROOT is set" test -n "$AUTO_TRIAGE_ROOT"
 
-run_test "get_logs_dir" test -n "$(get_logs_dir)" -a "$(get_logs_dir)" = "${AUTO_TRIAGE_ROOT}/auto_triage/logs"
+# -- path helpers -------------------------------------------------------------
+assert_eq "get_data_dir"            "$(get_data_dir)"            "$AUTO_TRIAGE_ROOT/auto_triage/data"
+assert_eq "get_output_dir"          "$(get_output_dir)"          "$AUTO_TRIAGE_ROOT/auto_triage/output"
+assert_eq "get_logs_dir"            "$(get_logs_dir)"            "$AUTO_TRIAGE_ROOT/auto_triage/logs"
+assert_eq "get_data_dir custom root" "$(get_data_dir /tmp/foo)"  "/tmp/foo/auto_triage/data"
 
-run_test "get_data_dir with explicit root" test "$(get_data_dir /tmp/foo)" = "/tmp/foo/auto_triage/data"
+# -- logging (just verifying no crash) ----------------------------------------
+assert "log_info"    eval 'log_info    "msg" >/dev/null'
+assert "log_success" eval 'log_success "msg" >/dev/null'
+assert "log_warn"    eval 'log_warn    "msg" 2>/dev/null'
+assert "log_error"   eval 'log_error   "msg" 2>/dev/null'
 
-run_test "log functions" eval 'log_info x >/dev/null && log_error x 2>/dev/null && log_warn x 2>/dev/null && log_success x >/dev/null'
+# -- error handling -----------------------------------------------------------
+assert       "check_command (exists)"  check_command bash
+assert_fails "check_command (missing)" check_command __no_such_cmd_abc123
+assert_fails "die exits"               die "deliberate"
 
-run_test "check_command exists" check_command bash
+assert "warn does not exit" eval 'warn "harmless" 2>/dev/null; true'
 
-run_test "check_command missing" eval '! (check_command __nonexistent_cmd_xyz_xyz 2>/dev/null)'
+# -- env helpers --------------------------------------------------------------
+unset __T_UNSET 2>/dev/null || true
+assert_eq "get_env_with_default (unset)" "$(get_env_with_default __T_UNSET fallback)" "fallback"
 
-unset __TEST_UNSET_VAR 2>/dev/null || true
-run_test "get_env_with_default unset" test "$(get_env_with_default __TEST_UNSET_VAR "default")" = "default"
+export __T_SET="hello"
+assert_eq "get_env_with_default (set)"   "$(get_env_with_default __T_SET fallback)"   "hello"
+unset __T_SET
 
-export __TEST_SET_VAR="actual"
-run_test "get_env_with_default set" test "$(get_env_with_default __TEST_SET_VAR "default")" = "actual"
-unset __TEST_SET_VAR
+export __T_REQ="ok"
+assert "require_env (set)"   eval 'require_env __T_REQ'
+unset __T_REQ
+assert_fails "require_env (unset)" require_env __T_REQ
 
-# die exits with 1 (run in subshell since die exits)
-if ( die "test" 2>/dev/null ); then
-    echo "  FAIL: die should exit 1"
-    TESTS_FAILED=$((TESTS_FAILED + 1))
-else
-    [ $? -eq 1 ] && { echo "  OK: die exits with 1"; TESTS_PASSED=$((TESTS_PASSED + 1)); } || { echo "  FAIL: die exit code"; TESTS_FAILED=$((TESTS_FAILED + 1)); }
-fi
-
+# -- JSON helpers (skip if jq absent) ----------------------------------------
 if command -v jq >/dev/null 2>&1; then
-    TMP_JSON=$(mktemp)
-    echo '{"key":"value"}' > "$TMP_JSON"
-    run_test "json_get" test "$(json_get .key "$TMP_JSON" "x")" = "value"
-    run_test "json_get default" test "$(json_get .missing "$TMP_JSON" "fallback")" = "fallback"
-    rm -f "$TMP_JSON"
+    _tmp=$(mktemp)
+    echo '{"name":"triage","count":42}' > "$_tmp"
+
+    assert_eq "json_get existing key"  "$(json_get .name  "$_tmp" x)"      "triage"
+    assert_eq "json_get missing key"   "$(json_get .nope  "$_tmp" dflt)"   "dflt"
+    assert_eq "json_get null key"      "$(json_get .null  "$_tmp" none)"   "none"
+    assert_eq "jq_safe"                "$(jq_safe -r .name "$_tmp")"       "triage"
+    assert_fails "jq_safe missing file" jq_safe -r .name "/no/such/file.json"
+
+    rm -f "$_tmp"
 else
-    echo "  SKIP: json tests (jq not installed)"
+    echo "  SKIP  json tests (jq not installed)"
 fi
 
+# -- summary ------------------------------------------------------------------
 echo ""
-echo "=== Results: $TESTS_PASSED passed, $TESTS_FAILED failed ==="
-
-[ $TESTS_FAILED -eq 0 ]
+echo "=== $_pass passed, $_fail failed ==="
+[ "$_fail" -eq 0 ]
