@@ -20,4 +20,8 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - name: Run lib smoke tests
         working-directory: .github/actions/auto-triage/auto_triage
-        run: bash ./tests/lib/common_test.sh
+        run: |
+          for t in tests/lib/*_test.sh; do
+            echo "--- $t ---"
+            bash "$t"
+          done
