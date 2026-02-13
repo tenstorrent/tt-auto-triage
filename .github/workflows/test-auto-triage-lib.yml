@@ -5,10 +5,12 @@ on:
     paths:
       - '.github/actions/auto-triage/auto_triage/lib/**'
       - '.github/actions/auto-triage/auto_triage/tests/**'
+      - '.github/workflows/test-auto-triage-lib.yml'
   pull_request:
     paths:
       - '.github/actions/auto-triage/auto_triage/lib/**'
       - '.github/actions/auto-triage/auto_triage/tests/**'
+      - '.github/workflows/test-auto-triage-lib.yml'
   workflow_dispatch:
 
 jobs:
@@ -18,4 +20,4 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run lib smoke tests
         working-directory: .github/actions/auto-triage/auto_triage
-        run: ./tests/lib/common_test.sh
+        run: bash ./tests/lib/common_test.sh

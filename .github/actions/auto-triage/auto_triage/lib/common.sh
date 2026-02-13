@@ -47,10 +47,10 @@ fi
 # Logging
 # ==============================================================================
 
-log_info()    { echo -e "${_AT_BLUE}$*${_AT_NC}"; }        # informational (blue)
-log_success() { echo -e "${_AT_GREEN}$*${_AT_NC}"; }       # success       (green)
-log_warn()    { echo -e "${_AT_YELLOW}$*${_AT_NC}" >&2; }  # warning       (yellow, stderr)
-log_error()   { echo -e "${_AT_RED}$*${_AT_NC}" >&2; }     # error         (red, stderr)
+log_info()    { printf '%b\n' "${_AT_BLUE}$*${_AT_NC}"; }        # informational (blue)
+log_success() { printf '%b\n' "${_AT_GREEN}$*${_AT_NC}"; }       # success       (green)
+log_warn()    { printf '%b\n' "${_AT_YELLOW}$*${_AT_NC}" >&2; }  # warning       (yellow, stderr)
+log_error()   { printf '%b\n' "${_AT_RED}$*${_AT_NC}" >&2; }     # error         (red, stderr)
 
 # ==============================================================================
 # Error handling
@@ -87,14 +87,18 @@ get_logs_dir()   { echo "${1:-$AUTO_TRIAGE_ROOT}/auto_triage/logs"; }
 #   result=$(jq_safe -r '.key' file.json) || result="default"
 jq_safe() {
     [ $# -ge 2 ] || { echo "Usage: jq_safe <jq_args...> <file>" >&2; return 1; }
+    command -v jq >/dev/null 2>&1 || return 1
     local file="${@: -1}"
     [ -f "$file" ] || return 1
     jq "${@:1:$#-1}" "$file" 2>/dev/null
+    local status=$?
+    [ "$status" -eq 0 ] || return 1
 }
 
 # Convenience: extract a value or fall back to a default.
 #   val=$(json_get .key file.json "fallback")
 json_get() {
+    [ $# -ge 2 ] || { echo "Usage: json_get <jq_path> <file> [default]" >&2; return 1; }
     local jq_path="$1" file="$2" default="${3:-}"
     local result
     result=$(jq_safe -r "$jq_path" "$file") || true
@@ -113,6 +117,7 @@ json_get() {
 #   require_env GITHUB_TOKEN
 #   require_env SLACK_BOT_TOKEN "Set SLACK_BOT_TOKEN to send notifications"
 require_env() {
+    [ $# -ge 1 ] || die "Usage: require_env VAR_NAME [message]"
     local var_name="$1"
     local msg="${2:-$var_name must be set}"
     [ -n "${!var_name:-}" ] || die "$msg"
@@ -121,6 +126,11 @@ require_env() {
 # Return the value of an env var, or a default if unset/empty.
 #   token=$(get_env_with_default COPILOT_PAT "$GH_TOKEN")
 get_env_with_default() {
-    local val="${!1:-}"
-    echo "${val:-$2}"
+    [ $# -ge 2 ] || die "get_env_with_default: expected VAR_NAME and DEFAULT arguments"
+    local var_name="$1" default_value="$2"
+    if ! [[ "$var_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        die "get_env_with_default: invalid environment variable name: '$var_name'"
+    fi
+    local val="${!var_name:-}"
+    echo "${val:-$default_value}"
 }

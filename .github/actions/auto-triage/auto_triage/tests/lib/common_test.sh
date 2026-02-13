@@ -84,7 +84,7 @@ assert_fails "require_env (unset)" require_env __T_REQ
 # -- JSON helpers (skip if jq absent) ----------------------------------------
 if command -v jq >/dev/null 2>&1; then
     _tmp=$(mktemp)
-    echo '{"name":"triage","count":42}' > "$_tmp"
+    echo '{"name":"triage","count":42,"null":null}' > "$_tmp"
 
     assert_eq "json_get existing key"  "$(json_get .name  "$_tmp" x)"      "triage"
     assert_eq "json_get missing key"   "$(json_get .nope  "$_tmp" dflt)"   "dflt"
