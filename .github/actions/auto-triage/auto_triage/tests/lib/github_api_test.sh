@@ -16,7 +16,6 @@ LIB_DIR="$ROOT_DIR/lib"
 
 source "$SCRIPT_DIR/test_harness.sh"
 export AUTO_TRIAGE_ROOT="$ROOT_DIR"
-source "$LIB_DIR/github_api.sh"
 
 # -- create mock gh CLI --------------------------------------------------------
 MOCK_DIR=$(mktemp -d)

@@ -57,7 +57,7 @@ assert "ensure_dirs creates nested" test -d "$TMP_DIR/a/b"
 assert "ensure_dirs creates flat"   test -d "$TMP_DIR/c"
 rm -rf "$TMP_DIR"
 
-# -- double-source guard -------------------------------------------------------
+# -- double-source guard (just proves that double-sourcing is a no-op) ---------------------------------------
 (
     source "$LIB_DIR/validation.sh"
     true
