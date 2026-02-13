@@ -14,39 +14,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LIB_DIR="$ROOT_DIR/lib"
 
+source "$SCRIPT_DIR/test_harness.sh"
 export AUTO_TRIAGE_ROOT="$ROOT_DIR"
-source "$LIB_DIR/common.sh"
-source "$LIB_DIR/config.sh"
-
-# -- test harness -------------------------------------------------------------
-_pass=0 _fail=0
-
-assert_eq() {
-    local desc="$1" actual="$2" expected="$3"
-    if [ "$actual" = "$expected" ]; then
-        echo "  PASS  $desc"; _pass=$((_pass + 1))
-    else
-        echo "  FAIL  $desc  (got '$actual', expected '$expected')"; _fail=$((_fail + 1))
-    fi
-}
-
-assert() {
-    local desc="$1"; shift
-    if "$@" 2>/dev/null; then
-        echo "  PASS  $desc"; _pass=$((_pass + 1))
-    else
-        echo "  FAIL  $desc"; _fail=$((_fail + 1))
-    fi
-}
-
-assert_fails() {
-    local desc="$1"; shift
-    if ! ("$@" 2>/dev/null); then
-        echo "  PASS  $desc"; _pass=$((_pass + 1))
-    else
-        echo "  FAIL  $desc  (expected failure)"; _fail=$((_fail + 1))
-    fi
-}
+source "$LIB_DIR/github_api.sh"
 
 # -- create mock gh CLI --------------------------------------------------------
 MOCK_DIR=$(mktemp -d)
@@ -152,6 +122,4 @@ assert_eq "get_check_annotations empty" "$anns" "[]"
 # -- cleanup -------------------------------------------------------------------
 rm -rf "$MOCK_DIR"
 
-echo ""
-echo "=== $_pass passed, $_fail failed ==="
-[ "$_fail" -eq 0 ]
+test_summary

@@ -9,39 +9,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)/lib"
 
+source "$SCRIPT_DIR/test_harness.sh"
 export AUTO_TRIAGE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-source "$LIB_DIR/common.sh"
 source "$LIB_DIR/validation.sh"
-
-# -- test harness -------------------------------------------------------------
-_pass=0 _fail=0
-
-assert_eq() {
-    local desc="$1" actual="$2" expected="$3"
-    if [ "$actual" = "$expected" ]; then
-        echo "  PASS  $desc"; _pass=$((_pass + 1))
-    else
-        echo "  FAIL  $desc  (got '$actual', expected '$expected')"; _fail=$((_fail + 1))
-    fi
-}
-
-assert() {
-    local desc="$1"; shift
-    if "$@" 2>/dev/null; then
-        echo "  PASS  $desc"; _pass=$((_pass + 1))
-    else
-        echo "  FAIL  $desc"; _fail=$((_fail + 1))
-    fi
-}
-
-assert_fails() {
-    local desc="$1"; shift
-    if ! ("$@" 2>/dev/null); then
-        echo "  PASS  $desc"; _pass=$((_pass + 1))
-    else
-        echo "  FAIL  $desc  (expected failure)"; _fail=$((_fail + 1))
-    fi
-}
 
 echo "=== lib/validation.sh ==="
 
@@ -94,6 +64,4 @@ rm -rf "$TMP_DIR"
 ) && { echo "  PASS  double-source guard"; _pass=$((_pass + 1)); } \
   || { echo "  FAIL  double-source guard"; _fail=$((_fail + 1)); }
 
-echo ""
-echo "=== $_pass passed, $_fail failed ==="
-[ "$_fail" -eq 0 ]
+test_summary

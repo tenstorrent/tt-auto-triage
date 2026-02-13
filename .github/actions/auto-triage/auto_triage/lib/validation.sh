@@ -5,13 +5,19 @@
 # Provides reusable checks that are currently scattered (and duplicated)
 # across find_boundaries.sh, download_*.sh, get_logs.sh, etc.
 #
-# Prerequisites: lib/common.sh sourced (for die/warn).
+# Prerequisites: none (sources common.sh for die/warn).
+# Usage: source this file (it pulls in common.sh automatically).
 #
 
 if [ -n "${_AUTO_TRIAGE_VALIDATION_LOADED:-}" ]; then
     return 0
 fi
 _AUTO_TRIAGE_VALIDATION_LOADED=1
+
+# validation.sh depends on common.sh (die, warn).
+_VALIDATION_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+source "$_VALIDATION_LIB_DIR/common.sh"
 
 # ==============================================================================
 # Commit SHA validation

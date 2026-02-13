@@ -8,13 +8,19 @@
 #   - POST support with HTTP status inspection
 #   - Common endpoint helpers (workflows, runs, jobs, commits, PRs)
 #
-# Prerequisites: gh CLI authenticated, lib/common.sh and lib/config.sh sourced.
+# Prerequisites: gh CLI authenticated.
+# Usage: source this file (it pulls in config.sh, which pulls in common.sh).
 #
 
 if [ -n "${_AUTO_TRIAGE_GITHUB_API_LOADED:-}" ]; then
     return 0
 fi
 _AUTO_TRIAGE_GITHUB_API_LOADED=1
+
+# github_api.sh depends on config.sh (AT_OWNER_REPO, AT_PER_PAGE, etc.).
+_GITHUB_API_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=config.sh
+source "$_GITHUB_API_LIB_DIR/config.sh"
 
 # ==============================================================================
 # Low-level helpers
