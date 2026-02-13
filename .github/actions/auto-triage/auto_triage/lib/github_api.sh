@@ -216,15 +216,16 @@ get_check_annotations() {
 
 # Download the full log zip for a workflow run into a target directory.
 # Extracts the zip and removes the temporary file.
+# Uses AT_OWNER_REPO from config (same as other helpers in this file).
 #
-#   download_run_logs "$owner" "$repo" "$run_id" "/tmp/logs"
+#   download_run_logs "$run_id" "/tmp/logs"
 #
 download_run_logs() {
-    local owner="$1" repo="$2" run_id="$3" dest="$4"
+    local run_id="$1" dest="$2"
     local tmp_zip
     tmp_zip="$(mktemp --suffix=.zip 2>/dev/null || mktemp)"
     mkdir -p "$dest"
-    gh api "repos/${owner}/${repo}/actions/runs/${run_id}/logs" > "$tmp_zip" 2>/dev/null || {
+    gh api "repos/${AT_OWNER_REPO}/actions/runs/${run_id}/logs" > "$tmp_zip" 2>/dev/null || {
         rm -f "$tmp_zip"
         return 1
     }
