@@ -90,9 +90,7 @@ jq_safe() {
     command -v jq >/dev/null 2>&1 || return 1
     local file="${@: -1}"
     [ -f "$file" ] || return 1
-    jq "${@:1:$#-1}" "$file" 2>/dev/null
-    local status=$?
-    [ "$status" -eq 0 ] || return 1
+    jq "${@:1:$#-1}" "$file" 2>/dev/null || return 1
 }
 
 # Convenience: extract a value or fall back to a default.
