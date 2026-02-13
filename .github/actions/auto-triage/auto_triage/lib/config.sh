@@ -5,8 +5,7 @@
 # All values are overridable via environment variables so that tests and
 # alternative deployments can customise behaviour without editing code.
 #
-# Usage: source the file after common.sh
-#   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
+# Usage: source this file (it pulls in common.sh automatically).
 #   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/config.sh"
 #
 
@@ -16,13 +15,18 @@ if [ -n "${_AUTO_TRIAGE_CONFIG_LOADED:-}" ]; then
 fi
 _AUTO_TRIAGE_CONFIG_LOADED=1
 
+# config.sh depends on common.sh (AUTO_TRIAGE_ROOT, get_data_dir, etc.)
+_CONFIG_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+source "$_CONFIG_LIB_DIR/common.sh"
+
 # ==============================================================================
 # Repository  (the repo being triaged, NOT the auto-triage repo itself)
 # ==============================================================================
 AT_OWNER="${AT_OWNER:-tenstorrent}"
 AT_REPO="${AT_REPO:-tt-metal}"
-AT_OWNER_REPO="${AT_OWNER}/${AT_REPO}"
-AT_BASE_URL="https://github.com/${AT_OWNER_REPO}"
+AT_OWNER_REPO="${AT_OWNER_REPO:-${AT_OWNER}/${AT_REPO}}"
+AT_BASE_URL="${AT_BASE_URL:-https://github.com/${AT_OWNER_REPO}}"
 
 # ==============================================================================
 # Numeric constants  (used by more than one script)
@@ -35,8 +39,8 @@ AT_FAILURE_LIMIT="${AT_FAILURE_LIMIT:-30}"      # consecutive failures before st
 # ==============================================================================
 # Feature flags  (mirror the action.yml inputs where relevant)
 # ==============================================================================
-AT_CUTOFF_COMMIT="${CUTOFF_COMMIT:-}"           # ignore runs newer than this SHA
-AT_REUSE_DATA="${REUSE_DATA:-false}"            # skip re-downloading data if present
+AT_CUTOFF_COMMIT="${AT_CUTOFF_COMMIT:-${CUTOFF_COMMIT:-}}"           # ignore runs newer than this SHA
+AT_REUSE_DATA="${AT_REUSE_DATA:-${REUSE_DATA:-false}}"            # skip re-downloading data if present
 
 # ==============================================================================
 # Directory helpers  (thin wrappers around common.sh, adding mkdir + symlinks)
