@@ -21,7 +21,7 @@ This repository provides two main capabilities:
    - Creates or updates GitHub issues from Slack messages
    - Generates error reports and incremental reports
 
-## Bare Minimum Quickstart
+## Quickstart
 
 ### Auto-Triage (Minimal Setup)
 
@@ -78,7 +78,7 @@ The auto-triage system categorizes failures into 5 cases:
 - **Case 4**: Deterministic failure with multiple plausible commits - Multiple commits could plausibly cause the failure
 - **Case 5**: Deterministic failure with incomplete commit metadata - Failure is deterministic but some commit metadata couldn't be downloaded
 
-## Quickstart
+## Usage
 
 ### Auto-Triage
 
