@@ -33,7 +33,7 @@ source "$_GITHUB_API_LIB_DIR/config.sh"
 #
 gh_api() {
     local endpoint="$1"
-    local fallback="${2:-{\}}"
+    local fallback="${2:-"{}"}"
     local result
     if result=$(gh api "$endpoint" 2>/dev/null); then
         echo "$result"
@@ -60,7 +60,12 @@ gh_api_jq() {
 #
 gh_api_post() {
     local endpoint="$1"
-    gh api --method POST "$endpoint" -i 2>&1 || echo "API_ERROR"
+    local response
+    if response=$(gh api --method POST "$endpoint" -i 2>/dev/null); then
+        printf '%s\n' "$response"
+    else
+        printf 'API_ERROR\n'
+    fi
 }
 
 # ==============================================================================
@@ -230,5 +235,7 @@ download_run_logs() {
         return 1
     }
     unzip -oq "$tmp_zip" -d "$dest" 2>/dev/null
+    local unzip_status=$?
     rm -f "$tmp_zip"
+    return "$unzip_status"
 }
