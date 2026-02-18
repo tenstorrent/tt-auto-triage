@@ -4,11 +4,13 @@ on:
   push:
     paths:
       - '.github/actions/auto-triage/auto_triage/lib/**'
+      - '.github/actions/auto-triage/auto_triage/modules/**'
       - '.github/actions/auto-triage/auto_triage/tests/**'
       - '.github/workflows/test-auto-triage-lib.yml'
   pull_request:
     paths:
       - '.github/actions/auto-triage/auto_triage/lib/**'
+      - '.github/actions/auto-triage/auto_triage/modules/**'
       - '.github/actions/auto-triage/auto_triage/tests/**'
       - '.github/workflows/test-auto-triage-lib.yml'
   workflow_dispatch:
@@ -24,6 +26,14 @@ jobs:
         working-directory: .github/actions/auto-triage/auto_triage
         run: |
           for t in tests/lib/*_test.sh; do
+            echo "--- $t ---"
+            bash "$t"
+          done
+      - name: Run modules smoke tests
+        working-directory: .github/actions/auto-triage/auto_triage
+        run: |
+          for t in tests/modules/boundaries/*_test.sh; do
+            [ -f "$t" ] || continue
             echo "--- $t ---"
             bash "$t"
           done
