@@ -7,7 +7,7 @@
 #   Paths      - get_data_dir, get_output_dir, get_logs_dir
 #   Errors     - die, warn, check_command
 #   JSON       - jq_safe, json_get
-#   Env vars   - require_env, get_env_with_default
+#   Env vars   - get_env_with_default
 #
 # Usage (from any script under auto_triage/):
 #   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/common.sh"
@@ -112,16 +112,6 @@ json_get() {
 # ==============================================================================
 # Environment variable helpers
 # ==============================================================================
-
-# Die when a required env var is unset or empty.
-#   require_env GITHUB_TOKEN
-#   require_env SLACK_BOT_TOKEN "Set SLACK_BOT_TOKEN to send notifications"
-require_env() {
-    [ $# -ge 1 ] || die "Usage: require_env VAR_NAME [message]"
-    local var_name="$1"
-    local msg="${2:-$var_name must be set}"
-    [ -n "${!var_name:-}" ] || die "$msg"
-}
 
 # Return the value of an env var, or a default if unset/empty.
 #   token=$(get_env_with_default COPILOT_PAT "$GH_TOKEN")

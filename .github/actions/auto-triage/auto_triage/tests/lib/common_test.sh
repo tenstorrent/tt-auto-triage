@@ -76,11 +76,6 @@ export __T_SET="hello"
 assert_eq "get_env_with_default (set)"   "$(get_env_with_default __T_SET fallback)"   "hello"
 unset __T_SET
 
-export __T_REQ="ok"
-assert "require_env (set)"   eval 'require_env __T_REQ'
-unset __T_REQ
-assert_fails "require_env (unset)" require_env __T_REQ
-
 # -- JSON helpers (skip if jq absent) ----------------------------------------
 if command -v jq >/dev/null 2>&1; then
     _tmp=$(mktemp)
