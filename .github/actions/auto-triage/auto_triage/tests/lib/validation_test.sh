@@ -23,6 +23,10 @@ assert_fails "sha format: uppercase"     eval 'is_valid_sha_format "ABC123DEF"'
 assert_fails "sha format: non-hex"       eval 'is_valid_sha_format "xyz1234"'
 assert_fails "sha format: empty"         eval 'is_valid_sha_format ""'
 
+# -- validate_commit_sha -------------------------------------------------------
+assert "validate_commit_sha: valid sha" validate_commit_sha "$(git rev-parse HEAD)"
+assert_fails "validate_commit_sha: invalid sha" eval 'validate_commit_sha "notasha123"'
+
 # -- parse_job_url -------------------------------------------------------------
 url="https://github.com/tenstorrent/tt-metal/actions/runs/12345678/job/87654321"
 assert "parse_job_url valid" parse_job_url "$url"

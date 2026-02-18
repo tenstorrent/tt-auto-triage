@@ -34,8 +34,13 @@ validate_commit_sha() {
     if [ -z "$sha" ]; then
         die "$label SHA is empty"
     fi
-    if ! git rev-parse --verify "$sha" >/dev/null 2>&1; then
-        die "$label '$sha' not found in repository"
+    # Ensure the value looks like a full or abbreviated SHA (7-40 hex chars).
+    if ! is_valid_sha_format "$sha"; then
+        die "$label '$sha' is not a valid commit SHA format"
+    fi
+    # Ensure git recognises it as a commit object in the current repository.
+    if ! git rev-parse --verify "${sha}^{commit}" >/dev/null 2>&1; then
+        die "$label '$sha' not found in repository as a commit"
     fi
 }
 
