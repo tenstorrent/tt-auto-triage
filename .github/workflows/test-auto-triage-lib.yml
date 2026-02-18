@@ -31,6 +31,8 @@ jobs:
           done
       - name: Run modules smoke tests
         working-directory: .github/actions/auto-triage/auto_triage
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           for t in tests/modules/boundaries/*_test.sh; do
             [ -f "$t" ] || continue
