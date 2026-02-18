@@ -120,20 +120,11 @@ if [ -n "$CUTOFF_COMMIT" ]; then
 fi
 echo ""
 
-# First, find the workflow ID (support both .yaml and .yml)
+# Find the workflow ID (support both .yaml and .yml)
 echo "Finding workflow ID..."
-WORKFLOW_ID=""
-for EXT in yaml yml YAML YML; do
-    WORKFLOW_FILE="${WORKFLOW_NAME}.${EXT}"
-    # Try to extract the workflow id; on HTTP errors gh may still return JSON without .id
-    WORKFLOW_ID_RAW=$(gh api "repos/${REPO}/actions/workflows/${WORKFLOW_FILE}" 2>/dev/null || echo "")
-    WORKFLOW_ID=$(printf '%s' "$WORKFLOW_ID_RAW" | jq -r '.id // empty' 2>/dev/null || echo "")
-    if [ -n "$WORKFLOW_ID" ]; then
-        WORKFLOW_NAME="${WORKFLOW_NAME}"
-        WORKFLOW_FILENAME="$WORKFLOW_FILE"
-        break
-    fi
-done
+# workflow_finder uses AT_OWNER_REPO from config; ensure it matches find_boundaries' REPO
+export AT_OWNER_REPO="${AT_OWNER_REPO:-$REPO}"
+WORKFLOW_ID=$(source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/modules/boundaries/workflow_finder.sh" && find_workflow_id "$WORKFLOW_NAME") || true
 
 if [ -z "$WORKFLOW_ID" ]; then
     echo -e "${RED}Error: Could not find workflow '${WORKFLOW_NAME}' with .yaml or .yml extension${NC}"
