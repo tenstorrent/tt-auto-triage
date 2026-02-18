@@ -67,6 +67,7 @@ is_valid_sha_format() {
 #
 parse_job_url() {
     local url="$1"
+    unset _owner _repo _run_id _job_id 2>/dev/null || true
     if [[ "$url" =~ github\.com/([^/]+)/([^/]+)/actions/runs/([0-9]+)/job/([0-9]+) ]]; then
         _owner="${BASH_REMATCH[1]}"
         _repo="${BASH_REMATCH[2]}"
@@ -89,24 +90,15 @@ parse_job_url() {
 #
 validate_json_file() {
     local file="$1" quiet="${2:-}"
-    local _die_or_return
-    if [ "$quiet" = "quiet" ]; then
-        _die_or_return() { return 1; }
-    else
-        _die_or_return() { die "$@"; }
-    fi
 
     if [ ! -f "$file" ]; then
-        _die_or_return "JSON file not found: $file"
-        return $?
+        if [ "$quiet" = "quiet" ]; then return 1; else die "JSON file not found: $file"; fi
     fi
     if [ ! -s "$file" ]; then
-        _die_or_return "JSON file is empty: $file"
-        return $?
+        if [ "$quiet" = "quiet" ]; then return 1; else die "JSON file is empty: $file"; fi
     fi
     if ! jq empty "$file" 2>/dev/null; then
-        _die_or_return "Invalid JSON in $file"
-        return $?
+        if [ "$quiet" = "quiet" ]; then return 1; else die "Invalid JSON in $file"; fi
     fi
     return 0
 }
