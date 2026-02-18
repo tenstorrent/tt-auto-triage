@@ -80,6 +80,7 @@ WORKFLOW_NAME=$(normalize_hyphens "$WORKFLOW_NAME")
 SUBJOB_NAME=$(normalize_hyphens "$SUBJOB_NAME")
 
 FAILURE_LIMIT=30
+RUN_LIMIT_WITHOUT_SUCCESS=100
 FAILURE_ONLY_COUNT=0
 EXCEEDED_FAILURE_LIMIT=false
 BOUNDARY_STATUS="ok"
@@ -404,6 +405,14 @@ while true; do
                 write_cancel_and_exit "Subjob '${SUBJOB_NAME}' was not found in the first ${SUBJOB_MISSING_CANCEL_LIMIT} main-branch runs of workflow '${WORKFLOW_NAME}'. Please verify the job name."
             fi
             continue
+        fi
+
+        # If we've scanned 100 runs without a success but we did find at least one failure,
+        # give up (same as 30 consecutive failures) so the LLM stops looking for a commit.
+        if [ "$FOUND_SUCCESS" = false ] && [ "$PROCESSED" -ge "$RUN_LIMIT_WITHOUT_SUCCESS" ] && [ -n "$MOST_RECENT_FAILURE_RUN" ]; then
+            echo -e "${YELLOW}Reached ${RUN_LIMIT_WITHOUT_SUCCESS} runs without finding a successful run (but saw failures). Stopping.${NC}"
+            EXCEEDED_FAILURE_LIMIT=true
+            STOP_SEARCH=true
         fi
 
         if [ "$STOP_SEARCH" = true ]; then
