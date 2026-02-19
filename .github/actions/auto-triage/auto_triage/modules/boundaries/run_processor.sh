@@ -56,7 +56,7 @@ process_workflow_runs() {
     local last_successful_run="" last_successful_run_id="" last_successful_commit="" last_successful_job_url=""
     local first_failing_run="" first_failing_run_id="" first_failing_commit="" first_failing_job_url=""
     local most_recent_failure_run="" most_recent_failure_run_id="" most_recent_failure_commit="" most_recent_failure_job_url=""
-    local found_success=false stop_search=false subjob_ever_found=false
+    local found_success=false stop_search=false consecutive_missing=0
     local failure_only_count=0 exceeded_failure_limit=false
     local subjob_runs_json='[]'
 
@@ -152,7 +152,6 @@ process_workflow_runs() {
                         match_subjob "$job_name" "$SUBJOB_NAME" "$WORKFLOW_NAME" || continue
 
                         found_job=true
-                        subjob_ever_found=true
                         local job_id job_attempt job_completed_at job_url entry_completed_at
                         job_id=$(echo "$job_item" | jq -r '.id')
                         job_attempt=$(echo "$job_item" | jq -r '.run_attempt // 1')
@@ -226,11 +225,13 @@ process_workflow_runs() {
             done
 
             if [ "$found_job" = false ]; then
-                if [ "$subjob_ever_found" = false ] && [ "$processed" -ge "$subjob_missing_cancel_limit" ]; then
-                    write_cancel_and_exit "Subjob '${SUBJOB_NAME}' was not found in the first ${subjob_missing_cancel_limit} main-branch runs of workflow '${WORKFLOW_NAME}'. Please verify the job name."
+                consecutive_missing=$((consecutive_missing + 1))
+                if [ "$consecutive_missing" -ge "$subjob_missing_cancel_limit" ]; then
+                    write_cancel_and_exit "Subjob '${SUBJOB_NAME}' was not found in ${subjob_missing_cancel_limit} consecutive main-branch runs of workflow '${WORKFLOW_NAME}'. Please verify the job name."
                 fi
                 continue
             fi
+            consecutive_missing=0
 
             if [ "$found_success" = false ] && [ "$processed" -ge "$run_limit_without_success" ] && [ -n "$most_recent_failure_run" ]; then
                 exceeded_failure_limit=true
