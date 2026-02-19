@@ -34,6 +34,8 @@ AT_BATCH_SIZE="${AT_BATCH_SIZE:-10}"            # commits per download batch
 AT_MAX_BATCHES="${AT_MAX_BATCHES:-100}"         # max commit range before failing
 AT_PER_PAGE="${AT_PER_PAGE:-100}"               # GitHub API results per page
 AT_FAILURE_LIMIT="${AT_FAILURE_LIMIT:-30}"      # consecutive failures before stopping boundary search
+AT_RUN_LIMIT_WITHOUT_SUCCESS="${AT_RUN_LIMIT_WITHOUT_SUCCESS:-100}"  # max runs to scan without success
+AT_SUBJOB_MISSING_CANCEL_LIMIT="${AT_SUBJOB_MISSING_CANCEL_LIMIT:-50}"  # cancel after N consecutive runs without subjob
 
 # ==============================================================================
 # Feature flags  (mirror the action.yml inputs where relevant)
