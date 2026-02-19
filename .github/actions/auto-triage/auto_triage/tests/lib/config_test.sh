@@ -10,7 +10,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)/lib"
 
 export AUTO_TRIAGE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-source "$LIB_DIR/common.sh"
 source "$LIB_DIR/config.sh"
 
 # -- test harness (same helpers as common_test.sh) ----------------------------
@@ -54,11 +53,14 @@ assert_eq "AT_REUSE_DATA default"   "$AT_REUSE_DATA"    "false"
 
 # -- env override works --------------------------------------------------------
 (
-    export AT_OWNER="myorg" AT_REPO="myrepo" AT_BATCH_SIZE="5"
+    unset AT_OWNER_REPO AT_BASE_URL
+    export AT_OWNER="myorg" AT_REPO="myrepo" AT_BATCH_SIZE="5" AT_CUTOFF_COMMIT="deadbeef" AT_REUSE_DATA="true"
     # Re-source to pick up overrides (reset guard first)
     unset _AUTO_TRIAGE_CONFIG_LOADED
     source "$LIB_DIR/config.sh"
-    [ "$AT_OWNER" = "myorg" ] && [ "$AT_REPO" = "myrepo" ] && [ "$AT_BATCH_SIZE" = "5" ]
+    [ "$AT_OWNER" = "myorg" ] && [ "$AT_REPO" = "myrepo" ] && [ "$AT_BATCH_SIZE" = "5" ] \
+      && [ "$AT_OWNER_REPO" = "myorg/myrepo" ] && [ "$AT_BASE_URL" = "https://github.com/myorg/myrepo" ] \
+      && [ "$AT_CUTOFF_COMMIT" = "deadbeef" ] && [ "$AT_REUSE_DATA" = "true" ]
 ) && { echo "  PASS  env overrides"; _pass=$((_pass + 1)); } \
   || { echo "  FAIL  env overrides"; _fail=$((_fail + 1)); }
 
