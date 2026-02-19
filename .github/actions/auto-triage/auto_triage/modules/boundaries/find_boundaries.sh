@@ -8,7 +8,6 @@
 set -euo pipefail
 
 _MOD_FB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AUTO_TRIAGE_ROOT="${AUTO_TRIAGE_ROOT:-$(cd "$_MOD_FB_DIR/../.." && pwd)}"
 # shellcheck source=../../lib/config.sh
 source "$_MOD_FB_DIR/../../lib/config.sh"
 # shellcheck source=workflow_finder.sh
