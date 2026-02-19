@@ -2,7 +2,7 @@
 #
 # Find the last successful and first failing run of a specific subjob.
 # Orchestrates workflow_finder and run_processor. Uses lib/config.sh.
-# Called via scripts/find_boundaries.sh or find_boundaries.sh wrapper.
+# Entry point: invoked by action.yml, filter_triage, auto_triage.
 #
 
 set -euo pipefail
