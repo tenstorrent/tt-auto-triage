@@ -13,7 +13,7 @@
 #   RUN_LIMIT_WITHOUT_SUCCESS, SUBJOB_MISSING_CANCEL_LIMIT.
 #
 # Output globals: SUBJOB_RUNS_JSON, LAST_SUCCESSFUL_*,
-#   FIRST_FAILING_*, FOUND_SUCCESS, EXCEEDED_FAILURE_LIMIT, BOUNDARY_STATUS, BOUNDARY_MESSAGE
+#   FIRST_FAILING_*, FOUND_SUCCESS, FOUND_FAILURE, EXCEEDED_FAILURE_LIMIT, BOUNDARY_STATUS, BOUNDARY_MESSAGE
 #
 # Usage: source this file, then call process_workflow_runs
 #
@@ -52,7 +52,7 @@ process_workflow_runs() {
     local subjob_missing_cancel_limit="${SUBJOB_MISSING_CANCEL_LIMIT:-50}"
     local base_url="${BASE_URL:-https://github.com/${repo}}"
 
-    local page=1 total_fetched=0 valid_fetched=0 processed=0
+    local page=1 processed=0
     local last_successful_run="" last_successful_run_id="" last_successful_commit="" last_successful_job_url=""
     local first_failing_run="" first_failing_run_id="" first_failing_commit="" first_failing_job_url=""
     local most_recent_failure_run="" most_recent_failure_run_id="" most_recent_failure_commit="" most_recent_failure_job_url=""
@@ -80,8 +80,6 @@ process_workflow_runs() {
             break
         fi
 
-        total_fetched=$((total_fetched + page_total))
-
         local valid_page
         valid_page=$(echo "$runs_page" | jq -r "[.[] | select(.head_branch == \"main\" and ((.status == \"completed\") or (.status == \"in_progress\") or (.status == \"waiting\") or (.status == \"queued\")) and (.conclusion != \"cancelled\"))]")
         local valid_count
@@ -91,8 +89,6 @@ process_workflow_runs() {
             page=$((page + 1))
             continue
         fi
-
-        valid_fetched=$((valid_fetched + valid_count))
 
         local run_rows
         mapfile -t run_rows < <(echo "$valid_page" | jq -c '.[]')
@@ -225,6 +221,7 @@ process_workflow_runs() {
             done
 
             if [ "$found_job" = false ]; then
+                # Cancel after N consecutive runs without subjob (job renamed/removed from workflow)
                 consecutive_missing=$((consecutive_missing + 1))
                 if [ "$consecutive_missing" -ge "$subjob_missing_cancel_limit" ]; then
                     write_cancel_and_exit "Subjob '${SUBJOB_NAME}' was not found in ${subjob_missing_cancel_limit} consecutive main-branch runs of workflow '${WORKFLOW_NAME}'. Please verify the job name."

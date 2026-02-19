@@ -127,9 +127,7 @@ SUBJOB_MISSING_CANCEL_LIMIT=50
 
 process_workflow_runs
 
-# run_processor sets all outputs; derive FOUND_FAILURE for display
-FOUND_FAILURE=false
-[ -z "$FIRST_FAILING_RUN" ] || FOUND_FAILURE=true
+# run_processor sets all outputs, including FOUND_FAILURE
 
 echo ""
 echo -e "${BLUE}========================================${NC}"
