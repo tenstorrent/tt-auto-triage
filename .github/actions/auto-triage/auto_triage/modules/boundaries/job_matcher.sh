@@ -17,6 +17,7 @@ _JOB_MATCHER_LOADED=1
 # Character set must match find_boundaries.sh jq filter exactly:
 # U+2010 U+2011 U+2012 U+2013 U+2014 U+2015 U+2212 U+FE58 U+FE63 U+FF0D.
 # Single python3 invocation for all three strings to avoid process-per-call overhead.
+# The python3 version used here is 3.12.3 (the default in Ubuntu 24.04)
 match_subjob() {
     local job_name="${1-}" subjob_name="${2-}" workflow_name="${3-}"
     [ -n "$job_name" ] || return 1
