@@ -6,7 +6,6 @@
 # alternative deployments can customise behaviour without editing code.
 #
 # Usage: source this file (it pulls in common.sh automatically).
-#   source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/config.sh"
 #
 
 # Guard against double-sourcing
