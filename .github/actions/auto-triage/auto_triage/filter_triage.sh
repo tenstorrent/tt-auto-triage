@@ -39,10 +39,9 @@ if [ "$CI_MODE" = "ci" ]; then
 fi
 
 echo "=== Verifying boundary artifacts for filter stage ==="
-SUMMARY_FILE="${CANON_DATA_DIR}/boundaries_summary.json"
 SUBJOB_RUNS_FILE="${CANON_DATA_DIR}/subjob_runs.json"
-if [ ! -s "$SUMMARY_FILE" ] || [ ! -s "$SUBJOB_RUNS_FILE" ]; then
-    echo "Error: boundary metadata missing (expected at ${SUMMARY_FILE} and ${SUBJOB_RUNS_FILE})." >&2
+if [ ! -s "$SUBJOB_RUNS_FILE" ]; then
+    echo "Error: boundary metadata missing (expected at ${SUBJOB_RUNS_FILE})." >&2
     ls -l "$CANON_DATA_DIR"
     exit 1
 fi

@@ -30,6 +30,7 @@ fi
 WORKFLOW_NAME="$1"
 SUBJOB_NAME="$2"
 
+# assumes python3 is available and at version 3.12.3 (the default in Ubuntu 24.04)
 normalize_hyphens() {
     python3 - "$1" <<'PY'
 import sys, unicodedata
@@ -46,8 +47,7 @@ REPO="$AT_OWNER_REPO"
 BASE_URL="$AT_BASE_URL"
 
 DATA_DIR="$(get_data_dir)"
-SUMMARY_JSON_PATH="${DATA_DIR}/boundaries_summary.json"
-RUNS_JSON_PATH="${DATA_DIR}/subjob_runs.json"
+SUBJOB_RUNS_JSON_PATH="${DATA_DIR}/subjob_runs.json"
 CANCEL_FILE="cancel.json"
 
 write_cancel_and_exit() {
@@ -61,7 +61,7 @@ write_cancel_and_exit() {
 }
 
 mkdir -p "$DATA_DIR"
-rm -f "$SUMMARY_JSON_PATH" "$RUNS_JSON_PATH"
+rm -f "$SUBJOB_RUNS_JSON_PATH"
 
 log_info "Searching for workflow: ${WORKFLOW_NAME}"
 log_info "Looking for subjob: ${SUBJOB_NAME}"
@@ -157,17 +157,8 @@ else
     echo "$SUBJOB_RUNS_JSON"
 fi
 
-if [ -n "$SUMMARY_JSON_PATH" ]; then
-    tmp_summary="$(mktemp)"
-    jq -n \
-        --argjson runs "$SUBJOB_RUNS_JSON" \
-        --arg status "$BOUNDARY_STATUS" \
-        --arg message "$BOUNDARY_MESSAGE" \
-        '{runs: $runs, status: $status, message: $message}' > "$tmp_summary"
-    mv "$tmp_summary" "$SUMMARY_JSON_PATH"
-    jq -n \
-        --argjson runs "$SUBJOB_RUNS_JSON" \
-        --arg status "$BOUNDARY_STATUS" \
-        --arg message "$BOUNDARY_MESSAGE" \
-        '{runs: $runs, status: $status, message: $message}' > "$RUNS_JSON_PATH"
-fi
+jq -n \
+    --argjson runs "$SUBJOB_RUNS_JSON" \
+    --arg status "$BOUNDARY_STATUS" \
+    --arg message "$BOUNDARY_MESSAGE" \
+    '{runs: $runs, status: $status, message: $message}' > "$SUBJOB_RUNS_JSON_PATH"
