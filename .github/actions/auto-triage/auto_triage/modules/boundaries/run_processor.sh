@@ -58,7 +58,7 @@ process_workflow_runs() {
     local most_recent_failure_run="" most_recent_failure_run_id="" most_recent_failure_commit="" most_recent_failure_job_url=""
     local found_success=false stop_search=false subjob_ever_found=false
     local failure_only_count=0 exceeded_failure_limit=false
-    local subjob_runs_json='[]' failed_runs_json='[]'
+    local subjob_runs_json='[]'
 
     while true; do
         local page_resp
@@ -194,18 +194,6 @@ process_workflow_runs() {
                             most_recent_failure_run_id="$run_id"
                             most_recent_failure_commit="$run_commit"
                             most_recent_failure_job_url="$job_url"
-                            failed_runs_json=$(jq -n \
-                                --arg run_url "$run_url" \
-                                --arg job_url "$job_url" \
-                                --arg run_id "$run_id" \
-                                --arg job_id "$job_id" \
-                                --arg commit "$run_commit" \
-                                --arg completed_at "$entry_completed_at" \
-                                --argjson job_attempt "$job_attempt" \
-                                --arg conclusion "$job_conclusion" \
-                                --argjson arr "$failed_runs_json" \
-                                --argjson run_number "$processed" \
-                                '$arr + [{run_url:$run_url, job_url:$job_url, run_id:$run_id, job_id:$job_id, commit:$commit, completed_at:$completed_at, job_attempt:$job_attempt, conclusion:$conclusion, run_number:$run_number}]')
                             subjob_runs_json=$(jq -n \
                                 --arg status "failure" \
                                 --arg run_url "$run_url" \
