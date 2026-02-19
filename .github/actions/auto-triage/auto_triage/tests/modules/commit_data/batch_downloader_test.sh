@@ -71,7 +71,7 @@ START=$(git rev-parse HEAD~1)
 END=$(git rev-parse HEAD)
 
 # -- source module -------------------------------------------------------------
-# shellcheck source=../../../../modules/commit_data/batch_downloader.sh
+# shellcheck source=../../../modules/commit_data/batch_downloader.sh
 source "$ROOT_DIR/modules/commit_data/batch_downloader.sh"
 
 echo "=== modules/commit_data/batch_downloader.sh ==="

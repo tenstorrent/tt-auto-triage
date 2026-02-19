@@ -69,8 +69,9 @@ _is_org_member() {
         echo "$cached"
         return
     fi
-    local result="false"
-    if gh api "orgs/${AT_OWNER}/members/$login" >/dev/null 2>&1; then
+    local result="false" api_result
+    api_result=$(gh_api "orgs/${AT_OWNER}/members/$login" "null" || echo "null")
+    if [ "$api_result" != "null" ]; then
         result="true"
     fi
     _bd_cache_set "org" "$key" "$result"
