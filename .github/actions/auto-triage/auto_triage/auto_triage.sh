@@ -38,12 +38,6 @@ ln -sfn auto_triage/data "$DATA_LINK"
 ln -sfn auto_triage/logs "$LOGS_LINK"
 ln -sfn auto_triage/output "$OUTPUT_LINK"
 
-# Remove find_boundaries so the LLM cannot rerun it (already executed upstream).
-if [ "$CI_MODE" = "ci" ]; then
-    echo "CI mode detected, removing find_boundaries to prevent re-execution."
-    rm -f "$FIND_SCRIPT"
-fi
-
 cd "$ROOT"
 
 echo "=== Verifying boundary artifacts ==="
