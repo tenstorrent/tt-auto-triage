@@ -88,6 +88,12 @@ BOUNDARY_MESSAGE=""
 
 REPO="tenstorrent/tt-metal"
 BASE_URL="https://github.com/${REPO}"
+# workflow_finder uses AT_OWNER_REPO from config; ensure it matches find_boundaries' REPO
+export AT_OWNER_REPO="${AT_OWNER_REPO:-$REPO}"
+export AUTO_TRIAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=modules/boundaries/workflow_finder.sh
+source "$AUTO_TRIAGE_ROOT/modules/boundaries/workflow_finder.sh"
+
 DATA_DIR="auto_triage/data"
 SUMMARY_JSON_PATH="${DATA_DIR}/boundaries_summary.json"
 RUNS_JSON_PATH="${DATA_DIR}/subjob_runs.json"
@@ -122,9 +128,7 @@ echo ""
 
 # Find the workflow ID (support both .yaml and .yml)
 echo "Finding workflow ID..."
-# workflow_finder uses AT_OWNER_REPO from config; ensure it matches find_boundaries' REPO
-export AT_OWNER_REPO="${AT_OWNER_REPO:-$REPO}"
-WORKFLOW_ID=$(source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/modules/boundaries/workflow_finder.sh" && find_workflow_id "$WORKFLOW_NAME") || true
+WORKFLOW_ID=$(find_workflow_id "$WORKFLOW_NAME") || true
 
 if [ -z "$WORKFLOW_ID" ]; then
     echo -e "${RED}Error: Could not find workflow '${WORKFLOW_NAME}' with .yaml or .yml extension${NC}"
@@ -133,9 +137,6 @@ if [ -z "$WORKFLOW_ID" ]; then
     # the auto-triage action can send a Slack message explaining what happened.
     write_cancel_and_exit "Workflow '${WORKFLOW_NAME}' not found in repository ${REPO}. Verify file path."
 fi
-
-echo -e "${GREEN}Found workflow ID: ${WORKFLOW_ID}${NC}"
-echo ""
 
 echo -e "${GREEN}Found workflow ID: ${WORKFLOW_ID}${NC}"
 echo ""
