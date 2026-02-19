@@ -199,13 +199,6 @@ else
     echo "$SUBJOB_RUNS_JSON"
 fi
 
-if [ "$FAILED_RUNS_JSON" = "[]" ]; then
-    :
-else
-    echo -e "${BLUE}Failed subjobs (JSON subset):${NC}"
-    echo "$FAILED_RUNS_JSON"
-fi
-
 if [ -n "$SUMMARY_JSON_PATH" ]; then
     tmp_summary="$(mktemp)"
     jq -n \

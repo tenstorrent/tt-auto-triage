@@ -12,7 +12,7 @@
 #   REPO (or AT_OWNER_REPO), BASE_URL, CUTOFF_COMMIT, PER_PAGE, FAILURE_LIMIT,
 #   RUN_LIMIT_WITHOUT_SUCCESS, SUBJOB_MISSING_CANCEL_LIMIT.
 #
-# Output globals: SUBJOB_RUNS_JSON, FAILED_RUNS_JSON, LAST_SUCCESSFUL_*,
+# Output globals: SUBJOB_RUNS_JSON, LAST_SUCCESSFUL_*,
 #   FIRST_FAILING_*, FOUND_SUCCESS, EXCEEDED_FAILURE_LIMIT, BOUNDARY_STATUS, BOUNDARY_MESSAGE
 #
 # Usage: source this file, then call process_workflow_runs
@@ -248,17 +248,22 @@ process_workflow_runs() {
     # Sort and assign run numbers for subjob_runs_json
     if [ "$subjob_runs_json" != "[]" ]; then
         subjob_runs_json=$(echo "$subjob_runs_json" | jq '
-            def normalize(arr): arr | map(.completed_at = (.completed_at // ""));
-            def assign_numbers(order): order | to_entries | map(.value + {run_number: .key});
-            (normalize(.) | map(select(.status == "success")) | sort_by(.completed_at) | first) as $success
-            | (normalize(.) | map(select(.status != "success")) | sort_by(.completed_at)) as $fails
-            | if $success == null then assign_numbers(normalize(.) | sort_by(.completed_at))
-            else assign_numbers([$success] + $fails)
-            end
+            # Ensure completed_at exists for sort
+            def normalize: map(.completed_at = (.completed_at // ""));
+            # Add 0-based run_number from index
+            def with_run_numbers: to_entries | map(.value + {run_number: .key});
+
+            (normalize | map(select(.status == "success")) | sort_by(.completed_at) | first) as $success |
+            (normalize | map(select(.status != "success")) | sort_by(.completed_at)) as $fails |
+            (
+                if $success == null
+                then (normalize | sort_by(.completed_at))
+                else [$success] + $fails
+                end
+                | with_run_numbers
+            )
         ')
     fi
-
-    failed_runs_json=$(echo "$subjob_runs_json" | jq '[ .[] | select(.status != "success") ]')
 
     local boundary_status="ok" boundary_message=""
     if [ "$exceeded_failure_limit" = true ]; then
@@ -271,7 +276,6 @@ process_workflow_runs() {
 
     # Export to globals for caller
     SUBJOB_RUNS_JSON="$subjob_runs_json"
-    FAILED_RUNS_JSON="$failed_runs_json"
     LAST_SUCCESSFUL_RUN="$last_successful_run"
     LAST_SUCCESSFUL_RUN_ID="$last_successful_run_id"
     LAST_SUCCESSFUL_COMMIT="$last_successful_commit"
