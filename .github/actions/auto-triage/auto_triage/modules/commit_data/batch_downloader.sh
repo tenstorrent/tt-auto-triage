@@ -118,8 +118,11 @@ _add_person_entry() {
     local login="$1" fallback_name="$2" current_json="$3"
     local person_json
     person_json=$(_build_person_json "$login" "$fallback_name")
-    [ -n "$person_json" ] || person_json='{"login":"","name":"(unknown)","is_org_member":false}'
-    _append_unique_person "${current_json:-[]}" "$person_json"
+    if [ -n "$person_json" ]; then
+        _append_unique_person "${current_json:-[]}" "$person_json"
+    else
+        echo "${current_json:-[]}"
+    fi
 }
 
 # Download commit metadata for a batch of commits between start and end.
