@@ -115,7 +115,7 @@ process_workflow_runs() {
             # Skip runs newer than cutoff (when CUTOFF_RUN_CREATED_AT is set for testing on fixed errors)
             # Use timestamp comparison - run IDs are not guaranteed to be monotonically increasing
             if [ -n "${CUTOFF_RUN_CREATED_AT:-}" ]; then
-                run_created_at=$(echo "$run_data" | jq -r '.run_started_at // .created_at // ""')
+                local run_created_at=$(echo "$run_data" | jq -r '.run_started_at // .created_at // ""')
                 if [ -n "$run_created_at" ] && [[ "$run_created_at" > "$CUTOFF_RUN_CREATED_AT" ]]; then
                     continue
                 fi
