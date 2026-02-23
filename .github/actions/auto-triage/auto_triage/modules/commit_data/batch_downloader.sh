@@ -218,9 +218,9 @@ if start:
     snippet = section[:end].strip()
     print(snippet)
 PY
-)
+) # extract the overview from the copilot review
                 [ -n "$overview" ] || overview=$(echo "$copilot_review" | sed -n '/## [Pp]ull [Rr]equest [Oo]verview/,/### [Rr]eviewed [Cc]hanges/p' | sed '$d' | sed '1s/## [Pp]ull [Rr]equest [Oo]verview//' | sed 's/^[[:space:]]*//' | head -c 5000 || echo "")
-                [ -n "$overview" ] || overview=$(echo "$copilot_review" | grep -i -A 50 "## Pull Request Overview" | tail -n +2 | head -n 30 | head -c 2000 || echo "")
+                [ -n "$overview" ] || overview=$(echo "$copilot_review" | grep -i -A 50 "## Pull Request Overview" | tail -n +2 | head -n 30 | head -c 2000 || echo "") #fallbacks in case the python fails.
                 [ -n "$overview" ] || overview="wasn't found"
             fi
         fi
