@@ -11,6 +11,7 @@
 # Expected env/globals (set by caller): WORKFLOW_ID, SUBJOB_NAME, WORKFLOW_NAME,
 #   REPO (or AT_OWNER_REPO), BASE_URL, CUTOFF_COMMIT, PER_PAGE, FAILURE_LIMIT,
 #   RUN_LIMIT_WITHOUT_SUCCESS, SUBJOB_MISSING_CANCEL_LIMIT.
+# Optional: MAX_WORKFLOW_PAGES (default 50), MAX_JOB_PAGES (default 20) - safety limits to ensure loop termination.
 #
 # Output globals: SUBJOB_RUNS_JSON, LAST_SUCCESSFUL_*,
 #   FIRST_FAILING_*, FOUND_SUCCESS, FOUND_FAILURE, EXCEEDED_FAILURE_LIMIT, BOUNDARY_STATUS, BOUNDARY_MESSAGE
@@ -50,6 +51,8 @@ process_workflow_runs() {
     local failure_limit="${FAILURE_LIMIT:-30}"
     local run_limit_without_success="${RUN_LIMIT_WITHOUT_SUCCESS:-100}"
     local subjob_missing_cancel_limit="${SUBJOB_MISSING_CANCEL_LIMIT:-50}"
+    local max_pages="${MAX_WORKFLOW_PAGES:-50}"
+    local max_job_pages="${MAX_JOB_PAGES:-20}"
     local base_url="${BASE_URL:-https://github.com/${repo}}"
 
     local page=1 processed=0
@@ -60,7 +63,7 @@ process_workflow_runs() {
     local failure_only_count=0 exceeded_failure_limit=false
     local subjob_runs_json='[]'
 
-    while true; do
+    while [ "$page" -le "$max_pages" ]; do
         local page_resp
         page_resp=$(gh_api "repos/${repo}/actions/workflows/${WORKFLOW_ID}/runs?branch=main&per_page=${per_page}&page=${page}" "")
         if [ -z "$page_resp" ]; then
@@ -116,7 +119,7 @@ process_workflow_runs() {
 
             while [ "$attempt" -ge 1 ]; do
                 local page_j=1
-                while true; do
+                while [ "$page_j" -le "$max_job_pages" ]; do
                     local endpoint
                     if [ "$attempt" -eq "$run_attempt" ]; then
                         endpoint="repos/${repo}/actions/runs/${run_id}/jobs?per_page=${per_page}&page=${page_j}"
@@ -263,7 +266,10 @@ process_workflow_runs() {
     fi
 
     local boundary_status="ok" boundary_message=""
-    if [ "$exceeded_failure_limit" = true ]; then
+    if [ "$page" -gt "$max_pages" ]; then
+        boundary_status="page_limit_exceeded"
+        boundary_message="Reached safety limit of ${max_pages} workflow run pages without finding a successful run. Consider increasing MAX_WORKFLOW_PAGES."
+    elif [ "$exceeded_failure_limit" = true ]; then
         boundary_status="failure_limit_exceeded"
         boundary_message="More than ${failure_limit} failed runs were scanned without finding a successful run. The commit window is too old—default to Case 2 or Case 3."
     elif [ "$found_success" = false ]; then
