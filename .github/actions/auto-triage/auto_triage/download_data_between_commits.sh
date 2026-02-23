@@ -25,6 +25,15 @@ START_COMMIT="$1"
 END_COMMIT="$2"
 OUTPUT_FILE="${3:-auto_triage/data/commit_info.json}"
 
+if ! git rev-parse --verify "$START_COMMIT" >/dev/null 2>&1; then
+    log_error "Start commit '$START_COMMIT' not found"
+    exit 1
+fi
+if ! git rev-parse --verify "$END_COMMIT" >/dev/null 2>&1; then
+    log_error "End commit '$END_COMMIT' not found"
+    exit 1
+fi
+
 log_success "Analyzing commits between"
 echo "  Start: $START_COMMIT"
 echo "  End:   $END_COMMIT"
@@ -41,8 +50,11 @@ if [ "$COMMIT_COUNT" -eq 0 ]; then
     log_warn "No commits found between the provided SHAs."
 fi
 
-download_commits_between "$START_COMMIT" "$END_COMMIT" "$OUTPUT_FILE"
-ret=$?
+if download_commits_between "$START_COMMIT" "$END_COMMIT" "$OUTPUT_FILE"; then
+    ret=0
+else
+    ret=$?
+fi
 
 if [ $ret -eq 0 ]; then
     exit 0

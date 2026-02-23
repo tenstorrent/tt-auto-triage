@@ -4,7 +4,8 @@
 #
 # Provides download_commits_between(start_commit, end_commit, output_file).
 # Uses batch_downloader for actual downloads.
-# Exit codes: 0 = success, 1 = error, 2 = caller must run batches (BATCH_COUNT set)
+# Exit codes: 0 = success, 1 = error, 2 = caller must run batches.
+# When returning 2, BATCH_COUNT is set as a variable (not added to exit code).
 #
 # Usage: source this file, then call download_commits_between
 #

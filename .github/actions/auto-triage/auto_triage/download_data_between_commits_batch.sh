@@ -4,6 +4,9 @@
 # Usage: ./download_data_between_commits_batch.sh <start_commit> <end_commit> <batch_index> [output_file]
 # Each batch processes up to AT_BATCH_SIZE (default 10) commits. Batches are zero-indexed.
 #
+# Note: Progress output is simplified vs the original (batch_downloader emits a single summary line).
+# JSON output and behavior are identical.
+#
 
 set -euo pipefail
 

@@ -83,6 +83,21 @@ OUT_SINGLE="$GIT_DIR/out_single.json"
 download_commits_between "$END" "$END" "$OUT_SINGLE" || true
 assert "single commit in range produces output" [ -f "$OUT_SINGLE" ]
 
+# -- multi-batch (> 10 commits) returns 2 and sets BATCH_COUNT ----------------
+for i in $(seq 6 15); do
+    echo "$i" > "g$i" && git add "g$i" && git commit -q -m "Merge (#$((100+i)))"
+done
+START_MULTI=$(git rev-parse HEAD~15)
+END_MULTI=$(git rev-parse HEAD)
+OUT_MULTI="$GIT_DIR/out_multi.json"
+
+ret_multi=0
+download_commits_between "$START_MULTI" "$END_MULTI" "$OUT_MULTI" || ret_multi=$?
+assert_eq "multi-batch returns 2" "$ret_multi" "2"
+assert "multi-batch output prepared" [ -f "$OUT_MULTI" ]
+assert "BATCH_COUNT is set" [ -n "${BATCH_COUNT:-}" ]
+assert "BATCH_COUNT >= 2" [ "${BATCH_COUNT:-0}" -ge 2 ]
+
 # -- invalid start fails -------------------------------------------------------
 assert_fails "invalid start commit" download_commits_between "badsha" "$END" "$OUT1"
 
