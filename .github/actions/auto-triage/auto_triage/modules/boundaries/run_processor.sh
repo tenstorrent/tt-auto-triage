@@ -9,7 +9,7 @@
 # Caller must define: write_cancel_and_exit(msg) before sourcing.
 #
 # Expected env/globals (set by caller): WORKFLOW_ID, SUBJOB_NAME, WORKFLOW_NAME,
-#   REPO (or AT_OWNER_REPO), BASE_URL, CUTOFF_COMMIT, CUTOFF_RUN_ID (optional), PER_PAGE, FAILURE_LIMIT,
+#   REPO (or AT_OWNER_REPO), BASE_URL, CUTOFF_COMMIT, CUTOFF_RUN_CREATED_AT (optional ISO timestamp), PER_PAGE, FAILURE_LIMIT,
 #   RUN_LIMIT_WITHOUT_SUCCESS, SUBJOB_MISSING_CANCEL_LIMIT.
 # Optional: MAX_WORKFLOW_PAGES (default 50), MAX_JOB_PAGES (default 20) - safety limits to ensure loop termination.
 #
@@ -112,9 +112,11 @@ process_workflow_runs() {
                 fi
             fi
 
-            # Skip runs newer than cutoff run (when CUTOFF_RUN_ID is set for testing on fixed errors)
-            if [ -n "${CUTOFF_RUN_ID:-}" ]; then
-                if [ "$run_id" -gt "$CUTOFF_RUN_ID" ] 2>/dev/null; then
+            # Skip runs newer than cutoff (when CUTOFF_RUN_CREATED_AT is set for testing on fixed errors)
+            # Use timestamp comparison - run IDs are not guaranteed to be monotonically increasing
+            if [ -n "${CUTOFF_RUN_CREATED_AT:-}" ]; then
+                run_created_at=$(echo "$run_data" | jq -r '.run_started_at // .created_at // ""')
+                if [ -n "$run_created_at" ] && [[ "$run_created_at" > "$CUTOFF_RUN_CREATED_AT" ]]; then
                     continue
                 fi
             fi

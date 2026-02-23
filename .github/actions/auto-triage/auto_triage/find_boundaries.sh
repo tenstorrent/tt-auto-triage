@@ -28,19 +28,11 @@ CUTOFF_COMMIT="${CUTOFF_COMMIT:-}"
 # TESTING: RUN URL CUTOFF FILTER
 # Set this to a workflow run URL to only consider runs at or before that run.
 # Example: CUTOFF_RUN_URL="https://github.com/tenstorrent/tt-metal/actions/runs/123456"
-# Extracts run ID from URL and sets CUTOFF_RUN_ID for run_processor.
+# Fetches the run's run_started_at timestamp (not ID - IDs are not guaranteed chronological).
 # Leave empty ("") for normal behavior (no filtering).
 # ============================================================================
 CUTOFF_RUN_URL="${CUTOFF_RUN_URL:-}"
-CUTOFF_RUN_ID=""
-if [ -n "$CUTOFF_RUN_URL" ]; then
-    CUTOFF_RUN_ID=$(echo "$CUTOFF_RUN_URL" | sed -n 's|.*/actions/runs/\([0-9]\{1,\}\).*|\1|p')
-    if [ -z "$CUTOFF_RUN_ID" ]; then
-        echo -e "${RED}Error: CUTOFF_RUN_URL does not contain a valid run ID: ${CUTOFF_RUN_URL}${NC}" >&2
-        exit 1
-    fi
-    export CUTOFF_RUN_ID
-fi
+CUTOFF_RUN_CREATED_AT=""
 # ============================================================================
 
 # Check arguments
@@ -83,6 +75,22 @@ BASE_URL="https://github.com/${REPO}"
 # workflow_finder uses AT_OWNER_REPO from config; ensure it matches find_boundaries' REPO
 export AT_OWNER_REPO="${AT_OWNER_REPO:-$REPO}"
 export AUTO_TRIAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Fetch cutoff run timestamp when URL is provided (use run_started_at - IDs are not guaranteed chronological)
+if [ -n "$CUTOFF_RUN_URL" ]; then
+    CUTOFF_RUN_ID=$(echo "$CUTOFF_RUN_URL" | sed -n 's|.*/actions/runs/\([0-9]\{1,\}\).*|\1|p')
+    if [ -z "$CUTOFF_RUN_ID" ]; then
+        echo -e "${RED}Error: CUTOFF_RUN_URL does not contain a valid run ID: ${CUTOFF_RUN_URL}${NC}" >&2
+        exit 1
+    fi
+    CUTOFF_RUN_CREATED_AT=$(gh api "repos/${AT_OWNER_REPO}/actions/runs/${CUTOFF_RUN_ID}" --jq '.run_started_at // .created_at // empty' 2>/dev/null || true)
+    if [ -z "$CUTOFF_RUN_CREATED_AT" ]; then
+        echo -e "${RED}Error: Could not fetch run ${CUTOFF_RUN_ID} from API (check URL and permissions)${NC}" >&2
+        exit 1
+    fi
+    export CUTOFF_RUN_CREATED_AT
+fi
+
 # shellcheck source=modules/boundaries/workflow_finder.sh
 source "$AUTO_TRIAGE_ROOT/modules/boundaries/workflow_finder.sh"
 # shellcheck source=modules/boundaries/run_processor.sh
@@ -118,10 +126,10 @@ if [ -n "$CUTOFF_COMMIT" ]; then
     echo -e "${YELLOW}Ignoring all runs on commits newer than: ${CUTOFF_COMMIT}${NC}"
     echo -e "${YELLOW}========================================${NC}"
 fi
-if [ -n "$CUTOFF_RUN_ID" ]; then
+if [ -n "$CUTOFF_RUN_CREATED_AT" ]; then
     echo -e "${YELLOW}========================================${NC}"
     echo -e "${YELLOW}TESTING MODE: Cutoff run filter active${NC}"
-    echo -e "${YELLOW}Only considering runs at or before run ID: ${CUTOFF_RUN_ID}${NC}"
+    echo -e "${YELLOW}Only considering runs at or before: ${CUTOFF_RUN_CREATED_AT}${NC}"
     echo -e "${YELLOW}========================================${NC}"
 fi
 echo ""
