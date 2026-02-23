@@ -35,6 +35,10 @@ inputs:
     description: "Optional commit SHA to ignore all runs on commits newer than this one. Useful for testing retry logic on older failures when newer runs have already passed."
     required: false
     default: ""
+  run-url:
+    description: "Optional workflow run URL (e.g. https://github.com/tenstorrent/tt-metal/actions/runs/123). When set, auto-triage only considers runs at or before this run. Useful for testing on errors that have already been fixed."
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -77,6 +81,7 @@ runs:
         GH_TOKEN: ${{ github.token }}
         GITHUB_TOKEN: ${{ github.token }}
         CUTOFF_COMMIT: ${{ inputs.cutoff-commit }}
+        CUTOFF_RUN_URL: ${{ inputs.run-url }}
 
     - name: Download Slack directory
       if: inputs.slack-test-only != 'true'

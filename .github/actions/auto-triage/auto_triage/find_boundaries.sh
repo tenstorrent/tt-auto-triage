@@ -22,8 +22,25 @@ NC='\033[0m' # No Color
 # Can be set via environment variable CUTOFF_COMMIT or passed as input to the action.
 # Example: CUTOFF_COMMIT="abc123def456"
 # ============================================================================
-# Default to empty if not set via environment variable
 CUTOFF_COMMIT="${CUTOFF_COMMIT:-}"
+
+# ============================================================================
+# TESTING: RUN URL CUTOFF FILTER
+# Set this to a workflow run URL to only consider runs at or before that run.
+# Example: CUTOFF_RUN_URL="https://github.com/tenstorrent/tt-metal/actions/runs/123456"
+# Extracts run ID from URL and sets CUTOFF_RUN_ID for run_processor.
+# Leave empty ("") for normal behavior (no filtering).
+# ============================================================================
+CUTOFF_RUN_URL="${CUTOFF_RUN_URL:-}"
+CUTOFF_RUN_ID=""
+if [ -n "$CUTOFF_RUN_URL" ]; then
+    CUTOFF_RUN_ID=$(echo "$CUTOFF_RUN_URL" | sed -n 's|.*/actions/runs/\([0-9]\{1,\}\).*|\1|p')
+    if [ -z "$CUTOFF_RUN_ID" ]; then
+        echo -e "${RED}Error: CUTOFF_RUN_URL does not contain a valid run ID: ${CUTOFF_RUN_URL}${NC}" >&2
+        exit 1
+    fi
+    export CUTOFF_RUN_ID
+fi
 # ============================================================================
 
 # Check arguments
@@ -99,6 +116,12 @@ if [ -n "$CUTOFF_COMMIT" ]; then
     echo -e "${YELLOW}========================================${NC}"
     echo -e "${YELLOW}TESTING MODE: Cutoff commit filter active${NC}"
     echo -e "${YELLOW}Ignoring all runs on commits newer than: ${CUTOFF_COMMIT}${NC}"
+    echo -e "${YELLOW}========================================${NC}"
+fi
+if [ -n "$CUTOFF_RUN_ID" ]; then
+    echo -e "${YELLOW}========================================${NC}"
+    echo -e "${YELLOW}TESTING MODE: Cutoff run filter active${NC}"
+    echo -e "${YELLOW}Only considering runs at or before run ID: ${CUTOFF_RUN_ID}${NC}"
     echo -e "${YELLOW}========================================${NC}"
 fi
 echo ""

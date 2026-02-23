@@ -9,7 +9,7 @@
 # Caller must define: write_cancel_and_exit(msg) before sourcing.
 #
 # Expected env/globals (set by caller): WORKFLOW_ID, SUBJOB_NAME, WORKFLOW_NAME,
-#   REPO (or AT_OWNER_REPO), BASE_URL, CUTOFF_COMMIT, PER_PAGE, FAILURE_LIMIT,
+#   REPO (or AT_OWNER_REPO), BASE_URL, CUTOFF_COMMIT, CUTOFF_RUN_ID (optional), PER_PAGE, FAILURE_LIMIT,
 #   RUN_LIMIT_WITHOUT_SUCCESS, SUBJOB_MISSING_CANCEL_LIMIT.
 # Optional: MAX_WORKFLOW_PAGES (default 50), MAX_JOB_PAGES (default 20) - safety limits to ensure loop termination.
 #
@@ -108,6 +108,13 @@ process_workflow_runs() {
 
             if [ -n "${CUTOFF_COMMIT:-}" ]; then
                 if is_commit_newer "$run_commit" "$CUTOFF_COMMIT"; then
+                    continue
+                fi
+            fi
+
+            # Skip runs newer than cutoff run (when CUTOFF_RUN_ID is set for testing on fixed errors)
+            if [ -n "${CUTOFF_RUN_ID:-}" ]; then
+                if [ "$run_id" -gt "$CUTOFF_RUN_ID" ] 2>/dev/null; then
                     continue
                 fi
             fi
