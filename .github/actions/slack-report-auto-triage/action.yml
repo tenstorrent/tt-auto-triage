@@ -312,6 +312,13 @@ runs:
           def section_code(lbl; txt):
             if (txt // "") != "" then "*\(lbl):*\n```" + txt + "```\n" else "" end;
 
+          def confidence_label(c):
+            (c | if type == "string" then (tonumber? // 0) else . end) as $n
+            | if $n == 100 then "high confidence"
+              elif $n > 95 and $n < 100 then "medium confidence"
+              else "low confidence"
+              end;
+
           def commit_entry(c):
             "- HASH: " + commit_link(c) + "\n"
             + "  AUTHOR: " + person(c.author; true) + "\n"
@@ -325,7 +332,7 @@ runs:
                 "  RELEVANT FILES:\n```\n" + (c.relevant_files | join("\n")) + "\n```\n"
               else "" end)
             + (if (c.confidence // null) != null then
-                "  CONFIDENCE: " + ((c.confidence | tostring)) + "/100\n"
+                "  CONFIDENCE: " + confidence_label(c.confidence) + "\n"
               else "" end);
 
           def commits_section(arr):
