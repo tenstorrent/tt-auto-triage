@@ -148,12 +148,12 @@ download_commit_batch() {
 
     local commits commit_array total_commits
     commits=$(git log --format="%H" --first-parent "$start_commit".."$end_commit")
-    echo "$commits" | grep -q "^$end_commit$" || commits="$commits"$'\n'"$end_commit"
+    echo "$commits" | grep -q "^$end_commit$" || commits="$commits"$'\n'"$end_commit" # add end_commit to the list if it's not already in the list
     commits=$(echo "$commits" | sort -u)
     commit_array=()
     while IFS= read -r line; do
         [ -n "$line" ] && commit_array+=("$line")
-    done < <(echo "$commits" | awk 'NF')
+    done < <(echo "$commits" | awk 'NF') # split the commits into an array (this logic is somewhat confusing but it works)
     total_commits=${#commit_array[@]}
 
     if [ "$total_commits" -eq 0 ]; then
