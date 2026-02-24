@@ -35,7 +35,7 @@ assert_fails "parse_job_url invalid" parse_job_url "https://example.com/not/a/jo
 
 # -- find_job_logs ------------------------------------------------------------
 TMP_LOGS=$(mktemp -d)
-trap "rm -rf $TMP_LOGS" EXIT
+trap 'rm -rf "$TMP_LOGS"' EXIT
 mkdir -p "$TMP_LOGS/my-job-name/nested"
 mkdir -p "$TMP_LOGS/other-job"
 echo "x" > "$TMP_LOGS/my-job-name/log.txt"
