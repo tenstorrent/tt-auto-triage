@@ -302,7 +302,7 @@ runs:
 
     - name: Send Slack notification
       if: always() && inputs.send-slack-message == 'true'
-      uses: tenstorrent/tt-auto-triage/.github/actions/slack-report-auto-triage@main
+      uses: tenstorrent/tt-auto-triage/.github/actions/slack-report-auto-triage@ebanerjee/shift-pinging-owners
       with:
         # slack_webhook_url is no longer used, using env.SLACK_BOT_TOKEN and env.SLACK_CHANNEL_ID instead inside the action
         channel_id: ${{ env.SLACK_CHANNEL_ID }}
