@@ -42,7 +42,7 @@ if ! tmp_out=$(mktemp); then
     exit 1
 fi
 trap 'rm -f "$tmp_out"' EXIT
-if ! command -v gh >/dev/null 2>&1 || ! command -v jq >/devnull 2>&1; then
+if ! command -v gh >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
     echo "Skipping valid URL integration test: gh and/or jq not available"
 else
     set +e
@@ -52,7 +52,7 @@ else
     assert "valid URL format exits zero when prerequisites present" [ "$rc" -eq 0 ]
     assert "valid URL format runs without crash" [ -f "$tmp_out" ]
     content=$(cat "$tmp_out")
-    assert "output is JSON array" echo "$content" | jq -e 'type == "array"' >/dev/null
+    assert "output is JSON array" [ "$(echo "$content" | jq -r 'type')" = "array" ]
 fi
 
 test_summary
