@@ -37,8 +37,11 @@ assert "missing arg prints usage" echo "$out" | grep -q "Usage"
 # -- valid URL format, non-existent job (produces empty annotations) ----------
 # Uses real API when GH_TOKEN is available; harmless when not.
 url="https://github.com/tenstorrent/tt-metal/actions/runs/1/job/999999999999"
-tmp_out=$(mktemp)
-trap "rm -f $tmp_out" EXIT
+if ! tmp_out=$(mktemp); then
+    echo "Failed to create temporary file" >&2
+    exit 1
+fi
+trap 'rm -f "$tmp_out"' EXIT
 if ! command -v gh >/dev/null 2>&1 || ! command -v jq >/devnull 2>&1; then
     echo "Skipping valid URL integration test: gh and/or jq not available"
 else
