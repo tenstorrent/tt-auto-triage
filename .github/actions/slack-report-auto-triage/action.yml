@@ -104,9 +104,10 @@ runs:
             if owners_result:
                 break
 
-        # Look up Slack IDs from cached directory files
-        # slack_directory.json has structure: {"generated_at": "...", "users": [...]}
-        # slack_groups.json has structure: {"generated_at": "...", "usergroups": [...]}
+        # Look up Slack IDs using normalized fuzzy matching (same as get_slack_ids.py)
+        def normalize(s):
+            return re.sub(r"[^a-z0-9]", "", s.lower())
+
         slack_dir = ".auto_triage/auto_triage/data/slack_directory.json"
         slack_groups = ".auto_triage/auto_triage/data/slack_groups.json"
         users_data = json.load(open(slack_dir)) if os.path.exists(slack_dir) else {}
@@ -115,20 +116,48 @@ runs:
         groups = groups_data.get("usergroups", []) if isinstance(groups_data, dict) else groups_data
 
         for owner in owners_result:
-            nl = owner["name"].lower()
+            query_norm = normalize(owner["name"])
+            best_id = ""
+            best_score = 0
+
             for u in users:
                 if not isinstance(u, dict):
                     continue
-                if any((u.get(f) or "").lower() == nl for f in ("real_name", "display_name", "username")):
-                    owner["slack_id"] = u.get("id", "")
+                if u.get("deleted") or u.get("is_bot"):
+                    continue
+                for f in ("display_name", "real_name", "username"):
+                    val = u.get(f) or ""
+                    val_norm = normalize(val)
+                    if not val_norm:
+                        continue
+                    if val_norm == query_norm:
+                        best_id = u.get("id", "")
+                        best_score = 100
+                        break
+                    elif query_norm in val_norm or val_norm in query_norm:
+                        if best_score < 70:
+                            best_id = u.get("id", "")
+                            best_score = 70
+                if best_score == 100:
                     break
-            if not owner["slack_id"]:
+
+            if not best_id:
                 for g in groups:
                     if not isinstance(g, dict):
                         continue
-                    if any((g.get(f) or "").lower() == nl for f in ("name", "handle")):
-                        owner["slack_id"] = g.get("id", "")
+                    for f in ("name", "handle"):
+                        val = g.get(f) or ""
+                        val_norm = normalize(val)
+                        if not val_norm:
+                            continue
+                        if val_norm == query_norm or query_norm in val_norm or val_norm in query_norm:
+                            best_id = g.get("id", "")
+                            break
+                    if best_id:
                         break
+
+            owner["slack_id"] = best_id
+            print(f"Lookup '{owner['name']}' -> norm='{query_norm}', score={best_score}, id={best_id or 'not found'}")
 
         with open(owner_file, "w") as f:
             json.dump(owners_result, f, indent=2)
