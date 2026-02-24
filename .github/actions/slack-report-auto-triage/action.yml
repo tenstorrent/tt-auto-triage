@@ -446,9 +446,9 @@ runs:
 
           def confidence_label(c):
             (c | if type == "string" then (tonumber? // 0) else . end) as $n
-            | if $n == 100 then "high confidence"
-              elif $n > 95 and $n < 100 then "medium confidence"
-              else "low confidence"
+            | if $n == 100 then "HIGH CONFIDENCE"
+              elif $n > 95 and $n < 100 then "MEDIUM CONFIDENCE"
+              else "LOW CONFIDENCE"
               end;
 
           def commit_entry(c):
@@ -483,7 +483,6 @@ runs:
             + section_line("FAILING RUN"; (if (.failing_run_url // "") != "" then "<\(.failing_run_url)|\(.failing_run_label // "latest failing run")>" else "" end))
             + section_line("SCENARIO"; .scenario)
             + section_code("FAILURE MESSAGE"; .failure_message)
-            + (if (.slack_message // "") != "" then (.slack_message + "\n") else "" end)
             + commits_section(.commits)
             # Show and ping top-level relevant_developers when there are no commits (Cases 2/3),
             # and also for Case 5 where commit metadata is incomplete but we still want codeowners engaged.
@@ -494,7 +493,6 @@ runs:
                then ""
                else section_people("RELEVANT DEVELOPERS"; ensure_case3_ping(.relevant_developers; .case); true)
               end)
-            + section_files("RELEVANT FILES"; .relevant_files)
             + section_line("NOTES"; .notes)
             + (if ($auto_fix // "") != "" then "\n*AUTO-FIX:* Draft PR created -> <\($auto_fix)|link>\n" else "" end)
             + (if ($job_owner_ping != "") and ((.case | tostring) as $c | $c == "1" or $c == "2" or $c == "4") then "\n*JOB OWNER:* " + $job_owner_ping + "\n" else "" end)
