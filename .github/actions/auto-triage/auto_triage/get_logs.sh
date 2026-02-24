@@ -48,7 +48,12 @@ mkdir -p "$DEST_DIR"
 
 log_info "Fetching job metadata..."
 JOB_INFO=$(get_job_info "$JOB_ID")
-JOB_NAME=$(echo "$JOB_INFO" | jq -r '.name // ""')
+JOB_ID_FROM_API=$(echo "$JOB_INFO" | jq -r '.id // empty')
+JOB_NAME=$(echo "$JOB_INFO" | jq -r '.name // empty')
+if [ -z "$JOB_ID_FROM_API" ] || [ -z "$JOB_NAME" ]; then
+    log_error "Failed to fetch valid job metadata for job ID ${JOB_ID}; got: ${JOB_INFO}"
+    exit 1
+fi
 JOB_ATTEMPT=$(echo "$JOB_INFO" | jq -r '.run_attempt // 1')
 
 TMP_ZIP="$(mktemp --suffix=.zip 2>/dev/null || mktemp)"
