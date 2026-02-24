@@ -41,15 +41,18 @@ runs:
         CHANNEL_ID: ${{ inputs.channel_id }}
         JOB_NAME: ${{ inputs.job_name }}
       run: |
-        set -euo pipefail
+        set -uo pipefail
 
         JOB_OWNER_FILE=".auto_triage/data/job_owner.json"
         mkdir -p "$(dirname "$JOB_OWNER_FILE")"
         echo '[]' > "$JOB_OWNER_FILE"
 
+        # Wrap in a function so failures are non-fatal
+        fetch_and_parse_owner() {
+
         if [ -z "${SLACK_TS:-}" ] || [ -z "${CHANNEL_ID:-}" ] || [ -z "${SLACK_BOT_TOKEN:-}" ]; then
           echo "Missing Slack credentials or thread timestamp, skipping parent message fetch"
-          exit 0
+          return 0
         fi
 
         echo "Fetching parent Slack thread (ts=${SLACK_TS}, channel=${CHANNEL_ID})..."
@@ -100,19 +103,27 @@ runs:
                 break
 
         # Look up Slack IDs from cached directory files
+        # slack_directory.json has structure: {"generated_at": "...", "users": [...]}
+        # slack_groups.json has structure: {"generated_at": "...", "usergroups": [...]}
         slack_dir = ".auto_triage/data/slack_directory.json"
         slack_groups = ".auto_triage/data/slack_groups.json"
-        users = json.load(open(slack_dir)) if os.path.exists(slack_dir) else []
-        groups = json.load(open(slack_groups)) if os.path.exists(slack_groups) else []
+        users_data = json.load(open(slack_dir)) if os.path.exists(slack_dir) else {}
+        groups_data = json.load(open(slack_groups)) if os.path.exists(slack_groups) else {}
+        users = users_data.get("users", []) if isinstance(users_data, dict) else users_data
+        groups = groups_data.get("usergroups", []) if isinstance(groups_data, dict) else groups_data
 
         for owner in owners_result:
             nl = owner["name"].lower()
             for u in users:
-                if any((u.get(f) or "").lower() == nl for f in ("real_name", "display_name", "name")):
+                if not isinstance(u, dict):
+                    continue
+                if any((u.get(f) or "").lower() == nl for f in ("real_name", "display_name", "username")):
                     owner["slack_id"] = u.get("id", "")
                     break
             if not owner["slack_id"]:
                 for g in groups:
+                    if not isinstance(g, dict):
+                        continue
                     if any((g.get(f) or "").lower() == nl for f in ("name", "handle")):
                         owner["slack_id"] = g.get("id", "")
                         break
@@ -124,6 +135,11 @@ runs:
             print(f"Owner: {o['name']}, Slack ID: {o['slack_id'] or 'not found'}")
         print(f"Total: {len(owners_result)} owner(s) extracted")
         PYEOF
+
+        } # end fetch_and_parse_owner
+
+        # Run but don't fail the pipeline if owner extraction fails
+        fetch_and_parse_owner || echo "Warning: Job owner extraction failed (non-fatal), continuing without JOB OWNER field"
 
     - name: Build Slack payload
       id: build
