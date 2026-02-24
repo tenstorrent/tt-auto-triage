@@ -107,8 +107,8 @@ runs:
         # Look up Slack IDs from cached directory files
         # slack_directory.json has structure: {"generated_at": "...", "users": [...]}
         # slack_groups.json has structure: {"generated_at": "...", "usergroups": [...]}
-        slack_dir = ".auto_triage/data/slack_directory.json"
-        slack_groups = ".auto_triage/data/slack_groups.json"
+        slack_dir = ".auto_triage/auto_triage/data/slack_directory.json"
+        slack_groups = ".auto_triage/auto_triage/data/slack_groups.json"
         users_data = json.load(open(slack_dir)) if os.path.exists(slack_dir) else {}
         groups_data = json.load(open(slack_groups)) if os.path.exists(slack_groups) else {}
         users = users_data.get("users", []) if isinstance(users_data, dict) else users_data
