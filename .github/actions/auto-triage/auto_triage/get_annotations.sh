@@ -51,7 +51,7 @@ if [ -z "$CHECK_RUN_URL" ]; then
     exit 0
 fi
 
-CHECK_ID=$(echo "$CHECK_RUN_URL" | sed -n 's#.*/check-runs/\([0-9]\+\).*#\1#p')
+CHECK_ID=$(echo "$CHECK_RUN_URL" | sed -n 's#.*/check-runs/\([0-9][0-9]*\).*#\1#p')
 if [ -z "$CHECK_ID" ]; then
     log_warn "Could not parse check-run ID from URL."
     echo '[]' > "$OUTPUT_FILE"
