@@ -366,9 +366,9 @@ runs:
         JOB_OWNER_PING=""
         JOB_OWNER_FILE=".auto_triage/data/job_owner.json"
         if [ -f "$JOB_OWNER_FILE" ]; then
-          JOB_OWNER_PING=$(jq -r '
+          JOB_OWNER_PING=$(jq -r --arg allow "$ALLOW_PINGS" '
             [.[] | select(.name != "") |
-              if (.slack_id // "") != "" then
+              if ($allow == "true") and ((.slack_id // "") != "") then
                 if (.slack_id | startswith("S")) then
                   "<!subteam^" + .slack_id + "|@" + .name + ">"
                 else
