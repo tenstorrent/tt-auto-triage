@@ -34,8 +34,7 @@ JOB_ID="$_job_id"
 # shellcheck source=lib/github_api.sh
 source "$SCRIPT_DIR/lib/github_api.sh"
 
-check_command gh "gh CLI is required"
-check_command jq "jq is required"
+check_command gh jq
 
 OUTPUT_FILE="${2:-auto_triage/logs/job_${JOB_ID}/annotations.json}"
 OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
