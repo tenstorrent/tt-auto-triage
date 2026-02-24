@@ -24,7 +24,7 @@ out=$(bash "$GET_ANNOTATIONS" "https://example.com/not/a/job" 2>&1)
 rc=$?
 set -e
 assert "invalid URL exits non-zero" [ "$rc" -ne 0 ]
-assert "invalid URL prints error" echo "$out" | grep -q "Unable to parse"
+assert "invalid URL prints error" grep -q "Unable to parse" <<< "$out"
 
 # -- missing argument ---------------------------------------------------------
 set +e
@@ -32,7 +32,7 @@ out=$(bash "$GET_ANNOTATIONS" 2>&1)
 rc=$?
 set -e
 assert "missing arg exits non-zero" [ "$rc" -ne 0 ]
-assert "missing arg prints usage" echo "$out" | grep -q "Usage"
+assert "missing arg prints usage" grep -q "Usage" <<< "$out"
 
 # -- valid URL format, non-existent job (produces empty annotations) ----------
 # Uses real API when GH_TOKEN is available; harmless when not.
