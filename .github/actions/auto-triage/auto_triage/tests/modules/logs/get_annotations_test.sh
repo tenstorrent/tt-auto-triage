@@ -42,7 +42,7 @@ trap "rm -f $tmp_out" EXIT
 if bash "$GET_ANNOTATIONS" "$url" "$tmp_out" 2>/dev/null; then
     assert "valid URL format runs without crash" [ -f "$tmp_out" ]
     content=$(cat "$tmp_out")
-    assert "output is JSON array" echo "$content" | jq -e 'type == "array"' >/dev/null
+    assert "output is JSON array" jq -e 'type == "array"' <<<"$content" >/dev/null
 else
     # API may fail without token or for non-existent job - skip assertion
     :
