@@ -70,7 +70,7 @@ cp -R "$TMP_UNZIP"/. "$FULL_DIR"/
 MATCHED=()
 while IFS= read -r rel; do
     [ -n "$rel" ] && MATCHED+=("$rel")
-done < <(find_job_logs "$TMP_UNZIP" "$JOB_NAME")
+done < <(find_job_logs "$TMP_UNZIP" "$JOB_NAME") # loop through the output of find_job_logs to get the matching files
 
 if [ ${#MATCHED[@]} -eq 0 ]; then
     log_warn "Could not isolate job-specific logs; rely on 'full' directory."
