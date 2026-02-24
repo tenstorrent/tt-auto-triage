@@ -67,7 +67,7 @@ runs:
           exit 0
         fi
 
-        echo "$RESPONSE" | jq -r '[.messages[].text // ""] | join("\n")' > /tmp/thread_text.txt
+        echo "$RESPONSE" | jq -r '[.messages[] | if .blocks then (.blocks[] | .text.text // empty) else (.text // empty) end] | join("\n")' > /tmp/thread_text.txt
         echo "Thread fetched ($(wc -c < /tmp/thread_text.txt) bytes). Searching for job: ${JOB_NAME}"
 
         export JOB_OWNER_FILE
@@ -92,9 +92,11 @@ runs:
             print(f"Matched line: {clean[:200]}")
 
             # Owner names follow the job description, prefixed with @
-            found = re.findall(r"@([\w][\w .\-]*\w)", clean)
+            # Names are letter-based (no leading digits) to avoid capturing
+            # trailing text like "27 other pipelines are failing"
+            found = re.findall(r"@([A-Za-z][A-Za-z .\-]*[A-Za-z])", clean)
             for name in found:
-                name = name.strip()
+                name = re.sub(r"\s{2,}", " ", name).strip()
                 if name.lower() in job_name.lower():
                     continue
                 owners_result.append({"name": name, "slack_id": ""})
