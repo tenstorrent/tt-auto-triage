@@ -59,149 +59,289 @@ runs:
         # Initialize cancel.json with default state - this is the single source of truth for cancellation
         echo '{"should_cancel": false, "message": ""}' > "$TARGET/cancel.json"
 
+    - name: Find boundaries
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.auto_triage"
+        # Check cancel state
+        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        ./find_boundaries.sh \
+          "${{ inputs.workflow-name }}" \
+          "${{ inputs.job-name }}"
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ github.token }}
+        CUTOFF_COMMIT: ${{ inputs.cutoff-commit }}
+
     - name: Download Slack directory
+      if: inputs.slack-test-only != 'true'
       shell: bash
       run: |
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
-        pip install requests
-        ./download_slack_directory.py --pretty
+        # Check cancel state
+        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        ./download_slack_directory.py
 
-    - name: Debug - test Slack directory lookup
+    - name: Install ripgrep
+      if: inputs.slack-test-only != 'true'
       shell: bash
       run: |
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
+        # Check cancel state
+        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        sudo apt-get update && sudo apt-get install -y ripgrep
+        rg --version || (echo "ripgrep installation failed" && exit 1)
 
-        echo "=== File locations ==="
-        echo "CWD: $(pwd)"
-        echo "Looking for directory files..."
-        find . -name "slack_directory.json" -o -name "slack_groups.json" | while read f; do
-          echo "  FOUND: $f ($(wc -c < "$f") bytes)"
-        done
+    - name: Setup Node.js v22+
+      if: inputs.slack-test-only != 'true'
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
 
-        echo ""
-        echo "=== Path that slack-report uses (from GITHUB_WORKSPACE) ==="
-        WORKSPACE_DIR="${GITHUB_WORKSPACE}"
-        for p in \
-          ".auto_triage/data/slack_directory.json" \
-          ".auto_triage/auto_triage/data/slack_directory.json"; do
-          FULL="${WORKSPACE_DIR}/${p}"
-          if [ -f "$FULL" ]; then
-            echo "  EXISTS: $p ($(wc -c < "$FULL") bytes)"
-          else
-            echo "  MISSING: $p"
-          fi
-        done
-
-        echo ""
-        echo "=== Directory contents ==="
-        echo "Users count: $(jq '.users | length' auto_triage/data/slack_directory.json)"
-        echo "Groups count: $(jq '.usergroups | length' auto_triage/data/slack_groups.json)"
-
-        echo ""
-        echo "=== Search for Evan Small with get_slack_ids.py ==="
-        python3 auto_triage/get_slack_ids.py "Evan Small" --json || true
-
-        echo ""
-        echo "=== All users matching evan or small ==="
-        python3 << 'EOF'
-        import json
-
-        with open("auto_triage/data/slack_directory.json") as f:
-            data = json.load(f)
-        users = data.get("users", [])
-        print(f"Total users: {len(users)}")
-
-        for u in users:
-            fields = {
-                "real_name": u.get("real_name") or "",
-                "display_name": u.get("display_name") or "",
-                "username": u.get("username") or "",
-            }
-            combined = " ".join(fields.values()).lower()
-            if "evan" in combined or "small" in combined:
-                print(f"  id: {u.get('id')}")
-                for k, v in fields.items():
-                    print(f"    {k}: '{v}'")
-                print()
-        EOF
-
-        echo ""
-        echo "=== Exact lookup test (same logic as action.yml) ==="
-        python3 << 'EOF'
-        import json, os
-
-        name = "Evan Small"
-        nl = name.lower()
-        print(f"Searching for: '{name}' (lowered: '{nl}')")
-
-        slack_dir = "auto_triage/data/slack_directory.json"
-        slack_groups = "auto_triage/data/slack_groups.json"
-        print(f"slack_directory exists: {os.path.exists(slack_dir)}")
-        print(f"slack_groups exists: {os.path.exists(slack_groups)}")
-
-        with open(slack_dir) as f:
-            users_data = json.load(f)
-        users = users_data.get("users", [])
-        print(f"Users loaded: {len(users)}")
-
-        found = False
-        for u in users:
-            if not isinstance(u, dict):
-                continue
-            for field in ("real_name", "display_name", "username"):
-                val = (u.get(field) or "").lower()
-                if val == nl:
-                    print(f"EXACT MATCH on {field}: id={u.get('id')}, value='{u.get(field)}'")
-                    found = True
-                elif nl in val:
-                    print(f"SUBSTRING of {field}: id={u.get('id')}, value='{u.get(field)}'")
-                elif val in nl and val:
-                    print(f"REVERSE SUBSTRING of {field}: id={u.get('id')}, value='{u.get(field)}'")
-
-        if not found:
-            print("NO EXACT MATCH in users")
-
-        with open(slack_groups) as f:
-            groups_data = json.load(f)
-        groups = groups_data.get("usergroups", [])
-        print(f"\nGroups loaded: {len(groups)}")
-        for g in groups:
-            if not isinstance(g, dict):
-                continue
-            for field in ("name", "handle"):
-                val = (g.get(field) or "").lower()
-                if val == nl:
-                    print(f"EXACT MATCH on {field}: id={g.get('id')}, value='{g.get(field)}'")
-                elif nl in val or (val in nl and val):
-                    print(f"PARTIAL on {field}: id={g.get('id')}, value='{g.get(field)}'")
-        EOF
-
-        echo ""
-        echo "=== First 3 user entries (raw structure) ==="
-        jq '.users[:3]' auto_triage/data/slack_directory.json
-
-    - name: Create mock slack_message.json for Slack step
+    - name: Install GitHub Copilot CLI
+      if: inputs.slack-test-only != 'true'
       shell: bash
       run: |
         set -euo pipefail
-        mkdir -p "${GITHUB_WORKSPACE}/.auto_triage/output"
-        cat > "${GITHUB_WORKSPACE}/.auto_triage/output/slack_message.json" << 'MOCKEOF'
+        cd "${GITHUB_WORKSPACE}/.auto_triage"
+        # Check cancel state
+        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        npm install -g @github/copilot
+        copilot --version || (echo "Copilot CLI installation failed" && exit 1)
+
+    - name: Execute filter_triage.sh
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        cd "${GITHUB_WORKSPACE}/.auto_triage"
+        # Check cancel state
+        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        # Verify authentication tokens are set
+        if [ -z "${COPILOT_GITHUB_TOKEN:-}" ] && [ -z "${GH_TOKEN:-}" ] && [ -z "${GITHUB_TOKEN:-}" ]; then
+          echo "Warning: No authentication tokens found in environment"
+        fi
+        # Run filter_triage.sh with error handling - fail gracefully on any error
+        if ! ./filter_triage.sh \
+          "${{ inputs.workflow-name }}" \
+          "${{ inputs.job-name }}" \
+          ci; then
+          echo "filter_triage.sh failed, setting cancellation flag"
+          jq -n '{should_cancel: true, message: "Filter triage step failed unexpectedly. Check logs for details."}' > cancel.json
+        fi
+      env:
+        # Use TESTING_COPILOT_PAT for Copilot CLI authentication
+        COPILOT_GITHUB_TOKEN: ${{ inputs.copilot-pat }}
+        # Use github.token for gh CLI (used by bash scripts for GitHub API calls)
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Write cancellation explanation
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.auto_triage"
+        CANCEL_FILE="cancel.json"
+        # Only write explanation if cancellation was requested
+        if [ ! -f "$CANCEL_FILE" ] || [ "$(jq -r '.should_cancel // false' "$CANCEL_FILE")" != "true" ]; then
+          echo "No cancellation requested, skipping"
+          exit 0
+        fi
+        REPORT_DIR="${GITHUB_WORKSPACE}/.auto_triage/output"
+        mkdir -p "$REPORT_DIR"
+        RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+        RUN_LABEL="full_report_link #${GITHUB_RUN_NUMBER:-$GITHUB_RUN_ID}"
+        CANCEL_MESSAGE=$(jq -r '.message // ""' "$CANCEL_FILE")
         {
-          "case": "2",
-          "scenario": "Slack directory lookup test",
-          "notes": "Testing JOB OWNER ping resolution."
-        }
-        MOCKEOF
+          echo "*Auto-triage cancelled:*"
+          echo "$CANCEL_MESSAGE"
+          echo ""
+          echo "*Workflow:* ${{ inputs.workflow-name }}"
+          echo "*Job:* ${{ inputs.job-name }}"
+          echo "*Run:* <$RUN_URL|$RUN_LABEL>"
+        } > "$REPORT_DIR/explanation.md"
+
+    - name: Verify filter stage outputs
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.auto_triage"
+        # Check cancel state
+        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        COMMIT_FILE="auto_triage/data/commit_info.json"
+        if [ ! -f "$COMMIT_FILE" ]; then
+            echo "Filter stage did not produce $COMMIT_FILE" >&2
+            exit 1
+        fi
+        if [ ! -f "auto_triage/data/error_message.txt" ]; then
+            touch "auto_triage/data/error_message.txt"
+        fi
+
+    - name: Execute auto_triage.sh
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.auto_triage"
+        # Check cancel state
+        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        ./auto_triage.sh \
+          "${{ inputs.workflow-name }}" \
+          "${{ inputs.job-name }}" \
+          ci
+      env:
+        REUSE_DATA: "true"
+        # Use TESTING_COPILOT_PAT for Copilot CLI authentication
+        COPILOT_GITHUB_TOKEN: ${{ inputs.copilot-pat }}
+        # Use github.token for gh CLI (used by bash scripts for GitHub API calls)
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Attempt auto fix PR (optional)
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.auto_triage"
+        # Check cancel state
+        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        ./run_auto_fix.sh \
+          "${{ inputs.workflow-name }}" \
+          "${{ inputs.job-name }}"
+      env:
+        COPILOT_GITHUB_TOKEN: ${{ inputs.copilot-pat }}
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Retry deterministic failures on supported hardware
+      if: inputs.slack-test-only != 'true' && inputs.enable-retry == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.auto_triage"
+        # Check cancel state
+        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        # Check if slack_message.json exists before attempting retry
+        if [ ! -f "auto_triage/output/slack_message.json" ]; then
+          echo "No slack_message.json found, skipping retry logic"
+          exit 0
+        fi
+        # Run retry logic for Case 1/4 on N150/N300/P150/P300 hardware
+        # This script will:
+        # 1. Check if scenario is "Deterministic failure with identified commit" or "Deterministic failure with multiple plausible commits"
+        # 2. Check if job name contains N150, N300, P150, or P300 (not galaxy/T3K/p100)
+        # 3. If both conditions met: re-run the job, wait for completion, compare results
+        # 4. Modify slack_message.json and explanation.md based on retry outcome
+        echo "=== Checking if retry should be attempted ==="
+        ./retry_on_deterministic.sh \
+          "${{ inputs.job-name }}" \
+          "${{ inputs.workflow-name }}" \
+          "${{ inputs.slack_ts }}"
+      env:
+        COPILOT_GITHUB_TOKEN: ${{ inputs.copilot-pat }}
+        # Use github.token for gh CLI calls - requires 'permissions: actions: write' in calling workflow
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ github.token }}
+        SLACK_BOT_TOKEN: ${{ env.SLACK_BOT_TOKEN }}
+        SLACK_CHANNEL_ID: ${{ env.SLACK_CHANNEL_ID }}
+
+    - name: Seed Slack test payload
+      if: inputs.slack-test-only == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        TARGET="${GITHUB_WORKSPACE}/.auto_triage/output"
+        mkdir -p "$TARGET"
+        cp "${{ github.action_path }}/auto_triage/sample_slack_message.json" "$TARGET/slack_message.json"
+
+    - name: Debug Slack send configuration
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "Auto-triage Slack send flag (inputs.send-slack-message) = '${{ inputs.send-slack-message }}'"
+        echo "Auto-triage Slack thread timestamp (inputs.slack_ts) = '${{ inputs.slack_ts }}'"
+        if [ "${{ inputs.send-slack-message }}" = "true" ]; then
+          echo "Auto-triage: Slack notification step is ENABLED and will run (barring job-level skips)."
+        else
+          echo "Auto-triage: Slack notification step is DISABLED and will NOT run."
+        fi
 
     - name: Send Slack notification
-      if: always()
+      if: always() && inputs.send-slack-message == 'true'
       uses: tenstorrent/tt-auto-triage/.github/actions/slack-report-auto-triage@ebanerjee/shift-pinging-owners
       with:
+        # slack_webhook_url is no longer used, using env.SLACK_BOT_TOKEN and env.SLACK_CHANNEL_ID instead inside the action
         channel_id: ${{ env.SLACK_CHANNEL_ID }}
         slack_message_path: .auto_triage/output/slack_message.json
         job_name: ${{ inputs.job-name }}
         workflow_name: ${{ inputs.workflow-name }}
+        auto_fix_meta_path: .auto_triage/data/auto_fix_metadata.json
         slack_ts: ${{ inputs.slack_ts }}
         allow_pings: ${{ inputs.allow-pings }}
+
+    - name: Publish triage report to summary
+      if: always() && inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        REPORT="${GITHUB_WORKSPACE}/.auto_triage/output/explanation.md"
+        if [ -f "$REPORT" ]; then
+            {
+              echo "## Auto Triage Report"
+              cat "$REPORT"
+            } >> "$GITHUB_STEP_SUMMARY"
+        else
+            echo "No explanation produced." >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - name: Upload auto-triage data
+      if: always() && inputs.slack-test-only != 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: auto-triage-data
+        path: ${{ github.workspace }}/.auto_triage/data
+        if-no-files-found: ignore
+        include-hidden-files: true
+
+    - name: Upload auto-triage output
+      if: always() && inputs.slack-test-only != 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: auto-triage-output
+        path: ${{ github.workspace }}/.auto_triage/output
+        if-no-files-found: ignore
+        include-hidden-files: true
