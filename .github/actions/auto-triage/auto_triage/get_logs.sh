@@ -27,8 +27,7 @@ fi
 JOB_URL="$1"
 OUTPUT_BASE="${2:-auto_triage/logs}"
 
-check_command gh "gh CLI is required but not found in PATH"
-check_command unzip "unzip is required to extract the logs"
+check_command gh unzip
 
 if ! parse_job_url "$JOB_URL"; then
     log_error "Unable to parse job URL. Expected format https://github.com/<owner>/<repo>/actions/runs/<run_id>/job/<job_id>"
