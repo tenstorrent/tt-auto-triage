@@ -39,13 +39,17 @@ assert "missing arg prints usage" echo "$out" | grep -q "Usage"
 url="https://github.com/tenstorrent/tt-metal/actions/runs/1/job/999999999999"
 tmp_out=$(mktemp)
 trap "rm -f $tmp_out" EXIT
-if bash "$GET_ANNOTATIONS" "$url" "$tmp_out" 2>/dev/null; then
+if ! command -v gh >/dev/null 2>&1 || ! command -v jq >/devnull 2>&1; then
+    echo "Skipping valid URL integration test: gh and/or jq not available"
+else
+    set +e
+    bash "$GET_ANNOTATIONS" "$url" "$tmp_out" 2>/dev/null
+    rc=$?
+    set -e
+    assert "valid URL format exits zero when prerequisites present" [ "$rc" -eq 0 ]
     assert "valid URL format runs without crash" [ -f "$tmp_out" ]
     content=$(cat "$tmp_out")
-    assert "output is JSON array" jq -e 'type == "array"' <<<"$content" >/dev/null
-else
-    # API may fail without token or for non-existent job - skip assertion
-    :
+    assert "output is JSON array" echo "$content" | jq -e 'type == "array"' >/dev/null
 fi
 
 test_summary
