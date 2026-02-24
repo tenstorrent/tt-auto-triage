@@ -32,6 +32,99 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Fetch parent message and extract job owner
+      id: fetch_owner
+      if: always()
+      shell: bash
+      env:
+        SLACK_TS: ${{ inputs.slack_ts }}
+        CHANNEL_ID: ${{ inputs.channel_id }}
+        JOB_NAME: ${{ inputs.job_name }}
+      run: |
+        set -euo pipefail
+
+        JOB_OWNER_FILE=".auto_triage/data/job_owner.json"
+        mkdir -p "$(dirname "$JOB_OWNER_FILE")"
+        echo '[]' > "$JOB_OWNER_FILE"
+
+        if [ -z "${SLACK_TS:-}" ] || [ -z "${CHANNEL_ID:-}" ] || [ -z "${SLACK_BOT_TOKEN:-}" ]; then
+          echo "Missing Slack credentials or thread timestamp, skipping parent message fetch"
+          exit 0
+        fi
+
+        echo "Fetching parent Slack thread (ts=${SLACK_TS}, channel=${CHANNEL_ID})..."
+
+        RESPONSE=$(curl -s -X GET \
+          "https://slack.com/api/conversations.replies?channel=${CHANNEL_ID}&ts=${SLACK_TS}&limit=100&inclusive=true" \
+          -H "Authorization: Bearer ${SLACK_BOT_TOKEN}")
+
+        OK_STATUS=$(echo "$RESPONSE" | jq -r '.ok // false')
+        if [ "$OK_STATUS" != "true" ]; then
+          echo "Failed to fetch parent message: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+          exit 0
+        fi
+
+        echo "$RESPONSE" | jq -r '[.messages[].text // ""] | join("\n")' > /tmp/thread_text.txt
+        echo "Thread fetched ($(wc -c < /tmp/thread_text.txt) bytes). Searching for job: ${JOB_NAME}"
+
+        export JOB_OWNER_FILE
+        python3 << 'PYEOF'
+        import json, os, re
+
+        job_name = os.environ["JOB_NAME"]
+        owner_file = os.environ["JOB_OWNER_FILE"]
+        owners_result = []
+
+        with open("/tmp/thread_text.txt") as f:
+            text = f.read()
+
+        for line in text.split("\n"):
+            # Strip Slack link formatting for matching: <url|label> -> label
+            clean = re.sub(r"<[^>]+\|([^>]+)>", r"\1", line)
+            clean = re.sub(r"<[^>]+>", "", clean)
+
+            if job_name.lower() not in clean.lower():
+                continue
+
+            print(f"Matched line: {clean[:200]}")
+
+            # Owner names follow the job description, prefixed with @
+            found = re.findall(r"@([\w][\w .\-]*\w)", clean)
+            for name in found:
+                name = name.strip()
+                if name.lower() in job_name.lower():
+                    continue
+                owners_result.append({"name": name, "slack_id": ""})
+
+            if owners_result:
+                break
+
+        # Look up Slack IDs from cached directory files
+        slack_dir = ".auto_triage/data/slack_directory.json"
+        slack_groups = ".auto_triage/data/slack_groups.json"
+        users = json.load(open(slack_dir)) if os.path.exists(slack_dir) else []
+        groups = json.load(open(slack_groups)) if os.path.exists(slack_groups) else []
+
+        for owner in owners_result:
+            nl = owner["name"].lower()
+            for u in users:
+                if any((u.get(f) or "").lower() == nl for f in ("real_name", "display_name", "name")):
+                    owner["slack_id"] = u.get("id", "")
+                    break
+            if not owner["slack_id"]:
+                for g in groups:
+                    if any((g.get(f) or "").lower() == nl for f in ("name", "handle")):
+                        owner["slack_id"] = g.get("id", "")
+                        break
+
+        with open(owner_file, "w") as f:
+            json.dump(owners_result, f, indent=2)
+
+        for o in owners_result:
+            print(f"Owner: {o['name']}, Slack ID: {o['slack_id'] or 'not found'}")
+        print(f"Total: {len(owners_result)} owner(s) extracted")
+        PYEOF
+
     - name: Build Slack payload
       id: build
       shell: bash
@@ -253,13 +346,36 @@ runs:
           AUTO_FIX_NOTE=$(jq -r '.auto_fix_pr_url // ""' "$AUTO_FIX_META" 2>/dev/null || echo "")
         fi
 
+        # Build JOB OWNER ping string for deterministic failure cases (1/2/4)
+        JOB_OWNER_PING=""
+        JOB_OWNER_FILE=".auto_triage/data/job_owner.json"
+        if [ -f "$JOB_OWNER_FILE" ]; then
+          JOB_OWNER_PING=$(jq -r '
+            [.[] | select(.name != "") |
+              if (.slack_id // "") != "" then
+                if (.slack_id | startswith("S")) then
+                  "<!subteam^" + .slack_id + "|@" + .name + ">"
+                else
+                  "<@" + .slack_id + ">"
+                end
+              else
+                .name
+              end
+            ] | join(", ")
+          ' "$JOB_OWNER_FILE" 2>/dev/null || echo "")
+          if [ -n "$JOB_OWNER_PING" ]; then
+            echo "JOB OWNER ping string: $JOB_OWNER_PING"
+          fi
+        fi
+
         TEXT=$(jq -r \
           --arg run_url "$RUN_URL" \
           --arg run_label "$RUN_LABEL" \
           --arg job_name "$JOB_NAME_VALUE" \
           --arg workflow_name "$WORKFLOW_NAME_VALUE" \
           --arg auto_fix "$AUTO_FIX_NOTE" \
-          --arg allow_pings "$ALLOW_PINGS" '
+          --arg allow_pings "$ALLOW_PINGS" \
+          --arg job_owner_ping "$JOB_OWNER_PING" '
           def short_hash(h):
             if (h // "") == "" then "unknown" else (h[0:8]) end;
 
@@ -365,6 +481,7 @@ runs:
             + section_files("RELEVANT FILES"; .relevant_files)
             + section_line("NOTES"; .notes)
             + (if ($auto_fix // "") != "" then "\n*AUTO-FIX:* Draft PR created -> <\($auto_fix)|link>\n" else "" end)
+            + (if ($job_owner_ping != "") and ((.case | tostring) as $c | $c == "1" or $c == "2" or $c == "4") then "\n*JOB OWNER:* " + $job_owner_ping + "\n" else "" end)
             + "\n---\n_DISCLAIMER: This analysis has been done by AI. Do not take the results as absolute truth since it has been inaccurate in the past._"
           ) | gsub("\n{3,}"; "\n\n")
         ' "$MESSAGE_PATH")
