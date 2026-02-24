@@ -43,7 +43,7 @@ echo "y" > "$TMP_LOGS/other-job/log.txt"
 echo "z" > "$TMP_LOGS/my-job-name/nested/out.log"
 
 found=$(find_job_logs "$TMP_LOGS" "my-job-name")
-count=$(echo "$found" | grep -c . 2>/dev/null || echo 0)
+count=$(echo "$found" | grep -c . 2>/dev/null || true)
 assert "find_job_logs finds matching files" [ "$count" -ge 2 ]
 
 test_summary
