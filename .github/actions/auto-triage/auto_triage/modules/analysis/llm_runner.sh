@@ -40,7 +40,7 @@ run_llm_analysis() {
         return 1
     fi
 
-    check_command copilot "GitHub Copilot CLI is required"
+    check_command copilot
 
     if [ -z "${COPILOT_GITHUB_TOKEN:-}" ]; then
         log_warn "COPILOT_GITHUB_TOKEN not set, falling back to GH_TOKEN"
