@@ -65,8 +65,9 @@ chmod +x "$COPILOT_STUB_DIR/copilot"
 ORIGINAL_PATH="$PATH"
 export PATH="$COPILOT_STUB_DIR:$PATH"
 
-# Prepare minimal subjob_runs.json under the auto_triage data directory.
-DATA_DIR="$ROOT_DIR/data"
+# Prepare minimal subjob_runs.json. Use canonical path (auto_triage/data) because
+# setup_triage_dirs overwrites ./data with a symlink to auto_triage/data.
+DATA_DIR="$ROOT_DIR/auto_triage/data"
 mkdir -p "$DATA_DIR"
 SUBJOB_RUNS_JSON="$DATA_DIR/subjob_runs.json"
 SUBJOB_RUNS_BAK=""
@@ -78,8 +79,9 @@ cat > "$SUBJOB_RUNS_JSON" <<'EOF'
 {"runs":[{"status":"failure","name":"test-subjob","conclusion":"failure"}]}
 EOF
 
-# Prepare a minimal instructions file expected by auto_triage.sh.
-INSTRUCTIONS_FILE="$ROOT_DIR/instructions.md"
+# auto_triage.sh requires instructions_for_llm.txt (not instructions.md). Back it up
+# and use minimal content so the script proceeds to invoke copilot.
+INSTRUCTIONS_FILE="$ROOT_DIR/instructions_for_llm.txt"
 INSTRUCTIONS_BAK=""
 if [ -f "$INSTRUCTIONS_FILE" ]; then
     INSTRUCTIONS_BAK="${INSTRUCTIONS_FILE}.bak.$$"
