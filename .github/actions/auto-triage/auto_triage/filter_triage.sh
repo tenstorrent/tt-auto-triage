@@ -51,8 +51,12 @@ log_info "Launching GitHub Copilot CLI filter stage"
 run_llm_analysis "$INSTRUCTIONS_FILE" "$WORKFLOW" "$SUBJOB" "$CI_MODE" || exit $?
 
 # De-duplicate commit_info.json entries after the filter LLM has finished.
+# This ensures that any overlapping batches or manual backfills in the filter
+# stage do not cause the main analysis LLM to see duplicate commits.
 COMMIT_FILE="${CANON_DATA_DIR}/commit_info.json"
 if [ -f "$COMMIT_FILE" ]; then
+    # Only attempt de-duplication when the file is a JSON array. If it is a
+    # string (e.g., "too many commits" fallback), leave it untouched.
     if jq -e 'type == "array"' "$COMMIT_FILE" >/dev/null 2>&1; then
         log_info "De-duplicating commit_info.json entries (filter stage)"
         TMP_COMMIT_FILE="$(mktemp)"
