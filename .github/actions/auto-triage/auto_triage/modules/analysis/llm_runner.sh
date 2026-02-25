@@ -47,9 +47,16 @@ run_llm_analysis() {
         export COPILOT_GITHUB_TOKEN="${GH_TOKEN:-}"
     fi
 
+    local env_context
+    if [ -z "$mode" ] || [ "$mode" = "ci" ]; then
+        env_context="a CI environment with no interactive approval"
+    else
+        env_context="a non-CI or interactive environment"
+    fi
+
     local prompt
-    prompt=$(printf 'You are operating in a CI environment with no interactive approval. Complete the following instructions for workflow '\''%s'\'' and job '\''%s'\'':\n\n%s' \
-        "$workflow" "$job" "$(cat "$instructions_file")")
+    prompt=$(printf 'You are operating in %s. Complete the following instructions for workflow '\''%s'\'' and job '\''%s'\'':\n\n%s' \
+        "$env_context" "$workflow" "$job" "$(cat "$instructions_file")")
 
     copilot -p "$prompt" --allow-all-tools
     return $?
