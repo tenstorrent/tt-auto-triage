@@ -28,7 +28,7 @@ set -e
 assert "missing instructions file returns non-zero" [ "$rc" -ne 0 ]
 
 # -- run_llm_analysis: run_llm_analysis is defined -----------------------------
-assert "run_llm_analysis is defined" type run_llm_analysis &>/dev/null
+assert "run_llm_analysis is defined" type run_llm_analysis
 
 # -- run_llm_analysis: fails when copilot missing ---------------------------------
 # (Skips if copilot is installed - would invoke real API)
