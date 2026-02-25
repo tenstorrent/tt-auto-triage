@@ -421,12 +421,9 @@ runs:
           def join_people(arr; use_slack_id):
             arr | map(person(.; use_slack_id)) | join(", ");
 
+          # Case 3 (non-deterministic/hardware): do not auto-ping metalinfra; leave RELEVANT DEVELOPERS blank.
           def ensure_case3_ping(arr; case_val):
-            if ((case_val | tostring) == "3") then
-              (arr // []) + [{ "name": "metalinfa", "slack_id": "S0985AN7TC5" }]
-            else
-              (arr // [])
-            end;
+            (arr // []);
 
           def section_line(lbl; txt):
             if (txt // "") != "" then "*\(lbl):* " + txt + "\n" else "" end;
