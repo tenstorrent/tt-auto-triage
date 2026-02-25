@@ -47,7 +47,7 @@ runs:
         mkdir -p "$TARGET"
         # Copy triage tooling
         cp -R "${{ github.action_path }}/auto_triage/." "$TARGET/"
-        chmod +x "$TARGET/"*.sh 2>/dev/null || true
+        find "$TARGET" -name "*.sh" -exec chmod +x {} \;
         chmod +x "$TARGET/"*.py 2>/dev/null || true
         # Mirror the checked-out repo into the workspace for the LLM (excluding the workspace itself)
         rsync -a --delete \
@@ -70,7 +70,7 @@ runs:
           echo "Skipping: cancellation requested"
           exit 0
         fi
-        ./find_boundaries.sh \
+        ./modules/boundaries/find_boundaries.sh \
           "${{ inputs.workflow-name }}" \
           "${{ inputs.job-name }}"
       env:

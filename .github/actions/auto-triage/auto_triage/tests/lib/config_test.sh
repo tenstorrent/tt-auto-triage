@@ -46,6 +46,8 @@ assert_eq "AT_BATCH_SIZE"         "$AT_BATCH_SIZE"     "10"
 assert_eq "AT_MAX_BATCHES"        "$AT_MAX_BATCHES"    "100"
 assert_eq "AT_PER_PAGE"           "$AT_PER_PAGE"       "100"
 assert_eq "AT_FAILURE_LIMIT"      "$AT_FAILURE_LIMIT"  "30"
+assert_eq "AT_RUN_LIMIT_WITHOUT_SUCCESS" "$AT_RUN_LIMIT_WITHOUT_SUCCESS" "100"
+assert_eq "AT_SUBJOB_MISSING_CANCEL_LIMIT" "$AT_SUBJOB_MISSING_CANCEL_LIMIT" "50"
 
 # -- feature flags -------------------------------------------------------------
 assert_eq "AT_CUTOFF_COMMIT empty"  "$AT_CUTOFF_COMMIT" ""

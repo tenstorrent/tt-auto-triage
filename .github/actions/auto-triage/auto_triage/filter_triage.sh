@@ -23,7 +23,7 @@ CANON_OUTPUT_DIR="${ROOT}/auto_triage/output"
 DATA_LINK="${ROOT}/data"
 LOGS_LINK="${ROOT}/logs"
 OUTPUT_LINK="${ROOT}/output"
-FIND_SCRIPT="${ROOT}/find_boundaries.sh"
+FIND_SCRIPT="${ROOT}/modules/boundaries/find_boundaries.sh"
 
 echo "=== Filter stage: preparing directories ==="
 mkdir -p "$CANON_DATA_DIR" "$CANON_LOGS_DIR" "$CANON_OUTPUT_DIR"
@@ -34,15 +34,14 @@ ln -sfn auto_triage/logs "$LOGS_LINK"
 ln -sfn auto_triage/output "$OUTPUT_LINK"
 
 if [ "$CI_MODE" = "ci" ]; then
-    echo "Filter stage CI mode detected, removing find_boundaries.sh to prevent re-execution."
+    echo "Filter stage CI mode detected, removing find_boundaries to prevent re-execution."
     rm -f "$FIND_SCRIPT"
 fi
 
 echo "=== Verifying boundary artifacts for filter stage ==="
-SUMMARY_FILE="${CANON_DATA_DIR}/boundaries_summary.json"
 SUBJOB_RUNS_FILE="${CANON_DATA_DIR}/subjob_runs.json"
-if [ ! -s "$SUMMARY_FILE" ] || [ ! -s "$SUBJOB_RUNS_FILE" ]; then
-    echo "Error: boundary metadata missing (expected at ${SUMMARY_FILE} and ${SUBJOB_RUNS_FILE})." >&2
+if [ ! -s "$SUBJOB_RUNS_FILE" ]; then
+    echo "Error: boundary metadata missing (expected at ${SUBJOB_RUNS_FILE})." >&2
     ls -l "$CANON_DATA_DIR"
     exit 1
 fi

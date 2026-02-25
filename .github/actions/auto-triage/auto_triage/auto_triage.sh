@@ -24,9 +24,8 @@ CANON_OUTPUT_DIR="${ROOT}/auto_triage/output"
 DATA_LINK="${ROOT}/data"
 LOGS_LINK="${ROOT}/logs"
 OUTPUT_LINK="${ROOT}/output"
-SUMMARY_FILE="${CANON_DATA_DIR}/boundaries_summary.json"
 SUBJOB_RUNS_FILE="${CANON_DATA_DIR}/subjob_runs.json"
-FIND_SCRIPT="${ROOT}/find_boundaries.sh"
+FIND_SCRIPT="${ROOT}/modules/boundaries/find_boundaries.sh"
 
 echo "=== Preparing auto_triage/data and auto_triage/logs ==="
 mkdir -p "$CANON_DATA_DIR" "$CANON_LOGS_DIR"
@@ -38,26 +37,15 @@ ln -sfn auto_triage/data "$DATA_LINK"
 ln -sfn auto_triage/logs "$LOGS_LINK"
 ln -sfn auto_triage/output "$OUTPUT_LINK"
 
-# Remove find_boundaries.sh so the LLM cannot rerun it (already executed upstream).
-if [ "$CI_MODE" = "ci" ]; then
-    echo "CI mode detected, removing find_boundaries.sh to prevent re-execution."
-    rm -f "$FIND_SCRIPT"
-fi
-
 cd "$ROOT"
 
 echo "=== Verifying boundary artifacts ==="
-if [ ! -s "$SUMMARY_FILE" ]; then
-    echo "Error: boundaries summary not found at $SUMMARY_FILE" >&2
-    ls -l "$CANON_DATA_DIR"
-    exit 1
-fi
 if [ ! -s "$SUBJOB_RUNS_FILE" ]; then
     echo "Error: subjob_runs.json not found at $SUBJOB_RUNS_FILE" >&2
     ls -l "$CANON_DATA_DIR"
     exit 1
 fi
-SUMMARY_COUNT=$(jq 'if type=="array" then length else ((.runs // []) | length) end' "$SUMMARY_FILE")
+SUMMARY_COUNT=$(jq 'if type=="array" then length else ((.runs // []) | length) end' "$SUBJOB_RUNS_FILE")
 FAIL_COUNT=$(jq 'if type=="array"
                  then ([.[] | select(.status != "success")] | length)
                  else ((.runs // []) | map(select(.status != "success")) | length)

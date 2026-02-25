@@ -322,7 +322,7 @@ Final Reminders
 - Accuracy matters—engineers will act on your findings. Choose the correct case and justify it thoroughly.
 - Case 1 and Case 4 are mutually exclusive: if you can defend one culprit, emit the Case 1 Slack payload (single commit entry). If multiple suspects remain, emit the Case 4 payload (multi-commit array) and never force a single guess.
 - When evidence points to multiple risky commits, explicitly say so (Case 4) instead of forcing a guess.
-- If there are **no failing runs** after reading `boundaries_summary.json`, write `./output/explanation.md` stating that the triage run was invoked in error (pipeline currently passing) and exit without further analysis.
+- If there are **no failing runs** after reading `subjob_runs.json`, write `./output/explanation.md` stating that the triage run was invoked in error (pipeline currently passing) and exit without further analysis.
 
 Extra notes
 --------------
