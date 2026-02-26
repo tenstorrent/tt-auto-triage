@@ -34,7 +34,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for t in tests/modules/boundaries/*_test.sh; do
+          for t in tests/modules/boundaries/*_test.sh tests/modules/commit_data/*_test.sh; do
             [ -f "$t" ] || continue
             echo "--- $t ---"
             bash "$t"
