@@ -34,8 +34,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          for t in tests/modules/boundaries/*_test.sh tests/modules/commit_data/*_test.sh tests/modules/logs/*_test.sh tests/modules/analysis/*_test.sh; do
-            [ -f "$t" ] || continue
-            echo "--- $t ---"
-            bash "$t"
+          test_patterns=(
+            "tests/modules/boundaries/*_test.sh"
+            "tests/modules/commit_data/*_test.sh"
+            "tests/modules/logs/*_test.sh"
+            "tests/modules/analysis/*_test.sh"
+          )
+          for p in "${test_patterns[@]}"; do
+            for t in $p; do
+              [ -f "$t" ] || continue
+              echo "--- $t ---"
+              bash "$t"
+            done
           done
