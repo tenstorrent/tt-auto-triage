@@ -65,16 +65,11 @@ validate_commit_metadata() {
         fi
     fi
 
-    if [ -n "$actual_author" ]; then
-        if [ -z "$decl_authors_str" ]; then
-            _validation_fail "authors[] empty but GitHub returned author" "$context_file" "$index" "$commit"
-            return 1
-        fi
-    else
-        if [ -z "$decl_authors_str" ]; then
-            _validation_fail "authors[] empty and author unresolved" "$context_file" "$index" "$commit"
-            return 1
-        fi
+    if [ -z "$decl_authors_str" ]; then
+        local msg="authors[] empty and author unresolved"
+        [ -n "$actual_author" ] && msg="authors[] empty but GitHub returned author"
+        _validation_fail "$msg" "$context_file" "$index" "$commit"
+        return 1
     fi
 
     local pr_number
