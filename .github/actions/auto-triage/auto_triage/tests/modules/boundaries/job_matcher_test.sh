@@ -6,12 +6,10 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# tests/modules/boundaries -> auto_triage root (three levels up)
-AUTO_TRIAGE_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-_d="$(cd "$SCRIPT_DIR" && pwd)"
-while [ "$_d" != "/" ]; do [ -f "$_d/testing_lib_files/test_harness.sh" ] && . "$_d/testing_lib_files/test_harness.sh" && break; _d="${_d%/*}"; done
-source "$AUTO_TRIAGE_ROOT/modules/boundaries/job_matcher.sh"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AT_ROOT="$REPO_ROOT/.github/actions/auto-triage/auto_triage"
+source "$REPO_ROOT/testing_lib_files/test_harness.sh"
+source "$AT_ROOT/modules/boundaries/job_matcher.sh"
 
 echo "=== modules/boundaries/job_matcher.sh ==="
 

@@ -9,13 +9,10 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-AUTO_TRIAGE="$ROOT_DIR/auto_triage.sh"
-
-_d="$(cd "$SCRIPT_DIR" && pwd)"
-while [ "$_d" != "/" ]; do [ -f "$_d/testing_lib_files/test_harness.sh" ] && . "$_d/testing_lib_files/test_harness.sh" && break; _d="${_d%/*}"; done
-export AUTO_TRIAGE_ROOT="$ROOT_DIR"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AT_ROOT="$REPO_ROOT/.github/actions/auto-triage/auto_triage"
+source "$REPO_ROOT/testing_lib_files/test_harness.sh"
+AUTO_TRIAGE="$AT_ROOT/auto_triage.sh"
 
 echo "=== auto_triage.sh ==="
 
@@ -68,7 +65,7 @@ export PATH="$COPILOT_STUB_DIR:$PATH"
 
 # Prepare minimal subjob_runs.json. Use canonical path (auto_triage/data) because
 # setup_triage_dirs overwrites ./data with a symlink to auto_triage/data.
-DATA_DIR="$ROOT_DIR/auto_triage/data"
+DATA_DIR="$AT_ROOT/auto_triage/data"
 mkdir -p "$DATA_DIR"
 SUBJOB_RUNS_JSON="$DATA_DIR/subjob_runs.json"
 SUBJOB_RUNS_BAK=""
@@ -82,7 +79,7 @@ EOF
 
 # auto_triage.sh requires instructions_for_llm.txt (not instructions.md). Back it up
 # and use minimal content so the script proceeds to invoke copilot.
-INSTRUCTIONS_FILE="$ROOT_DIR/instructions_for_llm.txt"
+INSTRUCTIONS_FILE="$AT_ROOT/instructions_for_llm.txt"
 INSTRUCTIONS_BAK=""
 if [ -f "$INSTRUCTIONS_FILE" ]; then
     INSTRUCTIONS_BAK="${INSTRUCTIONS_FILE}.bak.$$"

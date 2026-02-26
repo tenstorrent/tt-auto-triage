@@ -62,8 +62,14 @@ def main():
     # Look up Slack IDs with exact case-insensitive matching
     slack_dir = os.path.join(slack_data_dir, "slack_directory.json")
     slack_groups = os.path.join(slack_data_dir, "slack_groups.json")
-    users_data = json.load(open(slack_dir)) if os.path.exists(slack_dir) else {}
-    groups_data = json.load(open(slack_groups)) if os.path.exists(slack_groups) else {}
+    users_data = {}
+    if os.path.exists(slack_dir):
+        with open(slack_dir) as f:
+            users_data = json.load(f)
+    groups_data = {}
+    if os.path.exists(slack_groups):
+        with open(slack_groups) as f:
+            groups_data = json.load(f)
     users = users_data.get("users", []) if isinstance(users_data, dict) else users_data
     groups = groups_data.get("usergroups", []) if isinstance(groups_data, dict) else groups_data
 

@@ -7,14 +7,11 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ACTION_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PYTHON_SCRIPT="$ACTION_ROOT/scripts/fetch_job_owner.py"
-SHELL_SCRIPT="$ACTION_ROOT/scripts/fetch_job_owner.sh"
-
-# Source shared test harness from repo root
-_d="$(cd "$SCRIPT_DIR" && pwd)"
-while [ "$_d" != "/" ]; do [ -f "$_d/testing_lib_files/test_harness.sh" ] && . "$_d/testing_lib_files/test_harness.sh" && break; _d="${_d%/*}"; done
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AT_ROOT="$REPO_ROOT/.github/actions/slack-report-auto-triage"
+source "$REPO_ROOT/testing_lib_files/test_harness.sh"
+PYTHON_SCRIPT="$AT_ROOT/scripts/fetch_job_owner.py"
+SHELL_SCRIPT="$AT_ROOT/scripts/fetch_job_owner.sh"
 
 echo "=== fetch_job_owner ==="
 

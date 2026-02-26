@@ -9,15 +9,11 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-
-_d="$(cd "$SCRIPT_DIR" && pwd)"
-while [ "$_d" != "/" ]; do [ -f "$_d/testing_lib_files/test_harness.sh" ] && . "$_d/testing_lib_files/test_harness.sh" && break; _d="${_d%/*}"; done
-export AUTO_TRIAGE_ROOT="$ROOT_DIR"
-
-# shellcheck source=../../../modules/analysis/llm_runner.sh
-source "$ROOT_DIR/modules/analysis/llm_runner.sh"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AT_ROOT="$REPO_ROOT/.github/actions/auto-triage/auto_triage"
+source "$REPO_ROOT/testing_lib_files/test_harness.sh"
+export AUTO_TRIAGE_ROOT="$AT_ROOT"
+source "$AT_ROOT/modules/analysis/llm_runner.sh"
 
 echo "=== modules/analysis/llm_runner.sh ==="
 

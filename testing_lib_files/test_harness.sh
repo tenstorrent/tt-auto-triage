@@ -5,8 +5,7 @@
 # Initializes _pass and _fail.
 #
 # Usage (from any test under .github/actions/...):
-#   _d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-#   while [ "$_d" != "/" ]; do [ -f "$_d/testing_lib_files/test_harness.sh" ] && . "$_d/testing_lib_files/test_harness.sh" && break; _d="${_d%/*}"; done
+#   source "$(git rev-parse --show-toplevel)/testing_lib_files/test_harness.sh"
 #
 
 _pass=0 _fail=0

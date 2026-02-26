@@ -6,13 +6,10 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIB_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)/lib"
-
-_d="$(cd "$SCRIPT_DIR" && pwd)"
-while [ "$_d" != "/" ]; do [ -f "$_d/testing_lib_files/test_harness.sh" ] && . "$_d/testing_lib_files/test_harness.sh" && break; _d="${_d%/*}"; done
-export AUTO_TRIAGE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-source "$LIB_DIR/validation.sh"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AT_ROOT="$REPO_ROOT/.github/actions/auto-triage/auto_triage"
+source "$REPO_ROOT/testing_lib_files/test_harness.sh"
+source "$AT_ROOT/lib/validation.sh"
 
 echo "=== lib/validation.sh ==="
 
@@ -64,7 +61,7 @@ rm -rf "$TMP_DIR"
 
 # -- double-source guard (just proves that double-sourcing is a no-op) ---------------------------------------
 (
-    source "$LIB_DIR/validation.sh"
+    source "$AT_ROOT/lib/validation.sh"
     true
 ) && { echo "  PASS  double-source guard"; _pass=$((_pass + 1)); } \
   || { echo "  FAIL  double-source guard"; _fail=$((_fail + 1)); }

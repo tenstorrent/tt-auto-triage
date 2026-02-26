@@ -9,12 +9,10 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-
-_d="$(cd "$SCRIPT_DIR" && pwd)"
-while [ "$_d" != "/" ]; do [ -f "$_d/testing_lib_files/test_harness.sh" ] && . "$_d/testing_lib_files/test_harness.sh" && break; _d="${_d%/*}"; done
-export AUTO_TRIAGE_ROOT="$ROOT_DIR"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AT_ROOT="$REPO_ROOT/.github/actions/auto-triage/auto_triage"
+source "$REPO_ROOT/testing_lib_files/test_harness.sh"
+export AUTO_TRIAGE_ROOT="$AT_ROOT"
 
 # -- create mock gh CLI --------------------------------------------------------
 MOCK_DIR=$(mktemp -d)
@@ -55,7 +53,7 @@ export PATH="$MOCK_DIR:$PATH"
 
 # -- source module -------------------------------------------------------------
 # shellcheck source=../../../modules/commit_data/commit_validator.sh
-source "$ROOT_DIR/modules/commit_data/commit_validator.sh"
+source "$AT_ROOT/modules/commit_data/commit_validator.sh"
 
 echo "=== modules/commit_data/commit_validator.sh ==="
 
