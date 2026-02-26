@@ -48,11 +48,6 @@ def section_people(lbl; arr; use_slack_id):
     "*\(lbl):* " + join_people(arr; use_slack_id) + "\n"
   else "" end;
 
-def section_files(lbl; arr):
-  if (arr | type) == "array" and (arr | length) > 0 then
-    "*\(lbl):*\n```\n" + (arr | join("\n")) + "\n```\n"
-  else "" end;
-
 def section_code(lbl; txt):
   if (txt // "") != "" then "*\(lbl):*\n```" + txt + "```\n" else "" end;
 
