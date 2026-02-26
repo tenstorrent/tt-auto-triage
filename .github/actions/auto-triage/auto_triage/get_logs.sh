@@ -7,72 +7,73 @@
 # Example:
 #   ./get_logs.sh \
 #     https://github.com/tenstorrent/tt-metal/actions/runs/19475473285/job/55735804849
+#
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=modules/logs/log_parser.sh
+source "$SCRIPT_DIR/modules/logs/log_parser.sh"
+# shellcheck source=lib/github_api.sh
+source "$SCRIPT_DIR/lib/github_api.sh"
+
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <job_url> [output_directory]" >&2
+    log_error "Usage: $0 <job_url> [output_directory]"
     exit 1
 fi
 
 JOB_URL="$1"
 OUTPUT_BASE="${2:-auto_triage/logs}"
 
-if ! command -v gh >/dev/null 2>&1; then
-    echo "Error: gh CLI is required but not found in PATH." >&2
+check_command gh unzip
+
+if ! parse_job_url "$JOB_URL"; then
+    log_error "Unable to parse job URL. Expected format https://github.com/<owner>/<repo>/actions/runs/<run_id>/job/<job_id>"
     exit 1
 fi
 
-if ! command -v unzip >/dev/null 2>&1; then
-    echo "Error: unzip is required to extract the logs." >&2
-    exit 1
-fi
-
-if [[ "$JOB_URL" =~ github\.com/([^/]+)/([^/]+)/actions/runs/([0-9]+)/job/([0-9]+) ]]; then
-    OWNER="${BASH_REMATCH[1]}"
-    REPO="${BASH_REMATCH[2]}"
-    RUN_ID="${BASH_REMATCH[3]}"
-    JOB_ID="${BASH_REMATCH[4]}"
-else
-    echo "Error: Unable to parse job URL. Expected format https://github.com/<owner>/<repo>/actions/runs/<run_id>/job/<job_id>" >&2
-    exit 1
-fi
+export AT_OWNER="$_owner"
+export AT_REPO="$_repo"
+export AT_OWNER_REPO="${_owner}/${_repo}"
+OWNER="$_owner"
+REPO="$_repo"
+RUN_ID="$_run_id"
+JOB_ID="$_job_id"
 
 DEST_DIR="${OUTPUT_BASE%/}/job_${JOB_ID}"
 rm -rf "$DEST_DIR"
 mkdir -p "$DEST_DIR"
 
-echo "Fetching job metadata..."
-JOB_INFO=$(gh api "repos/${OWNER}/${REPO}/actions/jobs/${JOB_ID}")
-JOB_NAME=$(echo "$JOB_INFO" | jq -r '.name // ""')
+log_info "Fetching job metadata..."
+JOB_INFO=$(get_job_info "$JOB_ID")
+JOB_ID_FROM_API=$(echo "$JOB_INFO" | jq -r '.id // empty')
+JOB_NAME=$(echo "$JOB_INFO" | jq -r '.name // empty')
+if [ -z "$JOB_ID_FROM_API" ] || [ -z "$JOB_NAME" ]; then
+    log_error "Failed to fetch valid job metadata for job ID ${JOB_ID}; got: ${JOB_INFO}"
+    exit 1
+fi
 JOB_ATTEMPT=$(echo "$JOB_INFO" | jq -r '.run_attempt // 1')
 
-TMP_ZIP="$(mktemp --suffix=.zip)"
+TMP_ZIP="$(mktemp --suffix=.zip 2>/dev/null || mktemp)"
 TMP_UNZIP="$(mktemp -d)"
-echo "Downloading logs for run ${RUN_ID}..."
+log_info "Downloading logs for run ${RUN_ID}..."
 gh api "repos/${OWNER}/${REPO}/actions/runs/${RUN_ID}/logs" > "$TMP_ZIP"
 unzip -oq "$TMP_ZIP" -d "$TMP_UNZIP"
 
-sanitize() {
-    echo "$1" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]'
-}
-
-echo "Copying full log archive..."
+log_info "Copying full log archive..."
 FULL_DIR="${DEST_DIR}/full"
 mkdir -p "$FULL_DIR"
 cp -R "$TMP_UNZIP"/. "$FULL_DIR"/
 
-JOB_KEY=$(sanitize "$JOB_NAME")
 MATCHED=()
-while IFS= read -r file; do
-    rel="${file#$TMP_UNZIP/}"
-    if [ -n "$JOB_KEY" ] && echo "$(sanitize "$rel")" | grep -q "$JOB_KEY"; then
-        MATCHED+=("$rel")
-    fi
-done < <(find "$TMP_UNZIP" -type f -print)
+while IFS= read -r rel; do
+    [ -n "$rel" ] && MATCHED+=("$rel")
+done < <(find_job_logs "$TMP_UNZIP" "$JOB_NAME") # loop through the output of find_job_logs to get the matching files
 
 if [ ${#MATCHED[@]} -eq 0 ]; then
-    echo "Warning: could not isolate job-specific logs; rely on 'full' directory."
+    log_warn "Could not isolate job-specific logs; rely on 'full' directory."
 else
     JOB_DIR="${DEST_DIR}/job_specific"
     for rel in "${MATCHED[@]}"; do
@@ -81,7 +82,7 @@ else
         mkdir -p "$(dirname "$dest")"
         cp "$src" "$dest"
     done
-    echo "Extracted ${#MATCHED[@]} file(s) matching job name into ${JOB_DIR}"
+    log_success "Extracted ${#MATCHED[@]} file(s) matching job name into ${JOB_DIR}"
 fi
 
 rm -f "$TMP_ZIP"
@@ -97,4 +98,4 @@ Job Name: ${JOB_NAME}
 Downloaded: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 EOF
 
-echo "Logs available at: ${DEST_DIR}"
+log_success "Logs available at: ${DEST_DIR}"
