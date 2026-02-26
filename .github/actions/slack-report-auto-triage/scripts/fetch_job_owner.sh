@@ -1,0 +1,53 @@
+#!/bin/bash
+#
+# fetch_job_owner.sh - Fetch parent Slack thread and extract job owner @mentions
+#
+# Fetches the parent message via conversations.replies API, extracts text from blocks,
+# calls fetch_job_owner.py to parse @mentions following the job name and resolve Slack IDs,
+# writes job_owner.json. Non-fatal on failure.
+#
+# Required env:
+#   SLACK_TS, CHANNEL_ID, SLACK_BOT_TOKEN, JOB_NAME
+# Optional env:
+#   JOB_OWNER_FILE (default: .auto_triage/data/job_owner.json)
+#   SLACK_DATA_DIR (default: .auto_triage/auto_triage/data)
+#
+
+set -uo pipefail
+
+JOB_OWNER_FILE="${JOB_OWNER_FILE:-.auto_triage/data/job_owner.json}"
+SLACK_DATA_DIR="${SLACK_DATA_DIR:-.auto_triage/auto_triage/data}"
+THREAD_TEXT_FILE="${THREAD_TEXT_FILE:-/tmp/thread_text.txt}"
+
+mkdir -p "$(dirname "$JOB_OWNER_FILE")"
+echo '[]' > "$JOB_OWNER_FILE"
+
+if [ -z "${SLACK_TS:-}" ] || [ -z "${CHANNEL_ID:-}" ] || [ -z "${SLACK_BOT_TOKEN:-}" ]; then
+    echo "Missing Slack credentials or thread timestamp, skipping parent message fetch"
+    exit 0
+fi
+
+echo "Fetching parent Slack thread (ts=${SLACK_TS}, channel=${CHANNEL_ID})..."
+
+RESPONSE=$(curl -s -X GET \
+    "https://slack.com/api/conversations.replies?channel=${CHANNEL_ID}&ts=${SLACK_TS}&limit=100&inclusive=true" \
+    -H "Authorization: Bearer ${SLACK_BOT_TOKEN}")
+
+OK_STATUS=$(echo "$RESPONSE" | jq -r '.ok // false')
+if [ "$OK_STATUS" != "true" ]; then
+    echo "Failed to fetch parent message: $(echo "$RESPONSE" | jq -r '.error // "unknown"')"
+    exit 0
+fi
+
+echo "$RESPONSE" | jq -r '[.messages[] | if .blocks then (.blocks[] | .text.text // empty) else (.text // empty) end] | join("\n")' > "$THREAD_TEXT_FILE"
+echo "Thread fetched ($(wc -c < "$THREAD_TEXT_FILE") bytes). Searching for job: ${JOB_NAME}"
+
+export JOB_NAME
+export JOB_OWNER_FILE
+export THREAD_TEXT_FILE
+export SLACK_DATA_DIR
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! python3 "$SCRIPT_DIR/fetch_job_owner.py"; then
+    echo "Warning: Job owner extraction failed (non-fatal), continuing without JOB OWNER field"
+fi
