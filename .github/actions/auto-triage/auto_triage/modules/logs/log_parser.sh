@@ -26,6 +26,7 @@ source "$_LP_DIR/../../lib/validation.sh"
 #
 sanitize_job_name() {
     printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]'
+    return 0
 }
 
 # Find log files in log_dir whose path (sanitized) contains the sanitized job name.
