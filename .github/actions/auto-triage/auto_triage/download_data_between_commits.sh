@@ -61,6 +61,7 @@ if [ $ret -eq 0 ]; then
 fi
 
 if [ $ret -eq 1 ]; then
+    log_error "Download failed: commit span exceeds limit (max ${AT_MAX_BATCHES:-100} commits) or another error occurred."
     exit 1
 fi
 
