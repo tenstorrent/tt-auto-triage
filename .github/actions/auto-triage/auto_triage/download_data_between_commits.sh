@@ -56,19 +56,21 @@ else
     ret=$?
 fi
 
-if [ $ret -eq 0 ]; then
-    exit 0
-fi
-
-if [ $ret -eq 1 ]; then
+# Error: exit 1 only for actual failures (0 = success per bash convention)
+if [ $ret -ne 0 ]; then
     log_error "Download failed: commit span exceeds limit (max ${AT_MAX_BATCHES:-100} commits) or another error occurred."
     exit 1
 fi
 
-# ret=2: need batches
+# Success with direct download
+if [ "${BATCH_NEEDED:-0}" -ne 1 ]; then
+    exit 0
+fi
+
+# Success but need batches: print instructions and exit 0 (non-error outcome)
 BATCH_SIZE="${AT_BATCH_SIZE:-10}"
 log_warn "Commit window requires ${BATCH_COUNT:-?} batches (limit per call: $BATCH_SIZE)."
 echo "Run ./download_data_between_commits_batch.sh with indices 0 through $((${BATCH_COUNT:-0} - 1)) to build the full dataset."
 echo "Use the same output file ('$OUTPUT_FILE') for each batch; results will be appended."
 echo "BATCH_COUNT=${BATCH_COUNT:-0}"
-exit 2
+exit 0
