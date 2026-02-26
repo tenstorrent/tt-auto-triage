@@ -11,11 +11,11 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 AT_ROOT="$REPO_ROOT/.github/actions/auto-triage/auto_triage"
 source "$REPO_ROOT/testing_lib_files/test_harness.sh"
-source "$AT_ROOT/modules/boundaries/workflow_finder.sh"
 
-# Use current repo for CI (GITHUB_TOKEN can only access the workflow's repo).
-# Default to tt-auto-triage so tests pass in CI; override with AT_OWNER_REPO for local testing.
+# Must export before sourcing workflow_finder (config loads then and uses AT_OWNER_REPO).
+# Use tt-auto-triage for CI (GITHUB_TOKEN can only access the workflow's repo).
 export AT_OWNER_REPO="${AT_OWNER_REPO:-tenstorrent/tt-auto-triage}"
+source "$AT_ROOT/modules/boundaries/workflow_finder.sh"
 
 echo "=== modules/boundaries/workflow_finder.sh ==="
 
