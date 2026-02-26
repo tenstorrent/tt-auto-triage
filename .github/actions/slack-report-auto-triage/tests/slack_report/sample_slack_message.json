@@ -1,0 +1,13 @@
+{
+  "workflow_name": "t3000-unit-tests",
+  "failing_job_name": "t3k_ttnn_tests",
+  "failing_test_name": "test_matmul",
+  "failing_run_url": "https://github.com/org/repo/actions/runs/123",
+  "failing_run_label": "Run #456",
+  "scenario": "case 1",
+  "failure_message": "AssertionError: expected 1 got 0",
+  "case": "1",
+  "commits": [],
+  "relevant_developers": [{"name": "Alice", "slack_id": "U111"}],
+  "notes": "Check recent PRs"
+}
