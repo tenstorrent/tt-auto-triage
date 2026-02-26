@@ -11,7 +11,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_TRIAGE_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-source "$AUTO_TRIAGE_ROOT/tests/lib/test_harness.sh"
+_d="$(cd "$SCRIPT_DIR" && pwd)"
+while [ "$_d" != "/" ]; do [ -f "$_d/testing_lib_files/test_harness.sh" ] && . "$_d/testing_lib_files/test_harness.sh" && break; _d="${_d%/*}"; done
 
 # run_processor requires write_cancel_and_exit; use no-op for unit test
 write_cancel_and_exit() {

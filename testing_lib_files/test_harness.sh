@@ -1,11 +1,17 @@
 #!/bin/bash
 #
-# Test harness for slack_report tests. Provides: assert, assert_eq, assert_fails, test_summary.
+# Shared test harness for tt-auto-triage. Source from any test script.
+# Provides: assert, assert_eq, assert_fails, test_summary.
+# Initializes _pass and _fail.
+#
+# Usage (from any test under .github/actions/...):
+#   _d="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+#   while [ "$_d" != "/" ]; do [ -f "$_d/testing_lib_files/test_harness.sh" ] && . "$_d/testing_lib_files/test_harness.sh" && break; _d="${_d%/*}"; done
 #
 
 _pass=0 _fail=0
 
-assert() {
+assert() {                       # assert "description" <command...>
     local desc="$1"; shift
     if "$@" 2>/dev/null; then
         echo "  PASS  $desc"; _pass=$((_pass + 1))
@@ -14,7 +20,7 @@ assert() {
     fi
 }
 
-assert_eq() {
+assert_eq() {                    # assert_eq "description" "actual" "expected"
     local desc="$1" actual="$2" expected="$3"
     if [ "$actual" = "$expected" ]; then
         echo "  PASS  $desc"; _pass=$((_pass + 1))
@@ -23,7 +29,7 @@ assert_eq() {
     fi
 }
 
-assert_fails() {
+assert_fails() {                 # assert_fails "description" <command...>
     local desc="$1"; shift
     if ! ("$@" 2>/dev/null); then
         echo "  PASS  $desc"; _pass=$((_pass + 1))

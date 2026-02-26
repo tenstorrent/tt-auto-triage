@@ -9,7 +9,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)/lib"
 
-source "$SCRIPT_DIR/test_harness.sh"
+_d="$(cd "$SCRIPT_DIR" && pwd)"
+while [ "$_d" != "/" ]; do [ -f "$_d/testing_lib_files/test_harness.sh" ] && . "$_d/testing_lib_files/test_harness.sh" && break; _d="${_d%/*}"; done
 export AUTO_TRIAGE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$LIB_DIR/common.sh"
 echo "=== lib/common.sh ==="

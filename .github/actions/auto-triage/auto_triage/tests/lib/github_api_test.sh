@@ -14,7 +14,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 LIB_DIR="$ROOT_DIR/lib"
 
-source "$SCRIPT_DIR/test_harness.sh"
+_d="$(cd "$SCRIPT_DIR" && pwd)"
+while [ "$_d" != "/" ]; do [ -f "$_d/testing_lib_files/test_harness.sh" ] && . "$_d/testing_lib_files/test_harness.sh" && break; _d="${_d%/*}"; done
 export AUTO_TRIAGE_ROOT="$ROOT_DIR"
 
 # -- create mock gh CLI --------------------------------------------------------

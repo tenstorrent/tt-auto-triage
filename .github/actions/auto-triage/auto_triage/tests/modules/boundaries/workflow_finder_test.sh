@@ -10,7 +10,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AUTO_TRIAGE_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-source "$AUTO_TRIAGE_ROOT/tests/lib/test_harness.sh"
+_d="$(cd "$SCRIPT_DIR" && pwd)"
+while [ "$_d" != "/" ]; do [ -f "$_d/testing_lib_files/test_harness.sh" ] && . "$_d/testing_lib_files/test_harness.sh" && break; _d="${_d%/*}"; done
 
 # Use current repo for CI (GITHUB_TOKEN can only access the workflow's repo).
 # Default to tt-auto-triage so tests pass in CI; override with AT_OWNER_REPO for local testing.

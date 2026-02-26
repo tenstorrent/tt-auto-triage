@@ -12,7 +12,9 @@ ACTION_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PYTHON_SCRIPT="$ACTION_ROOT/scripts/fetch_job_owner.py"
 SHELL_SCRIPT="$ACTION_ROOT/scripts/fetch_job_owner.sh"
 
-source "$SCRIPT_DIR/test_harness.sh"
+# Source shared test harness from repo root
+_d="$(cd "$SCRIPT_DIR" && pwd)"
+while [ "$_d" != "/" ]; do [ -f "$_d/testing_lib_files/test_harness.sh" ] && . "$_d/testing_lib_files/test_harness.sh" && break; _d="${_d%/*}"; done
 
 echo "=== fetch_job_owner ==="
 
