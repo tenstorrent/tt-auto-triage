@@ -1,112 +1,23 @@
 #!/bin/bash
-
+#
 # Download Copilot PR overview data for a specific batch of commits.
 # Usage: ./download_data_between_commits_batch.sh <start_commit> <end_commit> <batch_index> [output_file]
-# Each batch processes up to 10 commits. Batches are zero-indexed.
+# Each batch processes up to AT_BATCH_SIZE (default 10) commits. Batches are zero-indexed.
+#
+# Note: Progress output is simplified vs the original (batch_downloader emits a single summary line).
+# JSON output and behavior are identical.
+#
 
 set -euo pipefail
 
-BATCH_SIZE=10
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-OWNER="tenstorrent"
-REPO="tt-metal"
-
-declare -A USER_NAME_CACHE
-declare -A ORG_CACHE
-
-get_user_display_name() {
-    local login="$1"
-    if [ -z "$login" ]; then
-        echo ""
-        return
-    fi
-    if [ -n "${USER_NAME_CACHE[$login]:-}" ]; then
-        echo "${USER_NAME_CACHE[$login]}"
-        return
-    fi
-    local name=""
-    name=$(gh api "users/$login" --jq '.name // ""' 2>/dev/null || echo "")
-    USER_NAME_CACHE["$login"]="$name"
-    echo "$name"
-}
-
-is_org_member() {
-    local login="$1"
-    if [ -z "$login" ]; then
-        echo "false"
-        return
-    fi
-    if [ -n "${ORG_CACHE[$login]:-}" ]; then
-        echo "${ORG_CACHE[$login]}"
-        return
-    fi
-    if gh api "orgs/${OWNER}/members/$login" >/dev/null 2>&1; then
-        ORG_CACHE["$login"]="true"
-        echo "true"
-    else
-        ORG_CACHE["$login"]="false"
-        echo "false"
-    fi
-}
-
-build_person_json() {
-    local login="$1"
-    local fallback_name="$2"
-    local display_name="$fallback_name"
-    local org_member="false"
-
-    if [ -n "$login" ]; then
-        local fetched_name
-        fetched_name=$(get_user_display_name "$login")
-        if [ -n "$fetched_name" ]; then
-            display_name="$fetched_name"
-        elif [ -z "$display_name" ]; then
-            display_name="$login"
-        fi
-        org_member=$(is_org_member "$login")
-    else
-        if [ -z "$display_name" ]; then
-            display_name="(unknown)"
-        fi
-    fi
-
-    jq -n \
-        --arg login "$login" \
-        --arg name "$display_name" \
-        --arg org "$org_member" \
-        '{login:$login, name:$name, is_org_member:($org == "true")}'
-}
-
-append_unique_person() {
-    local arr_json="$1"
-    local person_json="$2"
-    jq -n \
-        --argjson arr "${arr_json:-[]}" \
-        --argjson person "$person_json" \
-        'if ($person.login // "") != "" then
-            if any($arr[]?; .login == $person.login) then $arr else $arr + [$person] end
-         else
-            if any($arr[]?; (.login == "" and .name == $person.name)) then $arr else $arr + [$person] end
-         end'
-}
-
-add_person_entry() {
-    local login="$1"
-    local fallback_name="$2"
-    local current_json="$3"
-    local person_json
-    person_json=$(build_person_json "$login" "$fallback_name")
-    if [ -z "$person_json" ]; then
-        person_json='{"login":"","name":"(unknown)","is_org_member":false}'
-    fi
-    append_unique_person "${current_json:-[]}" "$person_json"
-}
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=modules/commit_data/batch_downloader.sh
+source "$SCRIPT_DIR/modules/commit_data/batch_downloader.sh"
 
 if [ $# -lt 3 ]; then
-    echo -e "${RED}Error: Missing required arguments${NC}"
+    log_error "Missing required arguments"
     echo "Usage: $0 <start_commit> <end_commit> <batch_index> [output_file]"
     echo "Example: $0 90336ff5cbacf818e3a20544e5f66b2088757e75 a253cee23e5362d6aba14b716b97f9fe302d6adc 0"
     exit 1
@@ -118,197 +29,13 @@ BATCH_INDEX="$3"
 OUTPUT_FILE="${4:-auto_triage/data/commit_info.json}"
 
 if ! [[ "$BATCH_INDEX" =~ ^[0-9]+$ ]]; then
-    echo -e "${RED}Error: batch_index must be a non-negative integer${NC}"
+    log_error "batch_index must be a non-negative integer"
     exit 1
 fi
 
-if ! git rev-parse --verify "$START_COMMIT" >/dev/null 2>&1; then
-    echo -e "${RED}Error: Start commit '$START_COMMIT' not found${NC}"
-    exit 1
-fi
-
-if ! git rev-parse --verify "$END_COMMIT" >/dev/null 2>&1; then
-    echo -e "${RED}Error: End commit '$END_COMMIT' not found${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}Processing batch $BATCH_INDEX of commits between${NC}"
+log_success "Processing batch $BATCH_INDEX of commits between"
 echo "  Start: $START_COMMIT"
 echo "  End:   $END_COMMIT"
 echo ""
 
-COMMITS=$(git log --format="%H" --first-parent "$START_COMMIT".."$END_COMMIT")
-if ! echo "$COMMITS" | grep -q "^$END_COMMIT$"; then
-    COMMITS="$COMMITS"$'\n'"$END_COMMIT"
-fi
-COMMITS=$(echo "$COMMITS" | sort -u)
-mapfile -t COMMIT_ARRAY < <(echo "$COMMITS" | awk 'NF')
-TOTAL_COMMITS=${#COMMIT_ARRAY[@]}
-
-if [ "$TOTAL_COMMITS" -eq 0 ]; then
-    echo -e "${YELLOW}No commits found between the provided SHAs.${NC}"
-    exit 0
-fi
-
-START_OFFSET=$((BATCH_INDEX * BATCH_SIZE))
-END_OFFSET=$((START_OFFSET + BATCH_SIZE))
-
-if [ "$START_OFFSET" -ge "$TOTAL_COMMITS" ]; then
-    echo -e "${RED}Error: batch index $BATCH_INDEX exceeds total commit count ($TOTAL_COMMITS).${NC}"
-    exit 1
-fi
-
-if [ "$END_OFFSET" -gt "$TOTAL_COMMITS" ]; then
-    END_OFFSET="$TOTAL_COMMITS"
-fi
-
-SLICE_LEN=$((END_OFFSET - START_OFFSET))
-SELECTED_COMMITS=("${COMMIT_ARRAY[@]:START_OFFSET:SLICE_LEN}")
-BATCH_COUNT=${#SELECTED_COMMITS[@]}
-
-echo "Total commits in range: $TOTAL_COMMITS"
-echo "This batch covers commits $((START_OFFSET + 1)) to $END_OFFSET (count $BATCH_COUNT)."
-echo ""
-
-OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
-mkdir -p "$OUTPUT_DIR"
-if [ ! -f "$OUTPUT_FILE" ]; then
-    echo "[]" > "$OUTPUT_FILE"
-fi
-
-PROCESSED=0
-SKIPPED=0
-ERRORS=0
-
-for commit_sha in "${SELECTED_COMMITS[@]}"; do
-    [ -z "$commit_sha" ] && continue
-    commit_short="${commit_sha:0:8}"
-    echo -n "[$((PROCESSED + SKIPPED + ERRORS + 1))/$BATCH_COUNT] Processing $commit_short... "
-
-    commit_msg=$(git log -1 --format="%B" "$commit_sha" 2>/dev/null || echo "")
-    pr_number=$(echo "$commit_msg" | grep -oP '\(#\K\d+' | head -1 || echo "")
-
-    if [ -z "$pr_number" ]; then
-        echo -e "${YELLOW}No PR found${NC}"
-        SKIPPED=$((SKIPPED + 1))
-        continue
-    fi
-
-    echo -n "PR #$pr_number... "
-
-    commit_date=$(git log -1 --format="%ai" "$commit_sha" 2>/dev/null || echo "")
-    commit_subject=$(git log -1 --format="%s" "$commit_sha" 2>/dev/null || echo "")
-    pr_info=$(gh api "repos/tenstorrent/tt-metal/pulls/$pr_number" 2>/dev/null || echo "{}")
-
-    overview="wasn't found"
-    reviews_json=$(gh api "repos/tenstorrent/tt-metal/pulls/$pr_number/reviews" 2>/dev/null || echo "[]")
-
-    if [ "$reviews_json" != "[]" ] && [ -n "$reviews_json" ]; then
-        copilot_review=$(echo "$reviews_json" | jq -r ".[] | select(.user.login == \"copilot-pull-request-reviewer\" or .user.login == \"copilot-pull-request-reviewer[bot]\") | .body" 2>/dev/null || echo "")
-        if [ -n "$copilot_review" ]; then
-            overview=$(echo "$copilot_review" | python3 - <<'PY'
-import re
-import sys
-
-content = sys.stdin.read()
-start = re.search(r'##\s+pull\s+request\s+overview', content, flags=re.IGNORECASE)
-if start:
-    section = content[start.end():]
-    end = len(section)
-    for pattern in (r'###\s+reviewed\s+changes', r'\n##\s+', r'\n---'):
-        match = re.search(pattern, section, flags=re.IGNORECASE)
-        if match:
-            end = match.start()
-            break
-    snippet = section[:end].strip()
-    print(snippet)
-PY
-)
-            if [ -z "$overview" ]; then
-                overview=$(echo "$copilot_review" | sed -n '/## [Pp]ull [Rr]equest [Oo]verview/,/### [Rr]eviewed [Cc]hanges/p' | sed '$d' | sed '1s/## [Pp]ull [Rr]equest [Oo]verview//' | sed 's/^[[:space:]]*//' | head -c 5000 || echo "")
-            fi
-            if [ -z "$overview" ]; then
-                overview=$(echo "$copilot_review" | grep -i -A 50 "## Pull Request Overview" | tail -n +2 | head -n 30 | head -c 2000 || echo "")
-            fi
-            if [ -z "$overview" ]; then
-                overview="wasn't found"
-            fi
-        fi
-    fi
-
-    if [ "$overview" = "wasn't found" ]; then
-        echo -e "${YELLOW}No Copilot overview${NC}"
-    else
-        echo -e "${GREEN}Found overview${NC}"
-    fi
-
-    pr_title=$(echo "$pr_info" | jq -r '.title // ""' 2>/dev/null || echo "")
-    pr_url=$(echo "$pr_info" | jq -r '.html_url // ""' 2>/dev/null || echo "")
-    pr_description=$(echo "$pr_info" | jq -r '.body // ""' 2>/dev/null || echo "")
-    pr_author_login=$(echo "$pr_info" | jq -r '.user.login // ""' 2>/dev/null || echo "")
-
-    commit_api=$(gh api "repos/${OWNER}/${REPO}/commits/${commit_sha}" 2>/dev/null || echo "{}")
-    commit_author_login=$(echo "$commit_api" | jq -r '.author.login // ""' 2>/dev/null || echo "")
-    commit_author_name=$(echo "$commit_api" | jq -r '.commit.author.name // ""' 2>/dev/null || echo "")
-    co_author_names=$(git log -1 --format="%B" "$commit_sha" 2>/dev/null |
-        awk '/^Co-authored-by:/ { sub(/^Co-authored-by:[[:space:]]*/, ""); sub(/<.*>/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print }' |
-        jq -R -s -c 'split("\n") | map(select(length > 0))' 2>/dev/null)
-    if [ -z "$co_author_names" ]; then
-        co_author_names="[]"
-    fi
-
-    authors_json='[]'
-    authors_json=$(add_person_entry "$pr_author_login" "" "$authors_json")
-    authors_json=$(add_person_entry "$commit_author_login" "$commit_author_name" "$authors_json")
-    if [ "$co_author_names" != "[]" ]; then
-        while IFS= read -r co_name; do
-            [ -n "$co_name" ] || continue
-            authors_json=$(add_person_entry "" "$co_name" "$authors_json")
-        done < <(echo "$co_author_names" | jq -r '.[]')
-    fi
-
-    approvers_json='[]'
-    if [ "$reviews_json" != "[]" ] && [ -n "$reviews_json" ]; then
-        while IFS= read -r approver_login; do
-            [ -n "$approver_login" ] || continue
-            approvers_json=$(add_person_entry "$approver_login" "" "$approvers_json")
-        done < <(echo "$reviews_json" | jq -r '.[] | select(.state=="APPROVED") | .user.login | select(length > 0)' | sort -u)
-    fi
-
-    entry=$(jq -n \
-        --arg commit "$commit_sha" \
-        --arg commit_short "$commit_short" \
-        --arg commit_date "$commit_date" \
-        --arg commit_subject "$commit_subject" \
-        --arg pr_number "$pr_number" \
-        --arg pr_title "$pr_title" \
-        --arg pr_url "$pr_url" \
-        --arg pr_description "$pr_description" \
-        --argjson authors "$authors_json" \
-        --argjson approvers "${approvers_json:-[]}" \
-        --arg overview "$overview" \
-        '{commit: $commit, commit_short: $commit_short, commit_date: $commit_date, commit_subject: $commit_subject, pr_number: $pr_number, pr_title: $pr_title, pr_url: $pr_url, pr_description: $pr_description, authors: $authors, approvers: $approvers, copilot_overview: $overview}' 2>/dev/null || echo "{}")
-
-    if [ "$entry" != "{}" ]; then
-        jq ". += [$entry]" "$OUTPUT_FILE" > "${OUTPUT_FILE}.tmp" && mv "${OUTPUT_FILE}.tmp" "$OUTPUT_FILE" 2>/dev/null || {
-            echo -e "${RED}Error updating JSON${NC}"
-            ERRORS=$((ERRORS + 1))
-            continue
-        }
-        echo -e "${GREEN}✓${NC}"
-        PROCESSED=$((PROCESSED + 1))
-    else
-        echo -e "${YELLOW}Failed to create entry${NC}"
-        ERRORS=$((ERRORS + 1))
-    fi
-
-done
-
-echo ""
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}Batch Summary:${NC}"
-echo -e "  Processed: $PROCESSED"
-echo -e "  Skipped:   $SKIPPED"
-echo -e "  Errors:    $ERRORS"
-echo -e "${GREEN}Output saved to: $OUTPUT_FILE${NC}"
-echo -e "${GREEN}========================================${NC}"
+download_commit_batch "$START_COMMIT" "$END_COMMIT" "$BATCH_INDEX" "$OUTPUT_FILE"
