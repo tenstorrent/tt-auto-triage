@@ -4,9 +4,8 @@
 #
 # Provides download_commits_between(start_commit, end_commit, output_file).
 # Uses batch_downloader for actual downloads.
-# Exit codes: 0 = success (data downloaded OR caller must run batches), 1 = error.
-# When batching is needed: returns 0, sets BATCH_NEEDED=1 and BATCH_COUNT.
-# Caller checks BATCH_NEEDED to distinguish "downloaded" vs "need batches".
+# Exit codes: 0 = success, 1 = error, 2 = caller must run batches.
+# When returning 2, BATCH_COUNT is set as a variable (not added to exit code).
 #
 # Usage: source this file, then call download_commits_between
 #
@@ -22,7 +21,7 @@ source "$_DC_DIR/batch_downloader.sh"
 
 # Orchestrate commit metadata download between start and end.
 # - If commit count <= BATCH_SIZE: downloads in one batch, returns 0
-# - If count > BATCH_SIZE and <= MAX_BATCHES: sets BATCH_NEEDED=1, BATCH_COUNT, returns 0 (caller runs batches)
+# - If count > BATCH_SIZE and <= MAX_BATCHES: sets BATCH_COUNT, returns 2 (caller runs batches)
 # - If count > MAX_BATCHES: returns 1
 #
 #   download_commits_between "abc123" "def456" "auto_triage/data/commit_info.json"
@@ -56,7 +55,6 @@ download_commits_between() {
     if [ "$commit_count" -eq 0 ]; then
         mkdir -p "$(dirname "$output_file")"
         echo "[]" > "$output_file"
-        BATCH_NEEDED=0
         return 0
     fi
 
@@ -72,11 +70,9 @@ download_commits_between() {
 
     if [ "$commit_count" -le "$batch_size" ]; then
         download_commit_batch "$start_commit" "$end_commit" 0 "$output_file"
-        BATCH_NEEDED=0
         return 0
     fi
 
-    BATCH_NEEDED=1
     BATCH_COUNT=$(( (commit_count + batch_size - 1) / batch_size ))
-    return 0
+    return 2
 }
