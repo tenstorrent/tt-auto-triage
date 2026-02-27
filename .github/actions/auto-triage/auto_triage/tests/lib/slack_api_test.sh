@@ -28,8 +28,8 @@ assert_eq "format: empty text" \
 
 # -- send_slack_message / send_slack_thread (no credentials = skip, no crash) ---
 unset SLACK_BOT_TOKEN SLACK_CHANNEL_ID CHANNEL_ID 2>/dev/null || true
-assert "send_slack_message without creds (no crash)" eval 'send_slack_message "test" 2>/dev/null; true'
-assert "send_slack_thread without creds (no crash)" eval 'send_slack_thread "test" "123" 2>/dev/null; true'
+assert "send_slack_message without creds (no crash)" send_slack_message "test"
+assert "send_slack_thread without creds (no crash)" send_slack_thread "test" "123"
 
 # -- summary ------------------------------------------------------------------
 test_summary
