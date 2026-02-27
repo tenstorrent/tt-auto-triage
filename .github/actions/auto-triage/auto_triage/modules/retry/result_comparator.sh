@@ -1,10 +1,16 @@
 #!/bin/bash
 #
-# result_comparator.sh - Compare retry vs original errors and determine result type
+# result_comparator.sh - Compare retry vs original errors using Copilot (LLM)
+#
+# Uses Copilot to compare error messages. Expects original_error.txt and
+# retry_error.txt in data_dir (written by caller). Copilot writes
+# error_comparison.json with same_failure, retry_error_extracted.
 #
 # Provides:
-#   compare_errors(original_error, retry_error) -> similarity_score (0-100)
-#   determine_retry_result(original_status, retry_status, error_similarity) -> result_type
+#   run_copilot_error_comparison(root, data_dir) -> 0 on success
+#   get_same_failure_from_comparison(comparison_file) -> "true"|"false"
+#   get_retry_error_extracted(comparison_file) -> extracted error text
+#   determine_retry_result(retry_status, same_failure) -> result_type
 #
 # Result types: passed, failed_same, failed_different
 # Uses lib/common.sh
@@ -22,98 +28,96 @@ _LIB_DIR="${_MODULE_DIR}/../../lib"
 # shellcheck source=../../lib/common.sh
 [ -f "${_LIB_DIR}/common.sh" ] && source "${_LIB_DIR}/common.sh"
 
-# Threshold above which errors are considered "same"
-RESULT_COMPARATOR_SAME_THRESHOLD="${RESULT_COMPARATOR_SAME_THRESHOLD:-70}"
-
 # ==============================================================================
-# Normalize error text for comparison (lowercase, collapse whitespace)
-# ==============================================================================
-_result_comparator_normalize() {
-    echo "$1" | tr '[:upper:]' '[:lower:]' | tr -s ' \t\n\r' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
-}
-
-# ==============================================================================
-# Extract significant words (alphanumeric, underscores, hyphens)
-# ==============================================================================
-_result_comparator_words() {
-    echo "$1" | tr -cs '[:alnum:]_-' '\n' | grep -v '^$' | sort -u
-}
-
-# ==============================================================================
-# compare_errors(original_error, retry_error) -> similarity_score (0-100)
+# run_copilot_error_comparison(root, data_dir) -> 0 on success, 1 on failure
 #
-# Heuristic comparison using substring containment and word overlap.
-# For LLM-based comparison, the caller can use a different path (e.g. Copilot)
-# and pass the result into determine_retry_result.
+# Invokes Copilot with compare_errors_instructions.txt. Expects
+# original_error.txt and retry_error.txt to exist in data_dir.
+# Writes error_comparison.json to data_dir on success.
 # ==============================================================================
-compare_errors() {
-    local orig="${1:-}"
-    local retry="${2:-}"
+run_copilot_error_comparison() {
+    local root="${1:-}"
+    local data_dir="${2:-}"
 
-    if [ -z "$orig" ] || [ -z "$retry" ]; then
-        echo "0"
+    if [ -z "$root" ] || [ -z "$data_dir" ]; then
+        log_error "run_copilot_error_comparison: root and data_dir required"
+        return 1
+    fi
+
+    local instructions_path="${root}/compare_errors_instructions.txt"
+    if [ ! -f "$instructions_path" ]; then
+        log_error "compare_errors_instructions.txt not found at ${instructions_path}"
+        return 1
+    fi
+
+    if [ ! -f "${data_dir}/original_error.txt" ] || [ ! -f "${data_dir}/retry_error.txt" ]; then
+        log_error "run_copilot_error_comparison: original_error.txt and retry_error.txt must exist in data_dir"
+        return 1
+    fi
+
+    local compare_prompt
+    compare_prompt=$(printf 'You are operating in a CI environment. Compare two error messages and determine if they represent the same failure.\n\n%s' "$(cat "$instructions_path")")
+
+    # Ensure COPILOT_GITHUB_TOKEN is set (Copilot uses it for GitHub context)
+    if [ -z "${COPILOT_GITHUB_TOKEN:-}" ]; then
+        export COPILOT_GITHUB_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+    fi
+
+    # Export for mock copilot (tests can inject a script that reads this)
+    export RESULT_COMPARATOR_DATA_DIR="$data_dir"
+
+    local saved_pwd
+    saved_pwd=$(pwd)
+    cd "$root" || return 1
+    copilot -p "$compare_prompt" --allow-all-tools 2>/dev/null || true
+    cd "$saved_pwd" || true
+
+    if [ -f "${data_dir}/error_comparison.json" ]; then
         return 0
     fi
-
-    local orig_norm retry_norm
-    orig_norm=$(_result_comparator_normalize "$orig")
-    retry_norm=$(_result_comparator_normalize "$retry")
-
-    # Substring: if one contains the other (longer contains shorter), high score
-    if [ ${#orig_norm} -gt ${#retry_norm} ]; then
-        if [[ "$orig_norm" == *"$retry_norm"* ]] && [ ${#retry_norm} -gt 20 ]; then
-            echo "85"
-            return 0
-        fi
-    else
-        if [[ "$retry_norm" == *"$orig_norm"* ]] && [ ${#orig_norm} -gt 20 ]; then
-            echo "85"
-            return 0
-        fi
-    fi
-
-    # Word overlap: Jaccard-like = |intersection| / min(|a|, |b|) * 100
-    local orig_words retry_words common
-    orig_words=$(_result_comparator_words "$orig_norm")
-    retry_words=$(_result_comparator_words "$retry_norm")
-
-    common=$(comm -12 <(echo "$orig_words") <(echo "$retry_words") 2>/dev/null | wc -l | tr -d ' ')
-    local count_orig count_retry
-    count_orig=$(echo "$orig_words" | wc -l | tr -d ' ')
-    count_retry=$(echo "$retry_words" | wc -l | tr -d ' ')
-
-    if [ "$count_orig" -eq 0 ] || [ "$count_retry" -eq 0 ]; then
-        echo "0"
-        return 0
-    fi
-
-    local min_count
-    min_count=$(( count_orig < count_retry ? count_orig : count_retry ))
-    local score
-    score=$(( common * 100 / min_count ))
-    [ $score -gt 100 ] && score=100
-    echo "$score"
+    log_warn "Copilot did not produce error_comparison.json; assuming different failures"
+    return 1
 }
 
 # ==============================================================================
-# determine_retry_result(original_status, retry_status, error_similarity) -> result_type
+# get_same_failure_from_comparison(comparison_file) -> "true"|"false"
+# ==============================================================================
+get_same_failure_from_comparison() {
+    local file="${1:-}"
+    if [ -z "$file" ] || [ ! -f "$file" ]; then
+        echo "false"
+        return 0
+    fi
+    jq -r '.same_failure // false' "$file" 2>/dev/null || echo "false"
+}
+
+# ==============================================================================
+# get_retry_error_extracted(comparison_file) -> extracted error text (or "")
+# ==============================================================================
+get_retry_error_extracted() {
+    local file="${1:-}"
+    if [ -z "$file" ] || [ ! -f "$file" ]; then
+        echo ""
+        return 0
+    fi
+    jq -r '.retry_error_extracted // ""' "$file" 2>/dev/null || echo ""
+}
+
+# ==============================================================================
+# determine_retry_result(retry_status, same_failure) -> result_type
 #
 # Returns: passed | failed_same | failed_different
 # ==============================================================================
 determine_retry_result() {
-    local original_status="${1:-}"
-    local retry_status="${2:-}"
-    local error_similarity="${3:-0}"
+    local retry_status="${1:-}"
+    local same_failure="${2:-false}"
 
-    # Retry passed -> non-deterministic
     if [ "$retry_status" = "success" ]; then
         echo "passed"
         return 0
     fi
 
-    # Retry failed: use similarity to decide same vs different
-    local threshold="${RESULT_COMPARATOR_SAME_THRESHOLD:-70}"
-    if [ "$error_similarity" -ge "$threshold" ]; then
+    if [ "$same_failure" = "true" ]; then
         echo "failed_same"
     else
         echo "failed_different"
