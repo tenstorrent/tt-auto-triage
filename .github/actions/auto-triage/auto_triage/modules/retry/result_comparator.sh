@@ -44,9 +44,9 @@ run_copilot_error_comparison() {
         return 1
     fi
 
-    local instructions_path="${root}/compare_errors_instructions.txt"
+    local instructions_path="${root}/instructions/compare_errors_instructions.txt"
     if [ ! -f "$instructions_path" ]; then
-        log_error "compare_errors_instructions.txt not found at ${instructions_path}"
+        log_error "instructions/compare_errors_instructions.txt not found at ${instructions_path}"
         return 1
     fi
 

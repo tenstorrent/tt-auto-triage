@@ -48,7 +48,7 @@ FAIL_COUNT=$(jq 'if type=="array"
 log_info "runs recorded: $SUMMARY_COUNT"
 log_info "failures recorded: $FAIL_COUNT"
 
-INSTRUCTIONS_FILE="${ROOT}/instructions_for_llm.txt"
+INSTRUCTIONS_FILE="${ROOT}/instructions/instructions_for_llm.txt"
 if [ ! -f "$INSTRUCTIONS_FILE" ]; then
     log_error "${INSTRUCTIONS_FILE} not found."
     exit 1
