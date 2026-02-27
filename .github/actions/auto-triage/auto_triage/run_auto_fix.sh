@@ -38,7 +38,7 @@ if ! validate_workspace "$WORKSPACE_DIR"; then
     die "Workspace mirror missing .git directory at ${WORKSPACE_DIR}."
 fi
 
-check_command copilot rg
+check_command copilot rg jq
 
 PROMPT_FILE="$(mktemp)"
 cat <<EOF > "$PROMPT_FILE"

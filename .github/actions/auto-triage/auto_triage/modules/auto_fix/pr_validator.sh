@@ -29,7 +29,21 @@ is_auto_fix_enabled() {
     fi
 
     if [ ! -f "$flag_file" ]; then
-        echo '{"create_PR": false}' > "$flag_file"
+        local flag_dir
+        flag_dir=$(dirname "$flag_file")
+        if ! mkdir -p "$flag_dir" 2>/dev/null; then
+            log_error "is_auto_fix_enabled: cannot create directory for flag file: $flag_dir"
+            return 1
+        fi
+        if ! echo '{"create_PR": false}' > "$flag_file"; then
+            log_error "is_auto_fix_enabled: cannot create flag file: $flag_file"
+            return 1
+        fi
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        log_error "is_auto_fix_enabled: jq is required to read flag file '$flag_file'"
+        return 1
     fi
 
     local val
