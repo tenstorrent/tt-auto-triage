@@ -4,7 +4,7 @@
 #
 # Provides:
 #   trigger_retry_run(job_id) -> 0 on success, 1 on failure
-#   wait_for_run_completion(run_id, job_name, start_attempt, timeout_sec) -> status
+#   wait_for_run_completion(run_id, job_name, start_attempt, timeout_sec, [poll_interval]) -> status
 #
 # Status values: success, failure, cancelled, timeout, error
 # Uses lib/github_api.sh (and thus lib/config.sh for AT_OWNER_REPO)
@@ -78,9 +78,10 @@ _run_trigger_find_job_by_name() {
 }
 
 # ==============================================================================
-# wait_for_run_completion(run_id, job_name, start_attempt, timeout_sec) -> status
+# wait_for_run_completion(run_id, job_name, start_attempt, timeout_sec, [poll_interval]) -> status
 #
 # Waits for a new run attempt to appear, finds the job by name, polls until done.
+# All waiting (for attempt + for job) counts against timeout_sec.
 # Returns: success, failure, cancelled, timeout, error
 # ==============================================================================
 wait_for_run_completion() {
@@ -97,20 +98,20 @@ wait_for_run_completion() {
     fi
 
     local expected_attempt=$((start_attempt + 1))
-    local max_wait_start=120  # 2 min for new attempt to appear
-    local waited=0
+    local total_elapsed=0
     local new_attempt=""
+    local wait_start_interval=10
 
-    # Wait for new attempt to appear
-    while [ $waited -lt $max_wait_start ]; do
+    # Wait for new attempt to appear (counts against timeout_sec)
+    while [ $total_elapsed -lt $timeout_sec ]; do
         local run_info
         run_info=$(get_run_info "$run_id")
         new_attempt=$(echo "$run_info" | jq -r '.run_attempt // 1')
         if [ "$new_attempt" -ge "$expected_attempt" ]; then
             break
         fi
-        sleep 10
-        waited=$((waited + 10))
+        sleep "$wait_start_interval"
+        total_elapsed=$((total_elapsed + wait_start_interval))
     done
 
     if [ -z "$new_attempt" ] || [ "$new_attempt" -lt "$expected_attempt" ]; then
@@ -118,19 +119,19 @@ wait_for_run_completion() {
         return 1
     fi
 
-    # Wait for jobs to be created in new attempt
+    # Brief wait for jobs to be created in new attempt
     sleep 5
+    total_elapsed=$((total_elapsed + 5))
 
     local jobs_json
     jobs_json=$(get_jobs_for_run "$run_id" "$new_attempt")
     local poll_job_id
     poll_job_id=$(_run_trigger_find_job_by_name "$jobs_json" "$job_name")
 
-    local total_waited=0
     local status=""
     local conclusion=""
 
-    while [ $total_waited -lt $timeout_sec ]; do
+    while [ $total_elapsed -lt $timeout_sec ]; do
         if [ -n "$poll_job_id" ]; then
             local job_info
             job_info=$(get_job_info "$poll_job_id")
@@ -163,7 +164,7 @@ wait_for_run_completion() {
             # If the job has just appeared, let the next loop iteration handle it
             if [ -n "$poll_job_id" ]; then
                 sleep "$poll_interval"
-                total_waited=$((total_waited + poll_interval))
+                total_elapsed=$((total_elapsed + poll_interval))
                 continue
             fi
 
@@ -186,7 +187,7 @@ wait_for_run_completion() {
         fi
 
         sleep "$poll_interval"
-        total_waited=$((total_waited + poll_interval))
+        total_elapsed=$((total_elapsed + poll_interval))
     done
 
     echo "timeout"
