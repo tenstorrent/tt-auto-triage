@@ -5,6 +5,7 @@
 # Provides:
 #   trigger_retry_run(job_id) -> 0 on success, 1 on failure
 #   wait_for_run_completion(run_id, job_name, start_attempt, timeout_sec, [poll_interval]) -> status
+#   find_job_in_attempt(run_id, attempt, job_name) -> job_id (echo to stdout, empty if not found)
 #
 # Status values: success, failure, cancelled, timeout, error
 # Uses lib/github_api.sh (and thus lib/config.sh for AT_OWNER_REPO)
@@ -75,6 +76,20 @@ _run_trigger_find_job_by_name() {
         )) |
         first | .id // empty
     ' 2>/dev/null || echo ""
+}
+
+# ==============================================================================
+# find_job_in_attempt(run_id, attempt, job_name) -> job_id (stdout)
+# Returns empty if not found.
+# ==============================================================================
+find_job_in_attempt() {
+    local run_id="${1:-}"
+    local attempt="${2:-}"
+    local job_name="${3:-}"
+    local jobs_json
+    [ -n "$run_id" ] && [ -n "$attempt" ] && [ -n "$job_name" ] || return 1
+    jobs_json=$(get_jobs_for_run "$run_id" "$attempt")
+    _run_trigger_find_job_by_name "$jobs_json" "$job_name"
 }
 
 # ==============================================================================
