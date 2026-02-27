@@ -56,8 +56,8 @@ runs:
           --exclude 'auto_triage/' \
           "$GITHUB_WORKSPACE"/ "$TARGET/workspace/"
         echo "$TARGET" >> "$GITHUB_PATH"
-        mkdir -p "$TARGET/data/config"
-        echo '{"should_cancel": false, "message": ""}' > "$TARGET/data/config/cancel.json"
+        mkdir -p "$TARGET/auto_triage/data/config"
+        echo '{"should_cancel": false, "message": ""}' > "$TARGET/auto_triage/data/config/cancel.json"
 
     - name: Find boundaries
       if: inputs.slack-test-only != 'true'
@@ -161,7 +161,7 @@ runs:
       run: |
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
-        CANCEL_FILE="cancel.json"
+        CANCEL_FILE="data/config/cancel.json"
         # Only write explanation if cancellation was requested
         if [ ! -f "$CANCEL_FILE" ] || [ "$(jq -r '.should_cancel // false' "$CANCEL_FILE")" != "true" ]; then
           echo "No cancellation requested, skipping"
