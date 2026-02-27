@@ -91,43 +91,76 @@ runs:
         echo "slack_message.json:"
         cat "${TARGET}/auto_triage/output/slack_message.json"
 
-    - name: Setup Node.js v22+
-      uses: actions/setup-node@v4
-      with:
-        node-version: '22'
-
-    - name: Install GitHub Copilot CLI
-      shell: bash
-      run: |
-        set -euo pipefail
-        npm install -g @github/copilot
-        copilot --version || (echo "Copilot CLI installation failed" && exit 1)
-
-    - name: Retry deterministic failures on supported hardware
+    - name: Test find_job_in_attempt against real API data
       if: inputs.enable-retry == 'true'
       shell: bash
       run: |
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
 
-        HARDCODED_JOB="device-perf / P150 BH device perf"
-        HARDCODED_WORKFLOW="perf-device-models.yaml"
+        source modules/retry/run_trigger.sh
 
-        echo "=== Starting retry logic (hardcoded target) ==="
-        echo "Input job:      ${{ inputs.job-name }}  (IGNORED)"
-        echo "Input workflow: ${{ inputs.workflow-name }}  (IGNORED)"
-        echo "Actual job:      $HARDCODED_JOB"
-        echo "Actual workflow: $HARDCODED_WORKFLOW"
-        ./retry_on_deterministic.sh \
-          "$HARDCODED_JOB" \
-          "$HARDCODED_WORKFLOW" \
-          "${{ inputs.slack_ts }}"
+        RUN_ID="22489866421"
+        JOB_NAME="device-perf / P150 BH device perf"
+        EXPECTED_ATTEMPT_2_JOB="65180167614"
+
+        echo "=== Test: find_job_in_attempt ==="
+        echo "Run ID:   $RUN_ID"
+        echo "Job name: $JOB_NAME"
+        echo ""
+
+        echo "--- Attempt 1 ---"
+        job_id_1=$(find_job_in_attempt "$RUN_ID" "1" "$JOB_NAME")
+        if [ -n "$job_id_1" ]; then
+          echo "PASS: Found job in attempt 1: $job_id_1"
+        else
+          echo "FAIL: Could not find job in attempt 1"
+          exit 1
+        fi
+
+        echo ""
+        echo "--- Attempt 2 ---"
+        job_id_2=$(find_job_in_attempt "$RUN_ID" "2" "$JOB_NAME")
+        if [ -n "$job_id_2" ]; then
+          echo "PASS: Found job in attempt 2: $job_id_2"
+        else
+          echo "FAIL: Could not find job in attempt 2"
+          exit 1
+        fi
+
+        echo ""
+        echo "--- Verify attempt 2 job ID ---"
+        if [ "$job_id_2" = "$EXPECTED_ATTEMPT_2_JOB" ]; then
+          echo "PASS: Attempt 2 job ID matches expected ($EXPECTED_ATTEMPT_2_JOB)"
+        else
+          echo "FAIL: Expected $EXPECTED_ATTEMPT_2_JOB, got $job_id_2"
+          exit 1
+        fi
+
+        echo ""
+        echo "--- Verify attempts return different job IDs ---"
+        if [ "$job_id_1" != "$job_id_2" ]; then
+          echo "PASS: Attempt 1 ($job_id_1) != Attempt 2 ($job_id_2)"
+        else
+          echo "FAIL: Both attempts returned the same job ID ($job_id_1)"
+          exit 1
+        fi
+
+        echo ""
+        echo "--- Test: non-existent job name ---"
+        bogus=$(find_job_in_attempt "$RUN_ID" "2" "totally-fake-job-name")
+        if [ -z "$bogus" ]; then
+          echo "PASS: Non-existent job correctly returned empty"
+        else
+          echo "FAIL: Expected empty, got '$bogus'"
+          exit 1
+        fi
+
+        echo ""
+        echo "=== All find_job_in_attempt tests passed ==="
       env:
-        COPILOT_GITHUB_TOKEN: ${{ inputs.copilot-pat }}
         GH_TOKEN: ${{ github.token }}
         GITHUB_TOKEN: ${{ github.token }}
-        SLACK_BOT_TOKEN: ${{ env.SLACK_BOT_TOKEN }}
-        SLACK_CHANNEL_ID: ${{ env.SLACK_CHANNEL_ID }}
 
     - name: Debug output state
       if: always()
