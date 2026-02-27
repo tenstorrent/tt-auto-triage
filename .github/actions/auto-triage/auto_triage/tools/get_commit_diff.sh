@@ -7,17 +7,18 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/common.sh"
+
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <commit_hash> [output_path]" >&2
-    exit 1
+    die "Usage: $0 <commit_hash> [output_path]"
 fi
 
 COMMIT="$1"
 OUTPUT_PATH="${2:-auto_triage/data/commit_${COMMIT}_diff.patch}"
 
 if ! git cat-file -e "${COMMIT}^{commit}" >/dev/null 2>&1; then
-    echo "Error: commit '${COMMIT}' not found." >&2
-    exit 1
+    die "commit '${COMMIT}' not found."
 fi
 
 PARENT=""
