@@ -80,16 +80,35 @@ _run_trigger_find_job_by_name() {
 
 # ==============================================================================
 # find_job_in_attempt(run_id, attempt, job_name) -> job_id (stdout)
-# Returns empty if not found.
+#
+# Contract:
+#   - Returns 1 only for invalid parameters (missing required args).
+#   - Returns 0 and echoes empty string when job is not found or jobs cannot be retrieved.
 # ==============================================================================
 find_job_in_attempt() {
     local run_id="${1:-}"
     local attempt="${2:-}"
     local job_name="${3:-}"
     local jobs_json
-    [ -n "$run_id" ] && [ -n "$attempt" ] && [ -n "$job_name" ] || return 1
-    jobs_json=$(get_jobs_for_run "$run_id" "$attempt")
-    _run_trigger_find_job_by_name "$jobs_json" "$job_name"
+
+    # Invalid parameters: fail with non-zero status and no output
+    if [ -z "$run_id" ] || [ -z "$attempt" ] || [ -z "$job_name" ]; then
+        log_error "find_job_in_attempt: run_id, attempt, and job_name are required"
+        return 1
+    fi
+
+    # Retrieve jobs for the given run/attempt; ignore exit code and treat empty as "not found"
+    jobs_json=$(get_jobs_for_run "$run_id" "$attempt" 2>/dev/null || true)
+
+    if [ -z "$jobs_json" ]; then
+        # No jobs data available: treat as "not found" (empty output, success status)
+        echo ""
+        return 0
+    fi
+
+    # Delegate to helper which echoes job ID or empty string; always return success here
+    _run_trigger_find_job_by_name "$jobs_json" "$job_name" || true
+    return 0
 }
 
 # ==============================================================================

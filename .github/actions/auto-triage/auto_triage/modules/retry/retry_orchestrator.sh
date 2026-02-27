@@ -49,8 +49,10 @@ MAX_WAIT_MINUTES=180
 
 send_notification() {
     if [ -n "$SLACK_TS" ]; then
+        log_info "Sending threaded Slack notification..."
         send_slack_thread "$1" "$SLACK_TS"
     else
+        log_info "Sending Slack notification..."
         send_slack_message "$1"
     fi
 }
@@ -60,7 +62,7 @@ echo '{"result": "no_retry", "message": ""}' > "$RETRY_RESULT_FILE"
 SCENARIO=""
 [ -f "$SLACK_MSG_PATH" ] && SCENARIO=$(jq -r '.scenario // ""' "$SLACK_MSG_PATH")
 [ -z "$SCENARIO" ] && [ "$TEST_MODE" != "true" ] && { log_warn "No slack_message.json found, skipping retry"; exit 0; }
-[ -z "$SCENARIO" ] && TEST_MODE="true" && SCENARIO="(cancelled/no analysis)"
+[ -z "$SCENARIO" ] && [ "$TEST_MODE" = "true" ] && SCENARIO="(cancelled/no analysis)"
 log_info "Scenario: $SCENARIO"
 
 # --- Eligibility ---
@@ -105,14 +107,20 @@ FAILING_RUN_URL=""
 [ -f "$SLACK_MSG_PATH" ] && FAILING_RUN_URL=$(jq -r '.failing_run_url // ""' "$SLACK_MSG_PATH")
 [ -z "$FAILING_RUN_URL" ] && [ -f "$SUBJOB_RUNS_PATH" ] && \
     FAILING_RUN_URL=$(jq -r '(if type == "array" then . else (.runs // []) end) | map(select(.status == "failure")) | sort_by(.run_number // 0) | last | .job_url // .run_url // ""' "$SUBJOB_RUNS_PATH" 2>/dev/null || echo "")
-[ -z "$FAILING_RUN_URL" ] || [ "$FAILING_RUN_URL" = "null" ] && { log_error "No failing_run_url"; exit 0; }
+if [ -z "$FAILING_RUN_URL" ] || [ "$FAILING_RUN_URL" = "null" ]; then
+    log_error "No failing_run_url"
+    exit 0
+fi
 
 RUN_ID=$(echo "$FAILING_RUN_URL" | sed -n 's#.*/runs/\([0-9][0-9]*\)/job/.*#\1#p')
 ORIGINAL_JOB_ID=$(echo "$FAILING_RUN_URL" | sed -n 's#.*/job/\([0-9][0-9]*\)#\1#p')
-[ -z "$RUN_ID" ] || [ -z "$ORIGINAL_JOB_ID" ] && { log_error "Could not parse run_id/job_id from URL"; exit 0; }
+if [ -z "$RUN_ID" ] || [ -z "$ORIGINAL_JOB_ID" ]; then
+    log_error "Could not parse run_id/job_id from URL"
+    exit 0
+fi
 log_info "Run ID: $RUN_ID, Original Job ID: $ORIGINAL_JOB_ID"
 
-# Probe for actual latest attempt
+# Probe for actual latest attempt (don't probe forever - cap at 10 additional attempts)
 RUN_INFO=$(get_run_info "$RUN_ID")
 API_ATTEMPT=$(echo "$RUN_INFO" | jq -r '.run_attempt // 1')
 OLD_ATTEMPT="$API_ATTEMPT"
@@ -126,14 +134,17 @@ done
 # Resolve JOB_ID in current attempt (may differ if run was retried)
 JOB_ID="$ORIGINAL_JOB_ID"
 if [ "$OLD_ATTEMPT" -gt 1 ]; then
-    JOBS_JSON=$(get_jobs_for_run "$RUN_ID" "$OLD_ATTEMPT")
     FOUND_ID=$(find_job_in_attempt "$RUN_ID" "$OLD_ATTEMPT" "$JOB_NAME")
     if [ -n "$FOUND_ID" ]; then
         JOB_ID="$FOUND_ID"
     else
         ORIG_INFO=$(get_job_info "$ORIGINAL_JOB_ID")
         ORIG_ATTEMPT=$(echo "$ORIG_INFO" | jq -r '.run_attempt // "unknown"')
-        [ "$ORIG_ATTEMPT" != "$OLD_ATTEMPT" ] && send_notification "$(printf ':warning: *Auto-retry skipped.*\nRun re-run since failure (attempt %s → %s). Cannot re-run older attempts.' "$ORIG_ATTEMPT" "$OLD_ATTEMPT")" && exit 0
+        if [ "$ORIG_ATTEMPT" != "$OLD_ATTEMPT" ]; then
+            log_warn "Cannot re-run jobs from older attempts (${ORIG_ATTEMPT} → ${OLD_ATTEMPT})"
+            send_notification "$(printf ':warning: *Auto-retry skipped.*\nRun re-run since failure (attempt %s → %s). Cannot re-run older attempts.' "$ORIG_ATTEMPT" "$OLD_ATTEMPT")"
+            exit 0
+        fi
     fi
 fi
 log_info "Using Job ID: $JOB_ID"
@@ -156,8 +167,12 @@ send_notification "$(printf ':arrows_counterclockwise: *Deterministic failure su
 # --- Wait ---
 STATUS=$(wait_for_run_completion "$RUN_ID" "$JOB_NAME" "$OLD_ATTEMPT" $((MAX_WAIT_MINUTES * 60)) 60) || true
 RETRY_JOB_ID=$(find_job_in_attempt "$RUN_ID" "$NEW_ATTEMPT" "$JOB_NAME")
-[ -z "$RETRY_JOB_ID" ] && RETRY_JOB_ID="$JOB_ID"
-RETRY_JOB_URL="${AT_BASE_URL}/actions/runs/${RUN_ID}/job/${RETRY_JOB_ID}"
+if [ -z "$RETRY_JOB_ID" ]; then
+    log_warn "Retry job '${JOB_NAME}' not found in attempt ${NEW_ATTEMPT} for run ${RUN_ID}"
+    RETRY_JOB_URL="$EARLY_RETRY_URL"
+else
+    RETRY_JOB_URL="${AT_BASE_URL}/actions/runs/${RUN_ID}/job/${RETRY_JOB_ID}"
+fi
 
 if [ "$STATUS" = "timeout" ] || [ "$STATUS" = "error" ]; then
     send_notification "$(printf ':hourglass: *Retry timed out.* Job did not complete within %d min. Proceeding with original analysis.\n<%s|Check retry>' "$MAX_WAIT_MINUTES" "$EARLY_RETRY_URL")"
@@ -178,12 +193,12 @@ if [ "$STATUS" = "success" ]; then
     EXISTING=$(jq -r '.notes // ""' "$SLACK_MSG_PATH")
     [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ] && COMBINED="${EXISTING}
 
----
+----
 
 ${RETRY_NOTE}" || COMBINED="$RETRY_NOTE"
     jq --arg scenario "Failure likely outside tt-metal" --arg case "3" --arg notes "$COMBINED" --arg slack "Failure is non-deterministic. Passed on retry." \
         '. + {scenario: $scenario, case: $case, notes: $notes, slack_message: $slack, commits: []}' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
-    printf '# Auto Triage: %s\n## Non-Deterministic (Passed on Retry)\nOriginal: %s\nRetry: %s\n---\n_Automatic analysis._\n' "$JOB_NAME" "$FAILING_RUN_URL" "$RETRY_JOB_URL" > "$EXPLANATION_PATH"
+    printf '# Auto Triage: %s\n## Non-Deterministic (Passed on Retry)\nOriginal: %s\nRetry: %s\n----\n_Automatic analysis._\n' "$JOB_NAME" "$FAILING_RUN_URL" "$RETRY_JOB_URL" > "$EXPLANATION_PATH"
     send_notification "$(printf ':white_check_mark: *Retry passed!* Non-deterministic.\nOriginal: <%s|link> Retry: <%s|link>' "$FAILING_RUN_URL" "$RETRY_JOB_URL")"
     exit 0
 fi
@@ -218,10 +233,13 @@ mkdir -p "${LOGS_DIR}/retry_job_${RETRY_JOB_ID}"
 "${ROOT}/get_logs.sh" "$RETRY_JOB_URL" "${LOGS_DIR}/retry" 2>/dev/null || true
 RETRY_ERROR=""
 LOG_DIR="${LOGS_DIR}/retry/job_${RETRY_JOB_ID}"
-[ -d "$LOG_DIR" ] && RETRY_ERROR=$(find "$LOG_DIR" -name "*.txt" -exec grep -h -E "(FAILED|ERROR:|Exception:|AssertionError|pytest.*failed)" {} \; 2>/dev/null | head -50)
+[ -d "$LOG_DIR" ] && RETRY_ERROR=$(find "$LOG_DIR" -name "*.txt" -exec grep -h -m 50 -A10 -E "(FAILED|ERROR:|Exception:|AssertionError|pytest.*failed)" {} \; 2>/dev/null)
 [ -z "$RETRY_ERROR" ] && [ -f "${LOGS_DIR}/retry_job_${RETRY_JOB_ID}/annotations.json" ] && \
     RETRY_ERROR=$(jq -r '[.[] | select((.annotation_level | ascii_downcase) == "failure")] | map(.message // "") | join("\n")' "${LOGS_DIR}/retry_job_${RETRY_JOB_ID}/annotations.json" 2>/dev/null || echo "")
-[ -z "$RETRY_ERROR" ] && RETRY_ERROR="Could not extract error from retry job"
+if [ -z "$RETRY_ERROR" ]; then
+    log_warn "No error extracted from logs or annotations for retry job ${RETRY_JOB_ID}"
+    RETRY_ERROR="Could not extract error from retry job"
+fi
 echo "$RETRY_ERROR" > "${DATA_DIR}/retry_error.txt"
 
 run_copilot_error_comparison "$ROOT" "$DATA_DIR" || true
@@ -237,11 +255,19 @@ if [ "$RESULT" = "failed_same" ]; then
     EXISTING=$(jq -r '.notes // ""' "$SLACK_MSG_PATH")
     [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ] && COMBINED="${EXISTING}
 
----
+----
 
 ${RETRY_NOTE}" || COMBINED="$RETRY_NOTE"
     jq --arg notes "$COMBINED" '.notes = $notes' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
-    printf '## Failure Was Repeatable (Deterministic)\nRetry failed with same error.\nFirst: %s\nRetry: %s\n---\n%s\n' "$FAILING_RUN_URL" "$RETRY_JOB_URL" "$(cat "$EXPLANATION_PATH" 2>/dev/null)" > "$EXPLANATION_PATH"
+    EXISTING_EXPLANATION=$(cat "$EXPLANATION_PATH" 2>/dev/null || echo "")
+    cat > "$EXPLANATION_PATH" << EOF
+## Failure Was Repeatable (Deterministic)
+Retry failed with same error.
+First: $FAILING_RUN_URL
+Retry: $RETRY_JOB_URL
+----
+${EXISTING_EXPLANATION}
+EOF
     send_notification "$(printf ':x: *Retry failed with same error.* Deterministic confirmed.\n<%s|link> <%s|link>' "$FAILING_RUN_URL" "$RETRY_JOB_URL")"
 else
     jq -n --arg r "failed_different" --arg m "Different error" --arg url "$RETRY_JOB_URL" --arg err "$RETRY_ERR_FOR_NOTES" '{result: $r, message: $m, retry_url: $url, retry_error: $err}' > "$RETRY_RESULT_FILE"
@@ -254,12 +280,12 @@ ${RETRY_JOB_URL}"
     EXISTING=$(jq -r '.notes // ""' "$SLACK_MSG_PATH")
     [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ] && COMBINED="${EXISTING}
 
----
+----
 
 ${RETRY_NOTE}" || COMBINED="$RETRY_NOTE"
     jq --arg scenario "Failure likely outside tt-metal" --arg case "3" --arg notes "$COMBINED" --arg slack "Non-deterministic. Different errors on retry." \
         '. + {scenario: $scenario, case: $case, notes: $notes, slack_message: $slack, commits: []}' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
-    printf '# Auto Triage: %s\n## Non-Deterministic (Different Errors)\nOriginal: %s\nRetry: %s\n---\n_Automatic analysis._\n' "$JOB_NAME" "$FAILING_RUN_URL" "$RETRY_JOB_URL" > "$EXPLANATION_PATH"
+    printf '# Auto Triage: %s\n## Non-Deterministic (Different Errors)\nOriginal: %s\nRetry: %s\n----\n_Automatic analysis._\n' "$JOB_NAME" "$FAILING_RUN_URL" "$RETRY_JOB_URL" > "$EXPLANATION_PATH"
     send_notification "$(printf ':warning: *Retry failed with DIFFERENT error.* Non-deterministic.\n<%s|link> <%s|link>' "$FAILING_RUN_URL" "$RETRY_JOB_URL")"
 fi
 log_success "Retry logic completed"
