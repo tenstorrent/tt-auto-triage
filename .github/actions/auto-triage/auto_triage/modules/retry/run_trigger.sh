@@ -69,11 +69,14 @@ _run_trigger_find_job_by_name() {
     echo "$jobs_json" | jq -r --arg name "$name_norm" '
         def normalize: ascii_downcase | gsub("[–—−‐‑‒]"; "-");
         .jobs // [] |
-        map(select(
-            (.name | normalize) == $name or
-            (.name | normalize | contains($name)) or
-            ($name | contains(.name | normalize))
-        )) |
+        map(
+            (.name | normalize) as $norm_job |
+            select(
+                $norm_job == $name or
+                ($norm_job | contains($name)) or
+                ($name | contains($norm_job))
+            )
+        ) |
         first | .id // empty
     ' 2>/dev/null || echo ""
 }
