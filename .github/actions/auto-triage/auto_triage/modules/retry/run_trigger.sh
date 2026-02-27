@@ -136,34 +136,53 @@ wait_for_run_completion() {
             job_info=$(get_job_info "$poll_job_id")
             status=$(echo "$job_info" | jq -r '.status // "unknown"')
             conclusion=$(echo "$job_info" | jq -r '.conclusion // "null"')
-        else
-            local run_info
-            run_info=$(get_run_info "$run_id")
-            status=$(echo "$run_info" | jq -r '.status // "unknown"')
-            conclusion=$(echo "$run_info" | jq -r '.conclusion // "null"')
 
-            # Try to find job
+            if [ "$status" = "completed" ] || [ "$conclusion" = "cancelled" ] || \
+               [ "$conclusion" = "failure" ] || [ "$conclusion" = "success" ]; then
+                if [ "$conclusion" = "cancelled" ]; then
+                    echo "cancelled"
+                elif [ "$conclusion" = "success" ]; then
+                    echo "success"
+                elif [ "$conclusion" = "failure" ]; then
+                    echo "failure"
+                else
+                    echo "$conclusion"
+                fi
+                return 0
+            fi
+
+            if [ "$status" = "unknown" ]; then
+                echo "error"
+                return 1
+            fi
+        else
+            # Try to find job for this attempt
             jobs_json=$(get_jobs_for_run "$run_id" "$new_attempt")
             poll_job_id=$(_run_trigger_find_job_by_name "$jobs_json" "$job_name")
-        fi
 
-        if [ "$status" = "completed" ] || [ "$conclusion" = "cancelled" ] || \
-           [ "$conclusion" = "failure" ] || [ "$conclusion" = "success" ]; then
-            if [ "$conclusion" = "cancelled" ]; then
-                echo "cancelled"
-            elif [ "$conclusion" = "success" ]; then
-                echo "success"
-            elif [ "$conclusion" = "failure" ]; then
-                echo "failure"
-            else
-                echo "$conclusion"
+            # If the job has just appeared, let the next loop iteration handle it
+            if [ -n "$poll_job_id" ]; then
+                sleep "$poll_interval"
+                total_waited=$((total_waited + poll_interval))
+                continue
             fi
-            return 0
-        fi
 
-        if [ "$status" = "unknown" ]; then
-            echo "error"
-            return 1
+            # Job still not found; check if the run has already completed.
+            # If the run is completed but the job never appeared, treat as error.
+            local run_info
+            run_info=$(get_run_info "$run_id")
+            local run_status
+            local run_conclusion
+            run_status=$(echo "$run_info" | jq -r '.status // "unknown"')
+            run_conclusion=$(echo "$run_info" | jq -r '.conclusion // "null"')
+
+            if [ "$run_status" = "completed" ] || \
+               [ "$run_conclusion" = "cancelled" ] || \
+               [ "$run_conclusion" = "failure" ] || \
+               [ "$run_conclusion" = "success" ]; then
+                echo "error"
+                return 1
+            fi
         fi
 
         sleep "$poll_interval"
