@@ -56,14 +56,14 @@ runs:
 
     - name: Report via Slack
       if: steps.build.outputs.has_payload == 'true'
-      uses: slackapi/slack-github-action@v1.26.0
-      with:
-        # Use payload-file-path to ensure proper JSON encoding of newlines and special chars
-        payload-file-path: ${{ steps.build.outputs.payload_file }}
-        channel-id: ${{ inputs.channel_id }}
+      shell: bash
       env:
         SLACK_BOT_TOKEN: ${{ env.SLACK_BOT_TOKEN }}
+        SLACK_CHANNEL_ID: ${{ inputs.channel_id }}
         SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}
+      run: |
+        source "${{ github.action_path }}/../auto-triage/lib/slack_api.sh"
+        send_slack_payload_file "${{ steps.build.outputs.payload_file }}"
 
     - name: Skip Slack notification
       if: steps.build.outputs.has_payload != 'true'
