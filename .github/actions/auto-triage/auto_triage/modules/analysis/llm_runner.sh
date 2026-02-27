@@ -13,6 +13,7 @@
 #
 # Usage: source this file, then call run_llm_analysis.
 #
+# Upon writing this file, the current copilot model is claude sonnet 4.5
 
 if [ -n "${_LLM_RUNNER_LOADED:-}" ]; then
     return 0
