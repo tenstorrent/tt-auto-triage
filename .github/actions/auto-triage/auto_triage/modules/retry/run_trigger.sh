@@ -82,8 +82,12 @@ _run_trigger_find_job_by_name() {
 #
 # Waits for a new run attempt to appear, finds the job by name, polls until done.
 # All waiting (for attempt + for job) counts against timeout_sec.
+# Wait for new attempt is capped at MAX_WAIT_FOR_ATTEMPT (120s) so we fail fast
+# if the retry never starts, matching retry_on_deterministic.sh behavior.
 # Returns: success, failure, cancelled, timeout, error
 # ==============================================================================
+MAX_WAIT_FOR_ATTEMPT=120  # cap: don't wait >2 min for new attempt to appear
+
 wait_for_run_completion() {
     local run_id="${1:-}"
     local job_name="${2:-}"
@@ -101,9 +105,10 @@ wait_for_run_completion() {
     local total_elapsed=0
     local new_attempt=""
     local wait_start_interval=10
+    local max_wait_attempt=$(( MAX_WAIT_FOR_ATTEMPT < timeout_sec ? MAX_WAIT_FOR_ATTEMPT : timeout_sec ))
 
-    # Wait for new attempt to appear (counts against timeout_sec)
-    while [ $total_elapsed -lt $timeout_sec ]; do
+    # Wait for new attempt to appear (counts against timeout_sec, capped at MAX_WAIT_FOR_ATTEMPT)
+    while [ $total_elapsed -lt $max_wait_attempt ]; do
         local run_info
         run_info=$(get_run_info "$run_id")
         new_attempt=$(echo "$run_info" | jq -r '.run_attempt // 1')
