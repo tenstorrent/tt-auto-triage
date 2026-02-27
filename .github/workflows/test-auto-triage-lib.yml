@@ -40,6 +40,7 @@ jobs:
             "tests/modules/logs/*_test.sh"
             "tests/modules/analysis/*_test.sh"
             "tests/modules/retry/*_test.sh"
+            "tests/modules/auto_fix/*_test.sh"
           )
           for p in "${test_patterns[@]}"; do
             for t in $p; do
