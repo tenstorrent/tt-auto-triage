@@ -64,12 +64,22 @@ def main():
     slack_groups = os.path.join(slack_data_dir, "slack_groups.json")
     users_data = {}
     if os.path.exists(slack_dir):
-        with open(slack_dir) as f:
-            users_data = json.load(f)
+        try:
+            with open(slack_dir) as f:
+                users_data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            if os.environ.get("FETCH_JOB_OWNER_DEBUG"):
+                print(f"Warning: could not load Slack directory from {slack_dir}: {e}", file=sys.stderr)
+            users_data = {}
     groups_data = {}
     if os.path.exists(slack_groups):
-        with open(slack_groups) as f:
-            groups_data = json.load(f)
+        try:
+            with open(slack_groups) as f:
+                groups_data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            if os.environ.get("FETCH_JOB_OWNER_DEBUG"):
+                print(f"Warning: could not load Slack groups from {slack_groups}: {e}", file=sys.stderr)
+            groups_data = {}
     users = users_data.get("users", []) if isinstance(users_data, dict) else users_data
     groups = groups_data.get("usergroups", []) if isinstance(groups_data, dict) else groups_data
 
