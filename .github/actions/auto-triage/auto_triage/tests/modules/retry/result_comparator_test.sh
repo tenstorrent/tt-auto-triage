@@ -60,18 +60,18 @@ assert_eq "determine_retry_result: failed + different -> failed_different" "$(de
 assert_eq "determine_retry_result: default same_failure false" "$(determine_retry_result "failure" "")" "failed_different"
 
 # -- run_copilot_error_comparison (with mock) ----------------------------------
-mkdir -p "$TMP_DIR/auto_triage/data"
-echo "original error" > "$TMP_DIR/auto_triage/data/original_error.txt"
-echo "retry error" > "$TMP_DIR/auto_triage/data/retry_error.txt"
+mkdir -p "$TMP_DIR/root/auto_triage/data"
+echo "original error" > "$TMP_DIR/root/auto_triage/data/original_error.txt"
+echo "retry error" > "$TMP_DIR/root/auto_triage/data/retry_error.txt"
 mkdir -p "$TMP_DIR/root"
 echo "Fake instructions for Copilot" > "$TMP_DIR/root/compare_errors_instructions.txt"
 
-run_copilot_error_comparison "$TMP_DIR/root" "$TMP_DIR/auto_triage/data" || true
-comparison_file="$TMP_DIR/auto_triage/data/error_comparison.json"
+run_copilot_error_comparison "$TMP_DIR/root" "$TMP_DIR/root/auto_triage/data" || true
+comparison_file="$TMP_DIR/root/auto_triage/data/error_comparison.json"
 assert_eq "run_copilot_error_comparison: produces error_comparison.json" "$([ -f "$comparison_file" ] && echo "exists" || echo "missing")" "exists"
-same=$(get_same_failure_from_comparison "$TMP_DIR/auto_triage/data/error_comparison.json")
+same=$(get_same_failure_from_comparison "$TMP_DIR/root/auto_triage/data/error_comparison.json")
 assert_eq "run_copilot_error_comparison: mock writes same_failure=true" "$same" "true"
-extracted=$(get_retry_error_extracted "$TMP_DIR/auto_triage/data/error_comparison.json")
+extracted=$(get_retry_error_extracted "$TMP_DIR/root/auto_triage/data/error_comparison.json")
 assert_eq "run_copilot_error_comparison: mock writes retry_error_extracted" "$extracted" "Mock extracted error"
 
 test_summary
