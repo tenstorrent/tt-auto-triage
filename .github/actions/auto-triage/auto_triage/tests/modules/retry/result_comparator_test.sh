@@ -64,7 +64,8 @@ mkdir -p "$TMP_DIR/root/auto_triage/data"
 echo "original error" > "$TMP_DIR/root/auto_triage/data/original_error.txt"
 echo "retry error" > "$TMP_DIR/root/auto_triage/data/retry_error.txt"
 mkdir -p "$TMP_DIR/root"
-echo "Fake instructions for Copilot" > "$TMP_DIR/root/compare_errors_instructions.txt"
+mkdir -p "$TMP_DIR/root/instructions"
+echo "Fake instructions for Copilot" > "$TMP_DIR/root/instructions/compare_errors_instructions.txt"
 
 run_copilot_error_comparison "$TMP_DIR/root" "$TMP_DIR/root/auto_triage/data" || true
 comparison_file="$TMP_DIR/root/auto_triage/data/error_comparison.json"

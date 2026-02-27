@@ -48,7 +48,7 @@ BASE_URL="$AT_BASE_URL"
 
 DATA_DIR="$(get_data_dir)"
 SUBJOB_RUNS_JSON_PATH="${DATA_DIR}/subjob_runs.json"
-CANCEL_FILE="cancel.json"
+CANCEL_FILE="data/config/cancel.json"
 
 write_cancel_and_exit() {
     local message="$1"

@@ -79,7 +79,7 @@ EOF
 
 # auto_triage.sh requires instructions_for_llm.txt (not instructions.md). Back it up
 # and use minimal content so the script proceeds to invoke copilot.
-INSTRUCTIONS_FILE="$AT_ROOT/instructions_for_llm.txt"
+INSTRUCTIONS_FILE="$AT_ROOT/instructions/instructions_for_llm.txt"
 INSTRUCTIONS_BAK=""
 if [ -f "$INSTRUCTIONS_FILE" ]; then
     INSTRUCTIONS_BAK="${INSTRUCTIONS_FILE}.bak.$$"
