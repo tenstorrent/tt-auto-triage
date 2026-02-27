@@ -33,12 +33,12 @@ assert       "supported: P100"      is_hardware_supported "some-P100-job"
 assert       "supported: P150"      is_hardware_supported "workflow / P150-test"
 assert       "supported: P300"      is_hardware_supported "P300-smoke"
 
-assert_fails "not supported: galaxy"  eval 'is_hardware_supported "galaxy-frequent-tests"'
-assert_fails "not supported: T3K"      eval 'is_hardware_supported "t3k-ttnn-tests"'
-assert_fails "not supported: T3000"    eval 'is_hardware_supported "t3000-unit-tests"'
-assert_fails "not supported: N150+galaxy" eval 'is_hardware_supported "N150-galaxy-hybrid"'
-assert_fails "not supported: random"   eval 'is_hardware_supported "vanilla-unit-tests"'
-assert_fails "not supported: empty"    eval 'is_hardware_supported ""'
+assert_fails "not supported: galaxy"       is_hardware_supported "galaxy-frequent-tests"
+assert_fails "not supported: T3K"          is_hardware_supported "t3k-ttnn-tests"
+assert_fails "not supported: T3000"        is_hardware_supported "t3000-unit-tests"
+assert_fails "not supported: N150+galaxy"  is_hardware_supported "N150-galaxy-hybrid"
+assert_fails "not supported: random"       is_hardware_supported "vanilla-unit-tests"
+assert_fails "not supported: empty"        is_hardware_supported ""
 
 # -- summary ------------------------------------------------------------------
 test_summary
