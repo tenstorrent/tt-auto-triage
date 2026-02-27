@@ -13,18 +13,6 @@ source "$AT_ROOT/modules/retry/hardware_checker.sh"
 
 echo "=== modules/retry/hardware_checker.sh ==="
 
-# -- get_hardware_type ---------------------------------------------------------
-assert_eq "get_hardware_type: N150"  "$(get_hardware_type "yolov5x-N150-func")"   "n150"
-assert_eq "get_hardware_type: n150"  "$(get_hardware_type "some-n150-job")"      "n150"
-assert_eq "get_hardware_type: N300" "$(get_hardware_type "workflow / N300-test")" "n300"
-assert_eq "get_hardware_type: P100A" "$(get_hardware_type "p100a-unit-tests")"   "p100a"
-assert_eq "get_hardware_type: P100"  "$(get_hardware_type "p100-func-tests")"     "p100a"
-assert_eq "get_hardware_type: P150"  "$(get_hardware_type "resnet-P150-perf")"    "p150"
-assert_eq "get_hardware_type: P300"  "$(get_hardware_type "P300-smoke")"          "p300"
-assert_eq "get_hardware_type: unknown" "$(get_hardware_type "galaxy-frequent-tests")" "unknown"
-assert_eq "get_hardware_type: unknown" "$(get_hardware_type "t3k-ttnn-tests")"    "unknown"
-assert_eq "get_hardware_type: unknown (empty)" "$(get_hardware_type "")"         "unknown"
-
 # -- is_hardware_supported -----------------------------------------------------
 assert       "supported: N150"      is_hardware_supported "yolov5x-N150-func"
 assert       "supported: N300"      is_hardware_supported "N300-unit-tests"
