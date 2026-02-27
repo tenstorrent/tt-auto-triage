@@ -43,13 +43,14 @@ format_slack_message() {
 send_slack_message() {
     local text="${1:-}"
     local channel="${SLACK_CHANNEL_ID:-${CHANNEL_ID:-}}"
-    local payload
-    payload=$(format_slack_message "$text" "" | jq -c --arg ch "$channel" '. + {channel: $ch}')
 
     if [ -z "${SLACK_BOT_TOKEN:-}" ] || [ -z "$channel" ]; then
         log_warn "Slack credentials not set, skipping notification"
         return 0
     fi
+
+    local payload
+    payload=$(format_slack_message "$text" "" | jq -c --arg ch "$channel" '. + {channel: $ch}')
 
     log_info "Sending Slack notification..."
     local response
@@ -76,13 +77,14 @@ send_slack_thread() {
     local text="${1:-}"
     local thread_ts="${2:-}"
     local channel="${SLACK_CHANNEL_ID:-${CHANNEL_ID:-}}"
-    local payload
-    payload=$(format_slack_message "$text" "$thread_ts" | jq -c --arg ch "$channel" '. + {channel: $ch}')
 
     if [ -z "${SLACK_BOT_TOKEN:-}" ] || [ -z "$channel" ]; then
         log_warn "Slack credentials not set, skipping notification"
         return 0
     fi
+
+    local payload
+    payload=$(format_slack_message "$text" "$thread_ts" | jq -c --arg ch "$channel" '. + {channel: $ch}')
 
     log_info "Sending Slack thread reply..."
     local response
