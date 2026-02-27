@@ -22,8 +22,8 @@ THREAD_TEXT_FILE="${THREAD_TEXT_FILE:-/tmp/thread_text.txt}"
 mkdir -p "$(dirname "$JOB_OWNER_FILE")"
 echo '[]' > "$JOB_OWNER_FILE"
 
-if [ -z "${SLACK_TS:-}" ] || [ -z "${CHANNEL_ID:-}" ] || [ -z "${SLACK_BOT_TOKEN:-}" ]; then
-    echo "Missing Slack credentials or thread timestamp, skipping parent message fetch"
+if [ -z "${SLACK_TS:-}" ] || [ -z "${CHANNEL_ID:-}" ] || [ -z "${SLACK_BOT_TOKEN:-}" ] || [ -z "${JOB_NAME:-}" ]; then
+    echo "Missing Slack credentials, thread timestamp, or job name, skipping parent message fetch"
     exit 0
 fi
 
