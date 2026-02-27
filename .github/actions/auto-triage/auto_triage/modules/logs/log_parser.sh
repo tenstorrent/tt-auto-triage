@@ -20,20 +20,15 @@ source "$_LP_DIR/../../lib/validation.sh"
 # parse_job_url is provided by validation.sh; we re-export for convenience.
 # Call: parse_job_url "$url" -> sets _owner, _repo, _run_id, _job_id
 
-# Sanitize job name for matching: lowercase, alphanumeric only.
-#
-#   sanitized=$(sanitize_job_name "My-Job_Name")
-#
+# sanitize_job_name(job_name) -> sanitized string to stdout
+# Lowercases and strips to alphanumeric only for matching.
 sanitize_job_name() {
     printf '%s\n' "$1" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]'
     return 0
 }
 
-# Find log files in log_dir whose path (sanitized) contains the sanitized job name.
-# Prints matching relative paths, one per line.
-#
-#   find_job_logs "/tmp/unzipped" "my-job-name"
-#
+# find_job_logs(log_dir, job_name) -> matching relative paths to stdout (one per line)
+# Finds files in log_dir whose sanitized path contains the sanitized job name.
 find_job_logs() {
     local log_dir="$1"
     local job_name="$2"

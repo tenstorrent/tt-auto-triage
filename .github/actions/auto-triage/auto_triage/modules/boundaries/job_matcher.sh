@@ -13,11 +13,8 @@ if [ -n "${_JOB_MATCHER_LOADED:-}" ]; then
 fi
 _JOB_MATCHER_LOADED=1
 
-# Normalize strings for matching: Unicode dashes → ASCII '-', lowercase.
-# Character set must match find_boundaries.sh jq filter exactly:
-# U+2010 U+2011 U+2012 U+2013 U+2014 U+2015 U+2212 U+FE58 U+FE63 U+FF0D.
-# Single python3 invocation for all three strings to avoid process-per-call overhead.
-# The python3 version used here is 3.12.3 (the default in Ubuntu 24.04)
+# match_subjob(job_name, subjob_name, workflow_name) -> 0 if match, 1 otherwise
+# Returns 0 if job name matches requested subjob (exact, "workflow / subjob", endswith, or contains).
 match_subjob() {
     local job_name="${1-}" subjob_name="${2-}" workflow_name="${3-}"
     [ -n "$job_name" ] || return 1

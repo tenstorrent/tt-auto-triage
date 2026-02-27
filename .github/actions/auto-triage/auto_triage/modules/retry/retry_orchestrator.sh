@@ -44,6 +44,8 @@ COMPARISON_FILE="${DATA_DIR}/error_comparison.json"
 MAX_DURATION_SECONDS=$((3 * 60 * 60))
 MAX_WAIT_MINUTES=180
 
+# send_notification(message) -> no return
+# Sends Slack message; uses thread if SLACK_TS set, otherwise direct.
 send_notification() {
     if [ -n "$SLACK_TS" ]; then
         log_info "Sending threaded Slack notification..."

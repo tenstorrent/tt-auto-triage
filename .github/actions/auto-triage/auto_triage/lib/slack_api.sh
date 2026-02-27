@@ -24,8 +24,8 @@ source "${_LIB_DIR}/common.sh"
 # ==============================================================================
 # Format message payload (returns JSON string, no channel - added by send_*)
 # ==============================================================================
-# format_slack_message "Hello"           -> {text: "Hello"}
-# format_slack_message "Hello" "123.456" -> {text: "Hello", thread_ts: "123.456"}
+# format_slack_message(text, [thread_ts]) -> JSON string
+# Builds chat.postMessage payload JSON with text and optional thread_ts.
 format_slack_message() {
     local text="${1:-}"
     local thread_ts="${2:-}"
@@ -40,6 +40,8 @@ format_slack_message() {
 # ==============================================================================
 # Send message via chat.postMessage (no thread)
 # ==============================================================================
+# send_slack_message(text) -> 0
+# Posts new message to Slack channel (uses SLACK_BOT_TOKEN, SLACK_CHANNEL_ID).
 send_slack_message() {
     local text="${1:-}"
     local channel="${SLACK_CHANNEL_ID:-${CHANNEL_ID:-}}"
@@ -73,6 +75,8 @@ send_slack_message() {
 # ==============================================================================
 # Send message as reply to a thread
 # ==============================================================================
+# send_slack_thread(text, thread_ts) -> 0
+# Posts reply to an existing Slack thread.
 send_slack_thread() {
     local text="${1:-}"
     local thread_ts="${2:-}"

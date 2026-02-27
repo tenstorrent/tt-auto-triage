@@ -107,7 +107,8 @@ validate_json_file() {
 # Path / directory validation
 # ==============================================================================
 
-# Ensure one or more directories exist; create them if they don't.
+# ensure_dirs(dir, ...) -> 0
+# Creates one or more directories if they do not exist.
 #
 #   ensure_dirs "$DATA_DIR" "$LOGS_DIR"
 #

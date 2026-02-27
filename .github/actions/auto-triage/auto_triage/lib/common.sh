@@ -47,19 +47,29 @@ fi
 # Logging
 # ==============================================================================
 
+# log_info(message) -> (prints to stdout)
+# Prints informational message in blue.
 log_info()    { printf '%b\n' "${_AT_BLUE}$*${_AT_NC}"; }        # informational (blue)
+# log_success(message) -> (prints to stdout)
+# Prints success message in green.
 log_success() { printf '%b\n' "${_AT_GREEN}$*${_AT_NC}"; }       # success       (green)
+# log_warn(message) -> (prints to stderr)
+# Prints warning message in yellow to stderr.
 log_warn()    { printf '%b\n' "${_AT_YELLOW}$*${_AT_NC}" >&2; }  # warning       (yellow, stderr)
+# log_error(message) -> (prints to stderr)
+# Prints error message in red to stderr.
 log_error()   { printf '%b\n' "${_AT_RED}$*${_AT_NC}" >&2; }     # error         (red, stderr)
 
 # ==============================================================================
 # Error handling
 # ==============================================================================
 
-# Print error and exit 1.
+# die(message) -> (exits 1)
+# Prints error message and exits with code 1.
 die() { log_error "Error: $*"; exit 1; }
 
-# Print warning and continue.
+# warn(message) -> (prints to stderr)
+# Prints warning message and continues execution.
 warn() { log_warn "Warning: $*"; }
 
 # Die if any of the listed commands are missing.
@@ -75,8 +85,14 @@ check_command() {
 # Path helpers  (canonical paths relative to AUTO_TRIAGE_ROOT)
 # ==============================================================================
 
+# get_data_dir([root]) -> path
+# Returns path to auto_triage/data directory.
 get_data_dir()   { echo "${1:-$AUTO_TRIAGE_ROOT}/auto_triage/data"; }
+# get_output_dir([root]) -> path
+# Returns path to auto_triage/output directory.
 get_output_dir() { echo "${1:-$AUTO_TRIAGE_ROOT}/auto_triage/output"; }
+# get_logs_dir([root]) -> path
+# Returns path to auto_triage/logs directory.
 get_logs_dir()   { echo "${1:-$AUTO_TRIAGE_ROOT}/auto_triage/logs"; }
 
 # ==============================================================================
