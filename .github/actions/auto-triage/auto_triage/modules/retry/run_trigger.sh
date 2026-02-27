@@ -141,18 +141,18 @@ wait_for_run_completion() {
     local wait_start_interval=10
     local max_wait_attempt=$(( MAX_WAIT_FOR_ATTEMPT < timeout_sec ? MAX_WAIT_FOR_ATTEMPT : timeout_sec ))
 
-    log_info "Waiting for attempt ${expected_attempt} to appear (timeout: ${max_wait_attempt}s)..."
+    log_info "Waiting for attempt ${expected_attempt} to appear (timeout: ${max_wait_attempt}s)..." >&2
     while [ $total_elapsed -lt $max_wait_attempt ]; do
         local run_info
         run_info=$(get_run_info "$run_id")
         new_attempt=$(echo "$run_info" | jq -r '.run_attempt // 1')
         if [ "$new_attempt" -ge "$expected_attempt" ]; then
-            log_info "New attempt ${new_attempt} detected after ${total_elapsed}s"
+            log_info "New attempt ${new_attempt} detected after ${total_elapsed}s" >&2
             break
         fi
         sleep "$wait_start_interval"
         total_elapsed=$((total_elapsed + wait_start_interval))
-        log_info "Waiting for new attempt... (${total_elapsed}s / ${max_wait_attempt}s, current: ${new_attempt})"
+        log_info "Waiting for new attempt... (${total_elapsed}s / ${max_wait_attempt}s, current: ${new_attempt})" >&2
     done
 
     if [ -z "$new_attempt" ] || [ "$new_attempt" -lt "$expected_attempt" ]; then
@@ -171,9 +171,9 @@ wait_for_run_completion() {
     poll_job_id=$(_run_trigger_find_job_by_name "$jobs_json" "$job_name")
 
     if [ -n "$poll_job_id" ]; then
-        log_info "Found job ${poll_job_id} ('${job_name}') in attempt ${new_attempt}"
+        log_info "Found job ${poll_job_id} ('${job_name}') in attempt ${new_attempt}" >&2
     else
-        log_info "Job '${job_name}' not yet visible in attempt ${new_attempt}, will keep looking..."
+        log_info "Job '${job_name}' not yet visible in attempt ${new_attempt}, will keep looking..." >&2
     fi
 
     local status=""
@@ -189,7 +189,7 @@ wait_for_run_completion() {
 
             if [ "$status" = "completed" ] || [ "$conclusion" = "cancelled" ] || \
                [ "$conclusion" = "failure" ] || [ "$conclusion" = "success" ]; then
-                log_info "Job completed: status=${status}, conclusion=${conclusion} (after ${total_elapsed}s)"
+                log_info "Job completed: status=${status}, conclusion=${conclusion} (after ${total_elapsed}s)" >&2
                 if [ "$conclusion" = "cancelled" ]; then
                     echo "cancelled"
                 elif [ "$conclusion" = "success" ]; then
@@ -203,19 +203,19 @@ wait_for_run_completion() {
             fi
 
             if [ "$status" = "unknown" ]; then
-                log_error "Job status is 'unknown', treating as error"
+                log_error "Job status is 'unknown', treating as error" >&2
                 echo "error"
                 return 1
             fi
 
             local elapsed_min=$((total_elapsed / 60))
-            log_info "Job still running... status=${status} (${elapsed_min}m / ${timeout_min}m elapsed)"
+            log_info "Job still running... status=${status} (${elapsed_min}m / ${timeout_min}m elapsed)" >&2
         else
             jobs_json=$(get_jobs_for_run "$run_id" "$new_attempt")
             poll_job_id=$(_run_trigger_find_job_by_name "$jobs_json" "$job_name")
 
             if [ -n "$poll_job_id" ]; then
-                log_info "Found job ${poll_job_id} ('${job_name}') in attempt ${new_attempt}"
+                log_info "Found job ${poll_job_id} ('${job_name}') in attempt ${new_attempt}" >&2
                 sleep "$poll_interval"
                 total_elapsed=$((total_elapsed + poll_interval))
                 continue
@@ -232,13 +232,13 @@ wait_for_run_completion() {
                [ "$run_conclusion" = "cancelled" ] || \
                [ "$run_conclusion" = "failure" ] || \
                [ "$run_conclusion" = "success" ]; then
-                log_error "Run completed (${run_conclusion}) but job '${job_name}' never appeared"
+                log_error "Run completed (${run_conclusion}) but job '${job_name}' never appeared" >&2
                 echo "error"
                 return 1
             fi
 
             local elapsed_min=$((total_elapsed / 60))
-            log_info "Waiting for job '${job_name}' to appear... (${elapsed_min}m / ${timeout_min}m elapsed)"
+            log_info "Waiting for job '${job_name}' to appear... (${elapsed_min}m / ${timeout_min}m elapsed)" >&2
         fi
 
         sleep "$poll_interval"
