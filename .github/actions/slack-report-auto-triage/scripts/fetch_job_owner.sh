@@ -17,8 +17,17 @@ set -uo pipefail
 
 JOB_OWNER_FILE="${JOB_OWNER_FILE:-.auto_triage/data/job_owner.json}"
 SLACK_DATA_DIR="${SLACK_DATA_DIR:-.auto_triage/auto_triage/data}"
-THREAD_TEXT_FILE="${THREAD_TEXT_FILE:-/tmp/thread_text.txt}"
+DEFAULT_THREAD_TEXT_FILE="${RUNNER_TEMP:-/tmp}/thread_text_${GITHUB_RUN_ID:-$$}.txt"
+THREAD_TEXT_FILE="${THREAD_TEXT_FILE:-$DEFAULT_THREAD_TEXT_FILE}"
 
+CLEANUP_THREAD_TEXT_FILE=0
+if [ "${THREAD_TEXT_FILE}" = "${DEFAULT_THREAD_TEXT_FILE}" ]; then
+    CLEANUP_THREAD_TEXT_FILE=1
+fi
+
+if [ "${CLEANUP_THREAD_TEXT_FILE}" -eq 1 ]; then
+    trap 'rm -f "$THREAD_TEXT_FILE"' EXIT
+fi
 mkdir -p "$(dirname "$JOB_OWNER_FILE")"
 echo '[]' > "$JOB_OWNER_FILE"
 
