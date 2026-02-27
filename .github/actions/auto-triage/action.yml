@@ -57,7 +57,8 @@ runs:
           "$GITHUB_WORKSPACE"/ "$TARGET/workspace/"
         echo "$TARGET" >> "$GITHUB_PATH"
         mkdir -p "$TARGET/auto_triage/data/config" "$TARGET/auto_triage/logs" "$TARGET/auto_triage/output"
-        # Create symlinks early so paths work before setup_triage_dirs runs
+        # Create symlinks early so paths work before setup_triage_dirs runs.
+        # setup_triage_dirs will safely update these symlinks (ln -sfn) if they already exist.
         ln -sfn auto_triage/data "$TARGET/data"
         ln -sfn auto_triage/logs "$TARGET/logs"
         ln -sfn auto_triage/output "$TARGET/output"
