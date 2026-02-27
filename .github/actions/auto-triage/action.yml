@@ -55,18 +55,8 @@ runs:
       run: |
         set -euo pipefail
         TARGET="${GITHUB_WORKSPACE}/.auto_triage"
-        JOB_NAME="${{ inputs.job-name }}"
 
-        # Guard: only process the specific job we're testing
-        if [[ "$JOB_NAME" != *"P150 BH device perf"* ]]; then
-          echo "SKIP: retry-only test targets 'P150 BH device perf', got: $JOB_NAME"
-          mkdir -p "${TARGET}/auto_triage/output"
-          ln -sfn auto_triage/output "${TARGET}/output"
-          echo '{}' > "${TARGET}/auto_triage/output/slack_message.json"
-          exit 0
-        fi
-
-        echo "=== Synthesizing test data for retry of: $JOB_NAME ==="
+        echo "=== Ignoring input job-name ('${{ inputs.job-name }}'), hardcoding P150 BH device perf retry ==="
 
         mkdir -p "${TARGET}/auto_triage/data"
         mkdir -p "${TARGET}/auto_triage/output"
@@ -80,7 +70,7 @@ runs:
           "scenario": "Deterministic failure with identified commit",
           "case": "1",
           "failing_run_url": "https://github.com/tenstorrent/tt-metal/actions/runs/22489866421/job/65149810870",
-          "failure_message": "test_vit_perf_device[4500-10] subprocess.CalledProcessError: Command returned non-zero exit status 4.\nTT_FATAL @ /project/tt_metal/impl/allocator/bank_manager.cpp:403: num_shards.value() <= num_compute_banks\nExpected number of shards 120 to be less than or equal to total number of L1 banks 110 in compute cores",
+          "failure_message": "FAILED models/demos/vision/classification/vit/blackhole/tests/test_vit_device_perf.py::test_vit_device_ops[10-device_params0] - RuntimeError: TT_FATAL @ /project/tt_metal/impl/allocator/bank_manager.cpp:403: num_shards.value() <= num_compute_banks\ninfo:\nExpected number of shards 120 to be less than or equal to total number of L1 banks 110 in compute cores",
           "slack_message": "[RETRY TEST] Deterministic failure detected — testing retry logic on P150 BH device perf",
           "notes": "",
           "commits": [{"sha": "0edc1834ed37956c65118fc5955fffa13489fc7f", "confidence": 1}]
@@ -90,8 +80,8 @@ runs:
         echo '{"runs": []}' > "${TARGET}/auto_triage/data/subjob_runs.json"
 
         cat > "${TARGET}/auto_triage/data/error_message.txt" << 'EOERR'
-        test_vit_perf_device[4500-10] subprocess.CalledProcessError: Command returned non-zero exit status 4.
-        TT_FATAL @ /project/tt_metal/impl/allocator/bank_manager.cpp:403: num_shards.value() <= num_compute_banks
+        FAILED models/demos/vision/classification/vit/blackhole/tests/test_vit_device_perf.py::test_vit_device_ops[10-device_params0] - RuntimeError: TT_FATAL @ /project/tt_metal/impl/allocator/bank_manager.cpp:403: num_shards.value() <= num_compute_banks
+        info:
         Expected number of shards 120 to be less than or equal to total number of L1 banks 110 in compute cores
         EOERR
 
@@ -120,24 +110,17 @@ runs:
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
 
-        if [ ! -f "auto_triage/output/slack_message.json" ]; then
-          echo "No slack_message.json found, skipping retry"
-          exit 0
-        fi
+        HARDCODED_JOB="device-perf / P150 BH device perf"
+        HARDCODED_WORKFLOW="perf-device-models.yaml"
 
-        SCENARIO=$(jq -r '.scenario // ""' "auto_triage/output/slack_message.json")
-        if [ -z "$SCENARIO" ] || [ "$SCENARIO" = "null" ]; then
-          echo "No scenario in slack_message.json (non-target job), skipping retry"
-          exit 0
-        fi
-
-        echo "=== Starting retry logic ==="
-        echo "Job:      ${{ inputs.job-name }}"
-        echo "Workflow: ${{ inputs.workflow-name }}"
-        echo "Scenario: $SCENARIO"
+        echo "=== Starting retry logic (hardcoded target) ==="
+        echo "Input job:      ${{ inputs.job-name }}  (IGNORED)"
+        echo "Input workflow: ${{ inputs.workflow-name }}  (IGNORED)"
+        echo "Actual job:      $HARDCODED_JOB"
+        echo "Actual workflow: $HARDCODED_WORKFLOW"
         ./retry_on_deterministic.sh \
-          "${{ inputs.job-name }}" \
-          "${{ inputs.workflow-name }}" \
+          "$HARDCODED_JOB" \
+          "$HARDCODED_WORKFLOW" \
           "${{ inputs.slack_ts }}"
       env:
         COPILOT_GITHUB_TOKEN: ${{ inputs.copilot-pat }}
