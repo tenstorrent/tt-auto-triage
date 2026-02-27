@@ -56,7 +56,11 @@ runs:
           --exclude 'auto_triage/' \
           "$GITHUB_WORKSPACE"/ "$TARGET/workspace/"
         echo "$TARGET" >> "$GITHUB_PATH"
-        mkdir -p "$TARGET/auto_triage/data/config"
+        mkdir -p "$TARGET/auto_triage/data/config" "$TARGET/auto_triage/logs" "$TARGET/auto_triage/output"
+        # Create symlinks early so paths work before setup_triage_dirs runs
+        ln -sfn auto_triage/data "$TARGET/data"
+        ln -sfn auto_triage/logs "$TARGET/logs"
+        ln -sfn auto_triage/output "$TARGET/output"
         echo '{"should_cancel": false, "message": ""}' > "$TARGET/auto_triage/data/config/cancel.json"
 
     - name: Find boundaries
