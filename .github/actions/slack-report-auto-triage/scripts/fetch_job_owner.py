@@ -99,6 +99,9 @@ def main():
                     owner["slack_id"] = g.get("id", "")
                     break
 
+    owner_dir = os.path.dirname(owner_file)
+    if owner_dir:
+        os.makedirs(owner_dir, exist_ok=True)
     with open(owner_file, "w") as f:
         json.dump(owners_result, f, indent=2)
 
