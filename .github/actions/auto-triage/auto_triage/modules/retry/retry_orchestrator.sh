@@ -224,6 +224,8 @@ ${ADD}"
     exit 0
 fi
 
+# --- Unknown status ---
+# basically it didn't fail, but we don't have the information to figure out what happened, so we can't proceed.
 if [ "$STATUS" != "failure" ]; then
     jq -n --arg r "unknown" --arg m "Unexpected status: $STATUS" --arg c "$STATUS" '{result: $r, message: $m, conclusion: $c}' > "$RETRY_RESULT_FILE"
     EXISTING=$(jq -r '.notes // ""' "$SLACK_MSG_PATH")
