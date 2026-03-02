@@ -13,7 +13,7 @@ Validates prerequisites for triggering an auto-fix PR via Copilot delegate.
 - `validate_workspace(dir)` → exit 0 if directory contains `.git`
 
 ## Status
-Auto-fix is disabled due to [issue #3](https://github.com/tenstorrent/tt-auto-triage/issues/3). The validation module is in place for when the feature is re-enabled.
+Auto-fix is disabled due to authentication issues. The validation module is in place for when the feature is re-enabled.
 
 ## Dependencies
 - `lib/common.sh`
