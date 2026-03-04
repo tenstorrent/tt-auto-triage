@@ -57,8 +57,11 @@ runs:
           "$GITHUB_WORKSPACE"/ "$TARGET/workspace/"
         echo "$TARGET" >> "$GITHUB_PATH"
         mkdir -p "$TARGET/auto_triage/data/config" "$TARGET/auto_triage/logs" "$TARGET/auto_triage/output"
-        # Create symlinks early so paths work before setup_triage_dirs runs.
-        # setup_triage_dirs will safely update these symlinks (ln -sfn) if they already exist.
+        # PR #23 organized static data into data/config, data/examples, data/templates.
+        # Scripts expect auto_triage/data/ as canonical path with data/ as symlink.
+        # Merge the copied data/ contents into auto_triage/data/ before symlinking.
+        cp -R "$TARGET/data/." "$TARGET/auto_triage/data/" 2>/dev/null || true
+        rm -rf "$TARGET/data"
         ln -sfn auto_triage/data "$TARGET/data"
         ln -sfn auto_triage/logs "$TARGET/logs"
         ln -sfn auto_triage/output "$TARGET/output"
