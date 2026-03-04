@@ -28,8 +28,8 @@ ROOT="$AUTO_TRIAGE_ROOT"
 
 log_info "Preparing auto_triage/data and auto_triage/logs"
 setup_triage_dirs "$ROOT"
-rm -rf "$CANON_OUTPUT_DIR"
-mkdir -p "$CANON_OUTPUT_DIR"
+rm -rf "$(get_output_dir "$ROOT")"
+mkdir -p "$(get_output_dir "$ROOT")"
 
 cd "$ROOT"
 
