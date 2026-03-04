@@ -109,7 +109,7 @@ assert_eq "get_commit_author" "$author" "testuser"
 
 # -- gh_api_post ---------------------------------------------------------------
 resp=$(gh_api_post "repos/tenstorrent/tt-metal/actions/jobs/123/rerun")
-status=$(echo "$resp" | head -1 | awk '{print $2}')
+status=$(awk 'NR==1{print $2}' <<< "$resp")
 assert_eq "gh_api_post status" "$status" "201"
 
 # -- get_check_annotations (empty) --------------------------------------------

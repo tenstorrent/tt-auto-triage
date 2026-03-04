@@ -230,7 +230,7 @@ SAME_FAILURE=$(get_same_failure_from_comparison "$COMPARISON_FILE")
 RESULT=$(determine_retry_result "$STATUS" "$SAME_FAILURE")
 
 RETRY_ERR_FOR_NOTES=$(get_retry_error_extracted "$COMPARISON_FILE")
-[ -z "$RETRY_ERR_FOR_NOTES" ] && RETRY_ERR_FOR_NOTES=$(echo "$RETRY_ERROR" | head -c 500)
+[ -z "$RETRY_ERR_FOR_NOTES" ] && RETRY_ERR_FOR_NOTES=$(head -c 500 <<< "$RETRY_ERROR")
 
 if [ "$RESULT" = "failed_same" ]; then
     jq -n --arg r "failed_same" --arg m "Same error, deterministic confirmed" '{result: $r, message: $m}' > "$RETRY_RESULT_FILE"

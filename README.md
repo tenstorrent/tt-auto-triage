@@ -21,6 +21,10 @@ This repository provides two main capabilities:
    - Creates or updates GitHub issues from Slack messages
    - Generates error reports and incremental reports
 
+## Documentation
+
+For internal usage guides and runbooks, see the [Auto-Triage Confluence page](https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/1794441312/How+to+Use+Auto-Triage).
+
 ## Quickstart
 
 ### Auto-Triage (Minimal Setup)
