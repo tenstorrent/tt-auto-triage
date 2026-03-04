@@ -121,7 +121,7 @@ log_info "Run ID: $RUN_ID, Original Job ID: $ORIGINAL_JOB_ID"
 RUN_INFO=$(get_run_info "$RUN_ID")
 API_ATTEMPT=$(echo "$RUN_INFO" | jq -r '.run_attempt // 1')
 OLD_ATTEMPT="$API_ATTEMPT"
-for p in 1 2 3 4 5 6 7 8 9 10; do
+for p in {1..10}; do
     PROBE=$((API_ATTEMPT + p))
     JOBS=$(get_jobs_for_run "$RUN_ID" "$PROBE" 2>/dev/null || echo '{"jobs":[]}')
     echo "$JOBS" | jq -e '.jobs | length > 0' >/dev/null 2>&1 || break
