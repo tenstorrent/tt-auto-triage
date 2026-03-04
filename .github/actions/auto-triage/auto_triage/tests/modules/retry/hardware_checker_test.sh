@@ -17,7 +17,7 @@ echo "=== modules/retry/hardware_checker.sh ==="
 assert       "supported: N150"      is_hardware_supported "yolov5x-N150-func"
 assert       "supported: N300"      is_hardware_supported "N300-unit-tests"
 assert       "supported: P100A"     is_hardware_supported "p100a-func"
-assert       "supported: P100"      is_hardware_supported "some-P100-job"
+assert       "supported: P100a"      is_hardware_supported "some-P100-job"
 assert       "supported: P150"      is_hardware_supported "workflow / P150-test"
 assert       "supported: P300"      is_hardware_supported "P300-smoke"
 
