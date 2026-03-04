@@ -52,15 +52,14 @@ AT_REUSE_DATA="${AT_REUSE_DATA:-${REUSE_DATA:-false}}"            # skip re-down
 #
 #   setup_triage_dirs [root]
 #
-# Sets globals: CANON_DATA_DIR, CANON_LOGS_DIR, CANON_OUTPUT_DIR
+# Sets globals: CANON_DATA_DIR, CANON_LOGS_DIR
 setup_triage_dirs() {
     local root="${1:-$AUTO_TRIAGE_ROOT}"
 
     CANON_DATA_DIR="$(get_data_dir "$root")"
     CANON_LOGS_DIR="$(get_logs_dir "$root")"
-    CANON_OUTPUT_DIR="$(get_output_dir "$root")"
 
-    mkdir -p "$CANON_DATA_DIR" "$CANON_LOGS_DIR" "$CANON_OUTPUT_DIR"
+    mkdir -p "$CANON_DATA_DIR" "$CANON_LOGS_DIR" "$(get_output_dir "$root")"
 
     # Convenience symlinks (./data -> auto_triage/data, etc.)
     ln -sfn auto_triage/data   "${root}/data"
