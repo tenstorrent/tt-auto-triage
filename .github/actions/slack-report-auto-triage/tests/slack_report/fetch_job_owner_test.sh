@@ -19,6 +19,9 @@ echo "=== fetch_job_owner ==="
 assert "fetch_job_owner.py exists" [ -f "$PYTHON_SCRIPT" ]
 assert "fetch_job_owner.sh exists" [ -f "$SHELL_SCRIPT" ]
 
+# -- Python: missing required env exits non-zero ------------------------------
+assert_fails "Python exits non-zero when JOB_NAME missing" python3 "$PYTHON_SCRIPT"
+
 # -- Python: job owner extraction from mock thread text -----------------------
 tmpdir=$(mktemp -d)
 trap 'rm -rf "$tmpdir"' EXIT
@@ -61,14 +64,6 @@ export THREAD_TEXT_FILE
 python3 "$PYTHON_SCRIPT"
 count=$(jq 'length' "$JOB_OWNER_FILE")
 assert "Python returns empty when job name not in thread" [ "$count" -eq 0 ]
-
-# -- Python: missing required env exits non-zero ------------------------------
-unset JOB_NAME
-assert_fails "Python exits non-zero when JOB_NAME missing" python3 "$PYTHON_SCRIPT"
-
-# Restore for later tests
-export JOB_NAME="blackhole-demo"
-export THREAD_TEXT_FILE="$tmpdir/thread.txt"
 
 # -- Shell: graceful failure when credentials missing -------------------------
 unset SLACK_TS CHANNEL_ID SLACK_BOT_TOKEN 2>/dev/null || true
