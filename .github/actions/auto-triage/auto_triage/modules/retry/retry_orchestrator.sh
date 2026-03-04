@@ -174,16 +174,8 @@ fi
 if [ "$STATUS" = "timeout" ] || [ "$STATUS" = "error" ]; then
     send_notification "$(printf ':hourglass: *Retry timed out.* Job did not complete within %d min. Proceeding with original analysis.\n<%s|Check retry>' "$MAX_WAIT_MINUTES" "$EARLY_RETRY_URL")"
     if [ -f "$SLACK_MSG_PATH" ]; then
-        EXISTING=$(jq -r '.notes // ""' "$SLACK_MSG_PATH")
         ADD="*NOTE:* Automatic retry timed out. Analysis based on original failure only."
-        if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
-            COMBINED="${EXISTING}
-
-${ADD}"
-        else
-            COMBINED="$ADD"
-        fi
-        jq --arg notes "$COMBINED" '.notes = $notes' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
+        jq --arg add "$ADD" '.notes = (if ((.notes // "") | length) > 0 then (.notes // "") + "\n\n" + $add else $add end)' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
     fi
     exit 0
 fi
@@ -191,18 +183,8 @@ fi
 if [ "$STATUS" = "success" ]; then
     jq -n --arg r "passed" --arg m "Retry passed" '{result: $r, message: $m}' > "$RETRY_RESULT_FILE"
     RETRY_NOTE="*RETRY PASSED - CONVERTED TO CASE 3:* Failure passed on retry (non-deterministic). Original: ${FAILING_RUN_URL} Retry: ${RETRY_JOB_URL}"
-    EXISTING=$(jq -r '.notes // ""' "$SLACK_MSG_PATH")
-    if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
-        COMBINED="${EXISTING}
-
-----
-
-${RETRY_NOTE}"
-    else
-        COMBINED="$RETRY_NOTE"
-    fi
-    jq --arg scenario "Failure likely outside tt-metal" --arg case "3" --arg notes "$COMBINED" --arg slack "Failure is non-deterministic. Passed on retry." \
-        '. + {scenario: $scenario, case: $case, notes: $notes, slack_message: $slack, commits: []}' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
+    jq --arg add "$RETRY_NOTE" --arg scenario "Failure likely outside tt-metal" --arg case "3" --arg slack "Failure is non-deterministic. Passed on retry." \
+        '. + {scenario: $scenario, case: $case, notes: (if ((.notes // "") | length) > 0 then (.notes // "") + "\n\n----\n\n" + $add else $add end), slack_message: $slack, commits: []}' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
     printf '# Auto Triage: %s\n## Non-Deterministic (Passed on Retry)\nOriginal: %s\nRetry: %s\n----\n_Automatic analysis._\n' "$JOB_NAME" "$FAILING_RUN_URL" "$RETRY_JOB_URL" > "$EXPLANATION_PATH"
     send_notification "$(printf ':white_check_mark: *Retry passed!* Non-deterministic.\nOriginal: <%s|link> Retry: <%s|link>' "$FAILING_RUN_URL" "$RETRY_JOB_URL")"
     exit 0
@@ -210,16 +192,8 @@ fi
 
 if [ "$STATUS" = "cancelled" ]; then
     jq -n --arg r "cancelled" --arg m "Retry cancelled" '{result: $r, message: $m}' > "$RETRY_RESULT_FILE"
-    EXISTING=$(jq -r '.notes // ""' "$SLACK_MSG_PATH")
     ADD="*NOTE:* Automatic retry was cancelled. Retry link: ${RETRY_JOB_URL}"
-    if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
-        COMBINED="${EXISTING}
-
-${ADD}"
-    else
-        COMBINED="$ADD"
-    fi
-    jq --arg notes "$COMBINED" '.notes = $notes' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
+    jq --arg add "$ADD" '.notes = (if ((.notes // "") | length) > 0 then (.notes // "") + "\n\n" + $add else $add end)' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
     send_notification "$(printf ':no_entry_sign: *Retry cancelled.* Original: <%s|link>' "$FAILING_RUN_URL")"
     exit 0
 fi
@@ -228,16 +202,8 @@ fi
 # basically it didn't fail, but we don't have the information to figure out what happened, so we can't proceed.
 if [ "$STATUS" != "failure" ]; then
     jq -n --arg r "unknown" --arg m "Unexpected status: $STATUS" --arg c "$STATUS" '{result: $r, message: $m, conclusion: $c}' > "$RETRY_RESULT_FILE"
-    EXISTING=$(jq -r '.notes // ""' "$SLACK_MSG_PATH")
     ADD="*NOTE:* Retry ended with status: ${STATUS}. Retry link: ${RETRY_JOB_URL}"
-    if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
-        COMBINED="${EXISTING}
-
-${ADD}"
-    else
-        COMBINED="$ADD"
-    fi
-    jq --arg notes "$COMBINED" '.notes = $notes' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
+    jq --arg add "$ADD" '.notes = (if ((.notes // "") | length) > 0 then (.notes // "") + "\n\n" + $add else $add end)' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
     send_notification "$(printf ':grey_question: *Retry ended: %s* Original: <%s|link>' "$STATUS" "$FAILING_RUN_URL")"
     exit 0
 fi
@@ -267,17 +233,7 @@ RETRY_ERR_FOR_NOTES=$(get_retry_error_extracted "$COMPARISON_FILE")
 if [ "$RESULT" = "failed_same" ]; then
     jq -n --arg r "failed_same" --arg m "Same error, deterministic confirmed" '{result: $r, message: $m}' > "$RETRY_RESULT_FILE"
     RETRY_NOTE="*RETRY CONFIRMED DETERMINISTIC:* Same error on retry. ${RETRY_JOB_URL}"
-    EXISTING=$(jq -r '.notes // ""' "$SLACK_MSG_PATH")
-    if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
-        COMBINED="${EXISTING}
-
-----
-
-${RETRY_NOTE}"
-    else
-        COMBINED="$RETRY_NOTE"
-    fi
-    jq --arg notes "$COMBINED" '.notes = $notes' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
+    jq --arg add "$RETRY_NOTE" '.notes = (if ((.notes // "") | length) > 0 then (.notes // "") + "\n\n----\n\n" + $add else $add end)' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
     EXISTING_EXPLANATION=$(cat "$EXPLANATION_PATH" 2>/dev/null || echo "")
     cat > "$EXPLANATION_PATH" << EOF
 ## Failure Was Repeatable (Deterministic)
@@ -296,18 +252,8 @@ else
 ${RETRY_ERR_FOR_NOTES}
 \`\`\`
 ${RETRY_JOB_URL}"
-    EXISTING=$(jq -r '.notes // ""' "$SLACK_MSG_PATH")
-    if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
-        COMBINED="${EXISTING}
-
-----
-
-${RETRY_NOTE}"
-    else
-        COMBINED="$RETRY_NOTE"
-    fi
-    jq --arg scenario "Failure likely outside tt-metal" --arg case "3" --arg notes "$COMBINED" --arg slack "Non-deterministic. Different errors on retry." \
-        '. + {scenario: $scenario, case: $case, notes: $notes, slack_message: $slack, commits: []}' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
+    jq --arg add "$RETRY_NOTE" --arg scenario "Failure likely outside tt-metal" --arg case "3" --arg slack "Non-deterministic. Different errors on retry." \
+        '. + {scenario: $scenario, case: $case, notes: (if ((.notes // "") | length) > 0 then (.notes // "") + "\n\n----\n\n" + $add else $add end), slack_message: $slack, commits: []}' "$SLACK_MSG_PATH" > "${SLACK_MSG_PATH}.tmp" && mv "${SLACK_MSG_PATH}.tmp" "$SLACK_MSG_PATH"
     printf '# Auto Triage: %s\n## Non-Deterministic (Different Errors)\nOriginal: %s\nRetry: %s\n----\n_Automatic analysis._\n' "$JOB_NAME" "$FAILING_RUN_URL" "$RETRY_JOB_URL" > "$EXPLANATION_PATH"
     send_notification "$(printf ':warning: *Retry failed with DIFFERENT error.* Non-deterministic.\n<%s|link> <%s|link>' "$FAILING_RUN_URL" "$RETRY_JOB_URL")"
 fi
