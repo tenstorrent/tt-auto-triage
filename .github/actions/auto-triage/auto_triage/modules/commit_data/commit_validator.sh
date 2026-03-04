@@ -18,6 +18,8 @@ _CV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../lib/github_api.sh
 source "$_CV_DIR/../../lib/github_api.sh"
 
+# _validation_fail(reason, context, index, commit) -> 1
+# Logs validation failure to stderr and returns 1.
 _validation_fail() {
     local reason="$1" context="$2" index="${3:-n/a}" commit="${4:-<none>}"
     echo "detected hallucination: $reason" >&2

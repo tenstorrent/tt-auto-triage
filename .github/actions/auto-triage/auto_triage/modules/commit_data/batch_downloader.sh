@@ -19,24 +19,34 @@ source "$_BD_DIR/../../lib/github_api.sh"
 
 BATCH_SIZE="${AT_BATCH_SIZE:-10}"
 
-# Bash 3-compatible cache (associative arrays need bash 4+)
 _BD_CACHE_DIR="${_BD_CACHE_DIR:-}"
+
+# _bd_cache_get(type, key) -> cached value to stdout, or nothing
+# Reads cached value from filesystem (Bash 3-compatible).
 _bd_cache_get() {
     local type="$1" key="$2"
     [ -n "$_BD_CACHE_DIR" ] || return
     [ -f "$_BD_CACHE_DIR/${type}_${key}.txt" ] || return
     cat "$_BD_CACHE_DIR/${type}_${key}.txt"
 }
+
+# _bd_cache_set(type, key, val) -> no return
+# Writes value to filesystem cache.
 _bd_cache_set() {
     local type="$1" key="$2" val="$3"
     [ -n "$_BD_CACHE_DIR" ] || _BD_CACHE_DIR=$(mktemp -d 2>/dev/null || echo "")
     [ -n "$_BD_CACHE_DIR" ] || return
     printf '%s' "$val" > "$_BD_CACHE_DIR/${type}_${key}.txt"
 }
+
+# _bd_safe_key(str) -> sanitized key (alphanumeric, underscore, hyphen only)
+# Sanitizes string for use as cache key.
 _bd_safe_key() {
     echo "$1" | tr -c 'a-zA-Z0-9_-' '_'
 }
 
+# _get_user_display_name(login) -> display name to stdout (or empty)
+# Fetches GitHub user display name via API; uses cache.
 _get_user_display_name() {
     local login="$1"
     if [ -z "$login" ]; then
@@ -56,6 +66,8 @@ _get_user_display_name() {
     echo "$name"
 }
 
+# _is_org_member(login) -> "true" or "false" to stdout
+# Checks if user is org member via API; uses cache.
 _is_org_member() {
     local login="$1"
     if [ -z "$login" ]; then
@@ -78,6 +90,8 @@ _is_org_member() {
     echo "$result"
 }
 
+# _build_person_json(login, fallback_name) -> JSON object to stdout
+# Builds person JSON with login, display name, is_org_member.
 _build_person_json() {
     local login="$1" fallback_name="$2"
     local display_name="$fallback_name" org_member="false"
@@ -102,6 +116,8 @@ _build_person_json() {
         '{login:$login, name:$name, is_org_member:($org == "true")}'
 }
 
+# _append_unique_person(arr_json, person_json) -> JSON array to stdout
+# Appends person to array if not already present (by login or name).
 _append_unique_person() {
     local arr_json="$1" person_json="$2"
     jq -n \
@@ -114,6 +130,8 @@ _append_unique_person() {
          end'
 }
 
+# _add_person_entry(login, fallback_name, current_json) -> JSON array to stdout
+# Adds person to authors/approvers array, fetching details via API; avoids duplicates.
 _add_person_entry() {
     local login="$1" fallback_name="$2" current_json="$3"
     local person_json

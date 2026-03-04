@@ -30,7 +30,8 @@ source "$_RUN_PROCESSOR_DIR/../../lib/github_api.sh"
 # shellcheck source=job_matcher.sh
 source "$_RUN_PROCESSOR_DIR/job_matcher.sh"
 
-# Check if commit A is newer than commit B (A is descendant of B).
+# is_commit_newer(commit_a, commit_b) -> 0 if A is descendant of B, 1 otherwise
+# Uses git merge-base to determine ancestry.
 is_commit_newer() {
     local commit_a="$1" commit_b="$2"
     [ -n "$commit_a" ] && [ -n "$commit_b" ] || return 1
@@ -38,8 +39,8 @@ is_commit_newer() {
     git merge-base --is-ancestor "$commit_b" "$commit_a" 2>/dev/null
 }
 
-# Process workflow runs: paginate, filter, match subjobs, accumulate results.
-# Sets output globals. May call write_cancel_and_exit on unrecoverable errors.
+# process_workflow_runs() -> sets output globals; may call write_cancel_and_exit on unrecoverable errors
+# Paginates workflow runs, filters by branch/status/cutoff, matches subjobs, finds last success and first failure.
 process_workflow_runs() {
     local repo="${AT_OWNER_REPO:-${REPO}}"
     [ -n "$repo" ] || { echo "run_processor: REPO or AT_OWNER_REPO required" >&2; return 1; }

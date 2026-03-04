@@ -30,7 +30,8 @@ fi
 WORKFLOW_NAME="$1"
 SUBJOB_NAME="$2"
 
-# assumes python3 is available and at version 3.12.3 (the default in Ubuntu 24.04)
+# normalize_hyphens(text) -> normalized string (Unicode dashes replaced with ASCII '-')
+# Replaces Unicode dash characters with ASCII hyphen via Python.
 normalize_hyphens() {
     python3 - "$1" <<'PY'
 import sys, unicodedata
@@ -50,6 +51,8 @@ DATA_DIR="$(get_data_dir)"
 SUBJOB_RUNS_JSON_PATH="${DATA_DIR}/subjob_runs.json"
 CANCEL_FILE="data/config/cancel.json"
 
+# write_cancel_and_exit(message) -> exits 0
+# Writes cancellation JSON to CANCEL_FILE and exits; downstream stages treat as cancel.
 write_cancel_and_exit() {
     local message="$1"
     tmp_cancel="$(mktemp)"

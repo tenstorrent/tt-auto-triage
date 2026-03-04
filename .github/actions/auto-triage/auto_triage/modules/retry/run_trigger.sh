@@ -50,16 +50,14 @@ trigger_retry_run() {
     return 1
 }
 
-# ==============================================================================
-# Normalize job name for matching (lowercase, unicode dashes -> ASCII)
-# ==============================================================================
+# _run_trigger_normalize_name(job_name) -> normalized string to stdout
+# Lowercases and converts Unicode dashes to ASCII hyphen for matching.
 _run_trigger_normalize_name() {
     echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[–—−‐‑‒]/-/g'
 }
 
-# ==============================================================================
-# Find job ID in jobs JSON by name (case-insensitive, handles unicode dashes)
-# ==============================================================================
+# _run_trigger_find_job_by_name(jobs_json, job_name) -> job_id to stdout (or empty)
+# Finds job ID in jobs JSON by normalized name match (exact, contains).
 _run_trigger_find_job_by_name() {
     local jobs_json="$1"
     local job_name="$2"
