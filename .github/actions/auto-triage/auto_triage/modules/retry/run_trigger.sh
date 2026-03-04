@@ -41,7 +41,7 @@ trigger_retry_run() {
     local response
     response=$(gh_api_post "repos/${AT_OWNER_REPO}/actions/jobs/${job_id}/rerun")
     local code
-    code=$(echo "$response" | head -1 | awk '{print $2}')
+    code=$(awk 'NR==1{print $2}' <<< "$response")
     code="${code:-000}"
 
     if [ "$code" = "201" ] || [ "$code" = "200" ]; then

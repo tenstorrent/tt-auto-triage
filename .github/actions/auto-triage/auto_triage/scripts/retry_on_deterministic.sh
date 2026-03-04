@@ -5,8 +5,6 @@
 # Usage: ./retry_on_deterministic.sh <job_name> <workflow_name> [slack_ts]
 #
 
-set -euo pipefail
-
 if [ $# -lt 2 ]; then
     echo "Usage: $0 <job_name> <workflow_name> [slack_ts]" >&2
     exit 1
