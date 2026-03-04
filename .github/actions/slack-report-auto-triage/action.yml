@@ -40,9 +40,7 @@ runs:
         SLACK_TS: ${{ inputs.slack_ts }}
         CHANNEL_ID: ${{ inputs.channel_id }}
         JOB_NAME: ${{ inputs.job_name }}
-      run: |
-        set -uo pipefail
-        bash "${{ github.action_path }}/scripts/fetch_job_owner.sh" || echo "Warning: Job owner extraction failed (non-fatal), continuing without JOB OWNER field"
+      run: bash "${{ github.action_path }}/scripts/fetch_job_owner.sh" || echo "Warning: Job owner extraction failed (non-fatal), continuing without JOB OWNER field"
 
     - name: Build Slack payload
       id: build
