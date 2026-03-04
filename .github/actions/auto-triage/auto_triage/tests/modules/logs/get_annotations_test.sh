@@ -9,12 +9,10 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-GET_ANNOTATIONS="$ROOT_DIR/get_annotations.sh"
-
-source "$SCRIPT_DIR/../../lib/test_harness.sh"
-export AUTO_TRIAGE_ROOT="$ROOT_DIR"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AT_ROOT="$REPO_ROOT/.github/actions/auto-triage/auto_triage"
+source "$REPO_ROOT/testing_lib_files/test_harness.sh"
+GET_ANNOTATIONS="$AT_ROOT/get_annotations.sh"
 
 echo "=== get_annotations.sh ==="
 

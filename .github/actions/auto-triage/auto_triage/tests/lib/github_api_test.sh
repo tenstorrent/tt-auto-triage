@@ -10,12 +10,10 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-LIB_DIR="$ROOT_DIR/lib"
-
-source "$SCRIPT_DIR/test_harness.sh"
-export AUTO_TRIAGE_ROOT="$ROOT_DIR"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AT_ROOT="$REPO_ROOT/.github/actions/auto-triage/auto_triage"
+source "$REPO_ROOT/testing_lib_files/test_harness.sh"
+export AUTO_TRIAGE_ROOT="$AT_ROOT"
 
 # -- create mock gh CLI --------------------------------------------------------
 MOCK_DIR=$(mktemp -d)
@@ -74,7 +72,7 @@ chmod +x "$MOCK_DIR/gh"
 export PATH="$MOCK_DIR:$PATH"
 
 # Now source the API lib (it will find our mock gh)
-source "$LIB_DIR/github_api.sh"
+source "$AT_ROOT/lib/github_api.sh"
 
 echo "=== lib/github_api.sh ==="
 

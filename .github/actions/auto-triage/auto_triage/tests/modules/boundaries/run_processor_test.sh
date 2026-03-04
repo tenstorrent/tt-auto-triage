@@ -9,19 +9,18 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AUTO_TRIAGE_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-source "$AUTO_TRIAGE_ROOT/tests/lib/test_harness.sh"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AT_ROOT="$REPO_ROOT/.github/actions/auto-triage/auto_triage"
+source "$REPO_ROOT/testing_lib_files/test_harness.sh"
+export AT_OWNER_REPO="${AT_OWNER_REPO:-tenstorrent/tt-auto-triage}"
+export AUTO_TRIAGE_ROOT="$AT_ROOT"
 
 # run_processor requires write_cancel_and_exit; use no-op for unit test
 write_cancel_and_exit() {
     echo "CANCEL: $1" >&2
     exit 1
 }
-
-export AT_OWNER_REPO="${AT_OWNER_REPO:-tenstorrent/tt-auto-triage}"
-export AUTO_TRIAGE_ROOT
-source "$AUTO_TRIAGE_ROOT/modules/boundaries/run_processor.sh"
+source "$AT_ROOT/modules/boundaries/run_processor.sh"
 
 echo "=== modules/boundaries/run_processor.sh ==="
 

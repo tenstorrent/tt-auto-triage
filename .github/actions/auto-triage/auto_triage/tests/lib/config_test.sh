@@ -6,32 +6,10 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIB_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)/lib"
-
-export AUTO_TRIAGE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-source "$LIB_DIR/config.sh"
-
-# -- test harness (same helpers as common_test.sh) ----------------------------
-_pass=0 _fail=0
-
-assert_eq() {
-    local desc="$1" actual="$2" expected="$3"
-    if [ "$actual" = "$expected" ]; then
-        echo "  PASS  $desc"; _pass=$((_pass + 1))
-    else
-        echo "  FAIL  $desc  (got '$actual', expected '$expected')"; _fail=$((_fail + 1))
-    fi
-}
-
-assert() {
-    local desc="$1"; shift
-    if "$@" 2>/dev/null; then
-        echo "  PASS  $desc"; _pass=$((_pass + 1))
-    else
-        echo "  FAIL  $desc"; _fail=$((_fail + 1))
-    fi
-}
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AT_ROOT="$REPO_ROOT/.github/actions/auto-triage/auto_triage"
+source "$REPO_ROOT/testing_lib_files/test_harness.sh"
+source "$AT_ROOT/lib/config.sh"
 
 echo "=== lib/config.sh ==="
 
@@ -59,7 +37,7 @@ assert_eq "AT_REUSE_DATA default"   "$AT_REUSE_DATA"    "false"
     export AT_OWNER="myorg" AT_REPO="myrepo" AT_BATCH_SIZE="5" AT_CUTOFF_COMMIT="deadbeef" AT_REUSE_DATA="true"
     # Re-source to pick up overrides (reset guard first)
     unset _AUTO_TRIAGE_CONFIG_LOADED
-    source "$LIB_DIR/config.sh"
+    source "$AT_ROOT/lib/config.sh"
     [ "$AT_OWNER" = "myorg" ] && [ "$AT_REPO" = "myrepo" ] && [ "$AT_BATCH_SIZE" = "5" ] \
       && [ "$AT_OWNER_REPO" = "myorg/myrepo" ] && [ "$AT_BASE_URL" = "https://github.com/myorg/myrepo" ] \
       && [ "$AT_CUTOFF_COMMIT" = "deadbeef" ] && [ "$AT_REUSE_DATA" = "true" ]
@@ -81,11 +59,9 @@ rm -rf "$TMP_ROOT"
 
 # -- double-source guard -------------------------------------------------------
 (
-    source "$LIB_DIR/config.sh"   # should be a no-op (already loaded)
+    source "$AT_ROOT/lib/config.sh"   # should be a no-op (already loaded)
     true
 ) && { echo "  PASS  double-source guard"; _pass=$((_pass + 1)); } \
   || { echo "  FAIL  double-source guard"; _fail=$((_fail + 1)); }
 
-echo ""
-echo "=== $_pass passed, $_fail failed ==="
-[ "$_fail" -eq 0 ]
+test_summary

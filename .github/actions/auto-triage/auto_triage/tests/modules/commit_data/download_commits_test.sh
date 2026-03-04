@@ -9,11 +9,10 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-
-source "$SCRIPT_DIR/../../lib/test_harness.sh"
-export AUTO_TRIAGE_ROOT="$ROOT_DIR"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AT_ROOT="$REPO_ROOT/.github/actions/auto-triage/auto_triage"
+source "$REPO_ROOT/testing_lib_files/test_harness.sh"
+export AUTO_TRIAGE_ROOT="$AT_ROOT"
 
 # -- create mock gh CLI --------------------------------------------------------
 MOCK_DIR=$(mktemp -d)
@@ -51,7 +50,7 @@ export PATH="$MOCK_DIR:$PATH"
 
 # -- source module -------------------------------------------------------------
 # shellcheck source=../../../modules/commit_data/download_commits.sh
-source "$ROOT_DIR/modules/commit_data/download_commits.sh"
+source "$AT_ROOT/modules/commit_data/download_commits.sh"
 
 echo "=== modules/commit_data/download_commits.sh ==="
 

@@ -7,14 +7,10 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-
-source "$SCRIPT_DIR/../../lib/test_harness.sh"
-export AUTO_TRIAGE_ROOT="$ROOT_DIR"
-
-# shellcheck source=../../../modules/logs/log_parser.sh
-source "$ROOT_DIR/modules/logs/log_parser.sh"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AT_ROOT="$REPO_ROOT/.github/actions/auto-triage/auto_triage"
+source "$REPO_ROOT/testing_lib_files/test_harness.sh"
+source "$AT_ROOT/modules/logs/log_parser.sh"
 
 echo "=== modules/logs/log_parser.sh ==="
 

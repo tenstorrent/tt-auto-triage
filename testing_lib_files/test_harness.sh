@@ -1,8 +1,11 @@
 #!/bin/bash
 #
-# Shared test harness for lib tests. Source from common_test.sh, config_test.sh, etc.
+# Shared test harness for tt-auto-triage. Source from any test script.
 # Provides: assert, assert_eq, assert_fails, test_summary.
 # Initializes _pass and _fail.
+#
+# Usage (from any test under .github/actions/...):
+#   source "$(git rev-parse --show-toplevel)/testing_lib_files/test_harness.sh"
 #
 
 _pass=0 _fail=0
