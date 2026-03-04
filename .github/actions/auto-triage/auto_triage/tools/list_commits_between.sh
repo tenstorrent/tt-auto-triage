@@ -13,12 +13,11 @@
 
 set -euo pipefail
 
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../lib/common.sh"
 
 if [ $# -lt 2 ]; then
-  echo -e "${RED}Error: Missing required arguments${NC}" >&2
+  log_error "Missing required arguments"
   echo "Usage: $0 <start_commit> <end_commit> [output_file]" >&2
   exit 1
 fi
@@ -28,13 +27,11 @@ END_COMMIT="$2"
 OUTPUT_FILE="${3:-}"
 
 if ! git rev-parse --verify "$START_COMMIT" >/dev/null 2>&1; then
-  echo -e "${RED}Error: start commit '$START_COMMIT' not found${NC}" >&2
-  exit 1
+  die "start commit '$START_COMMIT' not found"
 fi
 
 if ! git rev-parse --verify "$END_COMMIT" >/dev/null 2>&1; then
-  echo -e "${RED}Error: end commit '$END_COMMIT' not found${NC}" >&2
-  exit 1
+  die "end commit '$END_COMMIT' not found"
 fi
 
 # Use first-parent history and chronological order (oldest -> newest)
@@ -52,7 +49,7 @@ fi
 COMMITS=$(echo "$COMMITS" | awk 'NF')
 
 if [ -z "$COMMITS" ]; then
-  echo -e "${YELLOW}No commits found between the provided SHAs.${NC}" >&2
+  log_warn "No commits found between the provided SHAs."
   JSON='[]'
 else
   JSON='[]'

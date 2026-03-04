@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Source modular validator
 source "$SCRIPT_DIR/modules/auto_fix/pr_validator.sh"
 
-JSON_FLAG_FILE="${SCRIPT_DIR}/create_PR_boolean.json"
+JSON_FLAG_FILE="${SCRIPT_DIR}/data/config/create_PR_boolean.json"
 EXPLANATION_FILE="${SCRIPT_DIR}/output/explanation.md"
 WORKSPACE_DIR="${SCRIPT_DIR}/workspace"
 

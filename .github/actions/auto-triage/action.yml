@@ -56,8 +56,13 @@ runs:
           --exclude 'auto_triage/' \
           "$GITHUB_WORKSPACE"/ "$TARGET/workspace/"
         echo "$TARGET" >> "$GITHUB_PATH"
-        # Initialize cancel.json with default state - this is the single source of truth for cancellation
-        echo '{"should_cancel": false, "message": ""}' > "$TARGET/cancel.json"
+        mkdir -p "$TARGET/auto_triage/data/config" "$TARGET/auto_triage/logs" "$TARGET/auto_triage/output"
+        # Create symlinks early so paths work before setup_triage_dirs runs.
+        # setup_triage_dirs will safely update these symlinks (ln -sfn) if they already exist.
+        ln -sfn auto_triage/data "$TARGET/data"
+        ln -sfn auto_triage/logs "$TARGET/logs"
+        ln -sfn auto_triage/output "$TARGET/output"
+        echo '{"should_cancel": false, "message": ""}' > "$TARGET/auto_triage/data/config/cancel.json"
 
     - name: Find boundaries
       if: inputs.slack-test-only != 'true'
@@ -66,7 +71,7 @@ runs:
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
         # Check cancel state
-        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
           echo "Skipping: cancellation requested"
           exit 0
         fi
@@ -85,7 +90,7 @@ runs:
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
         # Check cancel state
-        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
           echo "Skipping: cancellation requested"
           exit 0
         fi
@@ -98,7 +103,7 @@ runs:
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
         # Check cancel state
-        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
           echo "Skipping: cancellation requested"
           exit 0
         fi
@@ -118,7 +123,7 @@ runs:
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
         # Check cancel state
-        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
           echo "Skipping: cancellation requested"
           exit 0
         fi
@@ -132,7 +137,7 @@ runs:
         set -uo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
         # Check cancel state
-        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
           echo "Skipping: cancellation requested"
           exit 0
         fi
@@ -146,7 +151,7 @@ runs:
           "${{ inputs.job-name }}" \
           ci; then
           echo "filter_triage.sh failed, setting cancellation flag"
-          jq -n '{should_cancel: true, message: "Filter triage step failed unexpectedly. Check logs for details."}' > cancel.json
+          jq -n '{should_cancel: true, message: "Filter triage step failed unexpectedly. Check logs for details."}' > data/config/cancel.json
         fi
       env:
         # Use TESTING_COPILOT_PAT for Copilot CLI authentication
@@ -161,7 +166,7 @@ runs:
       run: |
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
-        CANCEL_FILE="cancel.json"
+        CANCEL_FILE="data/config/cancel.json"
         # Only write explanation if cancellation was requested
         if [ ! -f "$CANCEL_FILE" ] || [ "$(jq -r '.should_cancel // false' "$CANCEL_FILE")" != "true" ]; then
           echo "No cancellation requested, skipping"
@@ -188,7 +193,7 @@ runs:
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
         # Check cancel state
-        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
           echo "Skipping: cancellation requested"
           exit 0
         fi
@@ -208,7 +213,7 @@ runs:
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
         # Check cancel state
-        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
           echo "Skipping: cancellation requested"
           exit 0
         fi
@@ -231,7 +236,7 @@ runs:
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
         # Check cancel state
-        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
           echo "Skipping: cancellation requested"
           exit 0
         fi
@@ -250,7 +255,7 @@ runs:
         set -euo pipefail
         cd "${GITHUB_WORKSPACE}/.auto_triage"
         # Check cancel state
-        if [ -f cancel.json ] && [ "$(jq -r '.should_cancel // false' cancel.json)" = "true" ]; then
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
           echo "Skipping: cancellation requested"
           exit 0
         fi
@@ -285,7 +290,7 @@ runs:
         set -euo pipefail
         TARGET="${GITHUB_WORKSPACE}/.auto_triage/output"
         mkdir -p "$TARGET"
-        cp "${{ github.action_path }}/auto_triage/sample_slack_message.json" "$TARGET/slack_message.json"
+        cp "${{ github.action_path }}/auto_triage/data/examples/sample_slack_message.json" "$TARGET/slack_message.json"
 
     - name: Debug Slack send configuration
       if: always()

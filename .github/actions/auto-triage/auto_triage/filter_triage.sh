@@ -41,7 +41,7 @@ if [ ! -s "$SUBJOB_RUNS_FILE" ]; then
     exit 1
 fi
 
-INSTRUCTIONS_FILE="${ROOT}/filter_instructions_for_llm.txt"
+INSTRUCTIONS_FILE="${ROOT}/instructions/filter_instructions_for_llm.txt"
 if [ ! -f "$INSTRUCTIONS_FILE" ]; then
     log_error "${INSTRUCTIONS_FILE} not found."
     exit 1
