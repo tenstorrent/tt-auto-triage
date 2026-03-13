@@ -30,6 +30,7 @@ CANCEL_FILE=".auto_triage/cancel.json"
 ERROR_MSG_FILE=".auto_triage/data/error_message.txt"
 SUBJOB_RUNS_FILE=".auto_triage/data/subjob_runs.json"
 JOB_OWNER_FILE=".auto_triage/data/job_owner.json"
+SANITY_CASE1_EXTRA_PING_ID="U0AK4BVCFM0"
 
 RUN_URL="https://github.com/${GITHUB_REPOSITORY:-owner/repo}/actions/runs/${GITHUB_RUN_ID:-0}"
 RUN_LABEL="full_report_link #${GITHUB_RUN_NUMBER:-$GITHUB_RUN_ID}"
@@ -146,6 +147,24 @@ TEXT=$(jq -r -f "$SCRIPT_DIR/slack_message.jq" \
   --arg allow_pings "${ALLOW_PINGS:-false}" \
   --arg job_owner_ping "$JOB_OWNER_PING" \
   "$MESSAGE_PATH")
+
+# Special-case ping for triage evaluation:
+# For Case 1 in sanity-tests, append an explicit RELEVANT DEVELOPERS ping
+# even though normal Case 1 formatting omits top-level relevant_developers.
+SHOULD_ADD_SANITY_CASE1_PING=$(jq -r --arg workflow_input "${WORKFLOW_NAME:-}" '
+  def lc: ascii_downcase;
+  (.case | tostring) as $case
+  | (if ($workflow_input | length) > 0 then $workflow_input else (.workflow_name // "") end | lc) as $workflow
+  | if $case == "1" and (($workflow | contains("sanity-tests"))) then
+      "true"
+    else
+      "false"
+    end
+' "$MESSAGE_PATH" 2>/dev/null || echo "false")
+
+if [ "$SHOULD_ADD_SANITY_CASE1_PING" = "true" ] && [[ "$TEXT" != *"<@${SANITY_CASE1_EXTRA_PING_ID}>"* ]]; then
+  TEXT="${TEXT}"$'\n'"*RELEVANT DEVELOPERS:* <@${SANITY_CASE1_EXTRA_PING_ID}>"
+fi
 
 if [ -z "$TEXT" ]; then
   echo "Parsed Slack message is empty; skipping notification."
