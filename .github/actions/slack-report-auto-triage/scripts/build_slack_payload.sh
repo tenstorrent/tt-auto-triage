@@ -155,8 +155,7 @@ SHOULD_ADD_SANITY_CASE1_PING=$(jq -r --arg workflow_input "${WORKFLOW_NAME:-}" '
   def lc: ascii_downcase;
   (.case | tostring) as $case
   | (if ($workflow_input | length) > 0 then $workflow_input else (.workflow_name // "") end | lc) as $workflow
-  | ((.failing_job_name // "") | lc) as $job
-  | if $case == "1" and (($workflow | contains("sanity-tests")) or ($job | contains("sanity-tests"))) then
+  | if $case == "1" and (($workflow | contains("sanity-tests"))) then
       "true"
     else
       "false"
