@@ -3,7 +3,7 @@ Auto Triage Playbook (LLM-Friendly)
 
 Mission
 -------
-Diagnose the current failing GitHub Actions subjob on `main`. Depending on the evidence, you must choose **exactly one** of the four cases below and produce the required outputs.
+Diagnose the current failing GitHub Actions subjob on `main`. Depending on the evidence, you must choose **exactly one** of the five cases below and produce the required outputs.
 
 **IMPORTANT: Job Name Reference**
 - The prompt above says "for workflow 'X' and job 'Y'" - use these exact values:
@@ -46,6 +46,12 @@ Slack Message Output
   - The `commits` array **must** contain an entry for every commit in `commit_info.json` (when `commit_info.json` is a JSON array), not just plausible ones. Commits that are clearly irrelevant should be given very low scores (often 0), but they must still appear with an explicit numeric score.
   - The `commits` array must be ordered in **descending** confidence (highest score at the top).
 - Populate commit objects with `hash`, `url`, `author`, `approvers`, `relevant_developers`, and `relevant_files`. When a field from the template does not apply to the chosen case (e.g., `commits` for Case 2 or Case 3), leave it as an empty array or omit it exactly as the template shows.
+- **Contact coverage requirement (all non-Case-3 outputs):** Make sure triage names three roles whenever they are identifiable from available metadata/logs:
+  1) the commit author, 2) the person who submitted/enqueued the PR into merge queue (queue submitter), and 3) the test owner/codeowner for the failing area.
+  - There is no dedicated `queue_submitter` JSON field. Represent queue submitters using existing people fields:
+    - For commit-based cases (1/4/5): include them in the commit `approvers` list (alongside reviewers), and mention them in `explanation.md` "Who to contact".
+    - For non-commit case 2: include them in top-level `relevant_developers` when a queue submitter can be determined from the likely offending PR(s).
+  - If queue submitter identity is unavailable, explicitly say so in `explanation.md` and continue without fabricating data.
 - **CRITICAL: `relevant_developers` rules - READ CAREFULLY:**
   - **`author` and `approvers`** (within commit objects): These are people who were directly involved in making the commit (the commit author and those who approved the PR).
   - **`relevant_developers`** (within commit objects or at top level): 
@@ -103,6 +109,7 @@ Shared Workflow (Main Analysis)
    - Before deciding on Case 1, your ranked list **must** contain exactly one remaining candidate with a very high score (above 95) and you **must** have written down why **every other commit** in the window both (a) has a lower confidence (strictly below 90) and (b) cannot reasonably cause the failure.
    - If any commit is still under-analyzed or only ruled out via shallow checks, you are not allowed to choose Case 1; treat the situation as Case 4 or Case 5 instead (Case 4 requires ≥2 well-motivated candidates with similar confidence, Case 5 is reserved for incomplete commit metadata).
 7. Contact planning: while you work, note commit authors, file owners (`git log`, `git blame`, `.github/CODEOWNERS`), and capture GitHub profile URLs for everyone you may need to ping. Use the metadata already present in `commit_info.json` whenever possible, and ensure that any ranked commit list you present in `explanation.md` includes both the numeric confidence scores and the rationale behind the ordering. In your final report, include a **markdown table** that lists **every commit in the window** (hash, brief description, and confidence score from 0 to 100), sorted from highest to lowest confidence, so humans can quickly see the full distribution of suspects.
+   - In addition, identify the PR merge-queue submitter ("who clicked submit/enqueue") for likely culprit PRs whenever possible. Prefer existing commit metadata first; if missing, query PR timeline/events with `gh api` (for example, inspect `added_to_merge_queue`/enqueue events) and record the responsible GitHub user in contacts.
 8. In your final report, include links to the last successful job run, the first failing job run, and every commit between them (use the compare URL and the commit metadata).
 
 Failure Evidence Rules
@@ -198,6 +205,14 @@ Toolbox Reference
     ```
     Uses the same schema as the batch downloader to fetch metadata for **one** commit at a time and append it to the specified JSON (default: `./data/commit_info.json`). Prefer this when a single problematic commit keeps causing batch downloads to fail so you can isolate it without corrupting the rest of the batch.
 
+13. **Lookup PR queue submitter (when needed for contacts)**
+    ```
+    gh api repos/tenstorrent/tt-metal/issues/<pr_number>/timeline
+    ```
+    - Use this only when queue submitter is not already present in commit metadata.
+    - Search timeline events for merge-queue enqueue actions (for example `added_to_merge_queue`) and capture the associated actor login/name.
+    - If no clear enqueue actor is found, document that limitation instead of guessing.
+
 Case 1 – Deterministic Failure With Identified Commit
 -----------------------------------------------------
 Trigger this case when:
@@ -289,7 +304,10 @@ Contact Guidance (All Cases)
 - Always recommend specific engineers to loop in. Order of preference:
   1. **Codeowners of files that need to be changed to fix the issue** (from `git log`, `git blame`, `.github/CODEOWNERS`). These are the people who should review/approve the fix.
   2. Identified culprit commit author(s) (Case 1) - include for attribution/context, but they may not be the right people to fix it.
-  3. Infra/test maintainers if Case 3 points outside tt-metal.
+  3. The PR merge-queue submitter (who enqueued/submitted the PR) for likely culprit commits/PRs.
+  4. Infra/test maintainers if Case 3 points outside tt-metal.
+- For commit-based cases, include merge-queue submitter(s) in commit `approvers` when known, and also mention them in `explanation.md` contacts.
+- For Case 3, do not force queue submitter lookup unless it materially helps the external/infra diagnosis.
 - **Important:** The `relevant_developers` field in `slack_message.json` should list codeowners who need to review the fix, NOT the commit author or approvers (those go in `author` and `approvers` fields).
 - If a commit author is *not* a member of the `tenstorrent` organization (`gh api orgs/tenstorrent/members/<login>` returns non-204), treat them as an external contributor: mention them for attribution, but prioritize approved reviewers inside the org for contact/escalation.
 - Provide both the best-known real name (if visible) and the GitHub handle, plus a hyperlink `https://github.com/<handle>`.
