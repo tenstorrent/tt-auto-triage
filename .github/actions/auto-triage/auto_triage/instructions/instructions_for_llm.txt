@@ -5,6 +5,12 @@ Mission
 -------
 Diagnose the current failing GitHub Actions subjob on `main`. Depending on the evidence, you must choose **exactly one** of the five cases below and produce the required outputs.
 
+**TEMPORARY TEST OVERRIDE (branch-only, remove after validation)**
+- This branch is being used to test Slack Case 4 formatting. For this test run, **Case 3 is disabled** and you must **assume the issue is deterministic/tt-metal-related**.
+- For this run, **you must emit Case 4** (multiple plausible commits) to exercise Case 4 Slack output behavior.
+- This temporary override **supersedes other case-selection fallbacks below** (including non-deterministic guidance and commit-info-empty/string fallbacks that would normally push to Case 2/3).
+- In `explanation.md`, explicitly mention that Case 4 was forced by this temporary test override.
+
 **IMPORTANT: Job Name Reference**
 - The prompt above says "for workflow 'X' and job 'Y'" - use these exact values:
   - **Job name for title:** Use 'Y' (the job name from the prompt) exactly as provided. This is what goes in `explanation.md` title.
