@@ -83,7 +83,9 @@ def commits_section(arr):
 
 # Main expression: build text from slack_message.json
 # Input: JSON from slack_message_path; args: run_url, run_label, job_name, workflow_name, auto_fix, allow_pings, job_owner_ping
-(if ((.commits | type) == "array" and (.commits | length) > 0) then true else false end) as $has_commits
+(.case | tostring) as $case
+| (if ((.commits | type) == "array" and (.commits | length) > 0) then true else false end) as $has_commits
+| ($case == "4") as $is_case4
 |
 (
   section_line("FULL REPORT"; "<\($run_url)|\($run_label)>")
@@ -93,15 +95,20 @@ def commits_section(arr):
   + section_line("FAILING RUN"; (if (.failing_run_url // "") != "" then "<\(.failing_run_url)|\(.failing_run_label // "latest failing run")>" else "" end))
   + section_line("SCENARIO"; .scenario)
   + section_code("FAILURE MESSAGE"; .failure_message)
-  + commits_section(.commits)
-  + (if ($has_commits and ((.case | tostring) == "5"))
+  + (if $is_case4 then "" else commits_section(.commits) end)
+  + (if $is_case4
+     # NOTE: ensure_case3_ping is used for multiple cases (3, 4, and others) to keep ping formatting consistent.
+     then section_people("RELEVANT DEVELOPERS"; ensure_case3_ping(.relevant_developers; .case); true)
+     elif ($has_commits and ($case == "5"))
      then section_people("RELEVANT DEVELOPERS"; ensure_case3_ping(.relevant_developers; .case); true)
      elif $has_commits
      then ""
      else section_people("RELEVANT DEVELOPERS"; ensure_case3_ping(.relevant_developers; .case); true)
     end)
+  + (if $is_case4 then section_line("SUMMARY"; .slack_message) else "" end)
+  + (if $is_case4 then section_line("NOTE"; "Could not identify a single high-confidence culprit commit.") else "" end)
   + section_line("NOTES"; .notes)
   + (if ($auto_fix // "") != "" then "\n*AUTO-FIX:* Draft PR created -> <\($auto_fix)|link>\n" else "" end)
-  + (if ($job_owner_ping != "") and ((.case | tostring) as $c | $c == "1" or $c == "2" or $c == "4") then "\n*JOB OWNER:* " + $job_owner_ping + "\n" else "" end)
+  + (if ($job_owner_ping != "") and (($case == "1") or ($case == "2") or ($case == "4")) then "\n*JOB OWNER:* " + $job_owner_ping + "\n" else "" end)
   + "\n---\n_DISCLAIMER: This analysis has been done by AI. Do not take the results as absolute truth since it has been inaccurate in the past._"
 ) | gsub("\n{3,}"; "\n\n")
