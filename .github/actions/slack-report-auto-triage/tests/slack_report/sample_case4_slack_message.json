@@ -1,0 +1,36 @@
+{
+  "workflow_name": "t3000-unit-tests",
+  "failing_job_name": "t3k llama3.2-11b-vision tests",
+  "failing_test_name": "ttnn/graph/test_partitioning::test_multi_chip_plan",
+  "failing_run_url": "https://github.com/org/repo/actions/runs/123",
+  "failing_run_label": "Run #456 (latest deterministic failure)",
+  "scenario": "Deterministic failure with multiple plausible commits",
+  "failure_message": "RuntimeError: partition plan emitted empty subgraph",
+  "case": "4",
+  "commits": [
+    {
+      "hash": "c3d9c9fe12ab4567de89f0123456abcd7890efab",
+      "url": "https://github.com/tenstorrent/tt-metal/commit/c3d9c9fe12ab4567de89f0123456abcd7890efab",
+      "author": {"name": "Ethan Zhao", "slack_id": "U04D4EXAMPLE"},
+      "approvers": [{"name": "graph-runtime-owners", "slack_id": "S06F6EXAMPLE"}],
+      "relevant_developers": [{"name": "Harper Singh", "slack_id": "U07G7EXAMPLE"}],
+      "relevant_files": ["ttnn/graph/src/partitioner.cpp"],
+      "confidence": 82
+    },
+    {
+      "hash": "db45e6f7a8b9c0d1e2f3a456b789c012def34567",
+      "url": "https://github.com/tenstorrent/tt-metal/commit/db45e6f7a8b9c0d1e2f3a456b789c012def34567",
+      "author": {"name": "Rosa Nguyen", "slack_id": "U08H8EXAMPLE"},
+      "approvers": [{"name": "graph-runtime-owners", "slack_id": "S06F6EXAMPLE"}],
+      "relevant_developers": [{"name": "Mateo Allen", "slack_id": "U09J9EXAMPLE"}],
+      "relevant_files": ["ttnn/graph/src/placement_validator.cpp"],
+      "confidence": 80
+    }
+  ],
+  "relevant_developers": [
+    {"name": "Graph Runtime Owners", "slack_id": "S10K0EXAMPLE"},
+    {"name": "Harper Singh", "slack_id": "U07G7EXAMPLE"}
+  ],
+  "notes": "Two graph commits are plausible suspects.",
+  "slack_message": "Graph partitioning crash appears deterministic but no single culprit stands out."
+}

@@ -16,6 +16,7 @@ source "$REPO_ROOT/testing_lib_files/test_harness.sh"
 BUILD_SCRIPT="$SCRIPTS_DIR/build_slack_payload.sh"
 SLACK_MESSAGE_JQ="$SCRIPTS_DIR/slack_message.jq"
 SAMPLE_MSG="$TEST_DIR/sample_slack_message.json"
+SAMPLE_CASE4_MSG="$TEST_DIR/sample_case4_slack_message.json"
 
 echo "=== payload_builder ==="
 
@@ -23,6 +24,7 @@ echo "=== payload_builder ==="
 assert "build_slack_payload.sh exists" [ -f "$BUILD_SCRIPT" ]
 assert "slack_message.jq exists" [ -f "$SLACK_MESSAGE_JQ" ]
 assert "sample_slack_message.json exists" [ -f "$SAMPLE_MSG" ]
+assert "sample_case4_slack_message.json exists" [ -f "$SAMPLE_CASE4_MSG" ]
 
 # -- Cancellation: with thread_ts, failing_run, error_msg ----------------------
 tmpdir=$(mktemp -d)
@@ -88,6 +90,34 @@ assert "Normal report contains FAILING TEST" [ -n "$(echo "$text3" | grep -F 'te
 assert "Normal report contains RELEVANT DEVELOPERS" [ -n "$(echo "$text3" | grep -F 'RELEVANT DEVELOPERS' || true)" ]
 assert "Normal report has no thread_ts" [ "$(echo "$payload3" | jq -r '.thread_ts // empty')" = "" ]
 assert "has_payload=true for normal" grep -q "has_payload=true" "$tmpdir/github_output"
+
+# -- Case 4 report: compact formatting and ping behavior -----------------------
+rm -rf "$tmpdir/.auto_triage"
+mkdir -p "$tmpdir/.auto_triage/output" "$tmpdir/.auto_triage/data"
+cp "$SAMPLE_CASE4_MSG" "$tmpdir/.auto_triage/output/slack_message.json"
+export MESSAGE_PATH="$tmpdir/.auto_triage/output/slack_message.json"
+export SLACK_TS=""
+export ALLOW_PINGS="true"
+rm -f "$tmpdir/github_output"
+
+cd "$tmpdir"
+bash "$BUILD_SCRIPT"
+cd - >/dev/null
+
+payload4=$(cat "$tmpdir/.auto_triage/slack_payload.json")
+text4=$(echo "$payload4" | jq -r '.text // empty')
+assert "Case 4 report has text" [ -n "$text4" ]
+assert "Case 4 contains failing test" [ -n "$(echo "$text4" | grep -F 'test_multi_chip_plan' || true)" ]
+assert "Case 4 includes compact caveat line" [ -n "$(echo "$text4" | grep -F 'Could not identify a single high-confidence culprit commit.' || true)" ]
+assert "Case 4 includes summary text" [ -n "$(echo "$text4" | grep -F 'no single culprit stands out' || true)" ]
+assert "Case 4 omits verbose commits section" [ -z "$(echo "$text4" | grep -F '*COMMITS:*' || true)" ]
+assert "Case 4 omits per-commit hash lines" [ -z "$(echo "$text4" | grep -F 'HASH:' || true)" ]
+assert "Case 4 omits approvers block" [ -z "$(echo "$text4" | grep -F 'APPROVERS:' || true)" ]
+assert "Case 4 omits confidence lines" [ -z "$(echo "$text4" | grep -F 'CONFIDENCE:' || true)" ]
+assert "Case 4 pings top-level relevant developers only" [ -n "$(echo "$text4" | grep -F '<@U07G7EXAMPLE>' || true)" ]
+assert "Case 4 does not ping commit author" [ -z "$(echo "$text4" | grep -F '<@U04D4EXAMPLE>' || true)" ]
+assert "Case 4 does not ping approver subteam" [ -z "$(echo "$text4" | grep -F '<!subteam^S06F6EXAMPLE' || true)" ]
+assert "Case 4 has no thread_ts" [ "$(echo "$payload4" | jq -r '.thread_ts // empty')" = "" ]
 
 # -- Empty/missing message path: has_payload=false ------------------------------
 export MESSAGE_PATH="$tmpdir/nonexistent.json"
