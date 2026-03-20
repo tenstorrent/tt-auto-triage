@@ -106,6 +106,13 @@
                 "confidence": 80
             }
         ],
+        "relevant_developers": [
+            {"name": "graph-analysis-sig", "slack_id": "S10K0EXAMPLE"}
+        ],
+        "relevant_files": [
+            "ttnn/graph/src/partitioner.cpp",
+            "ttnn/graph/src/placement_validator.cpp"
+        ],
         "slack_message": "Graph partitioning crash could stem from either c3d9c9f (empty subgraphs) or db45e6f (validator rejects duplicates). Need graph-runtime owners to inspect both diffs."
     },
     {
