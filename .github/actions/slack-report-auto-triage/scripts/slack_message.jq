@@ -97,6 +97,7 @@ def commits_section(arr):
   + section_code("FAILURE MESSAGE"; .failure_message)
   + (if $is_case4 then "" else commits_section(.commits) end)
   + (if $is_case4
+     # NOTE: ensure_case3_ping is used for multiple cases (3, 4, and others) to keep ping formatting consistent.
      then section_people("RELEVANT DEVELOPERS"; ensure_case3_ping(.relevant_developers; .case); true)
      elif ($has_commits and ($case == "5"))
      then section_people("RELEVANT DEVELOPERS"; ensure_case3_ping(.relevant_developers; .case); true)
