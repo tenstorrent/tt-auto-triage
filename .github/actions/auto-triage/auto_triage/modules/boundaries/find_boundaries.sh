@@ -15,7 +15,9 @@ source "$_MOD_FB_DIR/workflow_finder.sh"
 # shellcheck source=run_processor.sh
 source "$_MOD_FB_DIR/run_processor.sh"
 
-CUTOFF_COMMIT="${CUTOFF_COMMIT:-}"
+# Temporary branch-specific cutoff: ignore runs on commits newer than this SHA
+# unless explicitly overridden by environment.
+CUTOFF_COMMIT="${CUTOFF_COMMIT:-2c8c04797767af75c69c4bd8932b6392d042c93d}"
 
 if [ $# -lt 2 ]; then
     log_error "Missing required arguments"
