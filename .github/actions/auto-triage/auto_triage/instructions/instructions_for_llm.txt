@@ -93,6 +93,8 @@ Shared Workflow (Main Analysis)
    - `./auto_triage/data/commit_info.json` – every commit between the last success and the first deterministic failure. This may be an empty array or even a JSON string (for the "too many commits" fallback). Handle each possibility explicitly in your reasoning.
 2. Start by reading error_message.txt. Treat that deterministic error as the anchor. Using that error, and the knowledge of what test failed, determine what files and systems you believe are relevant in the failure. Specifically look through source files in tt-metal to determine likely sources of broken code. You must use these files to guide your analysis as you read through information on past commits.
    - **Hang/timeout augmentation (required when available):** If the run output shows markers such as `Timeout detected`, invocation of `hang_report.py`, invocation of `tt-triage.py`, `Hang report written to ...`, or similar variants with different timestamps/paths, treat this as a **hang-detection-assisted failure**. In this situation, do not stop at a generic timeout message; extract and use the detailed hang diagnostics (for example, `check_noc_status.py` failures, `dump_running_operations.py`, and aggregated kernel callstacks) as primary evidence for subsystem attribution.
+   - **Important source-of-truth rule:** Hang-analysis details are often present in **job logs** but missing from annotations. If annotations/error_message only show a generic timeout (or do not include `hang_report.py` / `tt-triage.py` markers), you **must download and inspect the full logs** for the same failing run before final case selection.
+   - For timeout-class failures, treating "timeout/hang detected" as the full signature without checking logs for tt-triage output is considered incomplete analysis.
    - The exact strings, timestamps, and file paths may vary by environment. Use fuzzy matching and reasoning (not strict exact-text matching) to decide whether hang detection ran.
    - When hang detection is present, explicitly summarize the high-signal checks (pass/fail), the first concrete failing diagnostic block, and how those diagnostics map to likely code paths in `./workspace/`.
 3. Then read commit_info.json; do **not** re-download runs unless the existing evidence is insufficient to choose a case.
@@ -124,6 +126,7 @@ Failure Evidence Rules
 - Treat infrastructure/setup issues (runner disconnects, missing deps, timeouts before tests) as non-deterministic and exclude them entirely from the run history. Only consider runs where the tests actually executed.
 - If a run triggers the tt-triage hang workflow (timeout + `hang_report.py` / `tt-triage.py` markers), treat the generated hang diagnostics as part of the test-level failure signature. A bare `hang detected`/`timeout` line is insufficient by itself when richer diagnostics are available.
 - For hang-detection-assisted failures, prioritize concrete outputs such as NOC mismatch counters, stalled operation tables, and kernel callstacks over generic timeout phrasing when deciding determinism, commit plausibility, and relevant files/owners.
+- If annotations contain only generic timeout text, you must use `./get_logs.sh` on the failing run and search those logs for hang-analysis output before concluding that no detailed diagnostics exist.
 - Anchor on the **most recent** run that executed the tests: its failure signature is the reference. Earlier runs only count as the start of a deterministic failure if they show the exact same test-level error.
 - If there is only one test-executing failure, or no earlier run repeats the same error, treat that lone failure as the entire signal.
 - If log archives lack the actual test output, assume that specific run is non-deterministic.
@@ -220,6 +223,8 @@ Toolbox Reference
     - Search timeline events for merge-queue enqueue actions (for example `added_to_merge_queue`) and capture the associated actor login/name.
     - If no clear enqueue actor is found, document that limitation instead of guessing.
 14. **Extract hang-detection diagnostics from logs (when timeout markers appear)**
+    - **Do not rely on annotations alone for this step.** Hang-report and tt-triage sections are frequently absent from annotations and only available in full logs.
+    - If the current evidence is "generic timeout" from annotations/error_message, run `./get_logs.sh <job_url>` for that same run first, then parse the downloaded logs.
     - First identify whether hang detection ran by searching downloaded logs for markers like:
       - `Timeout detected`
       - `hang_report.py`
