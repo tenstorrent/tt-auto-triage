@@ -92,6 +92,9 @@ Shared Workflow (Main Analysis)
    - `./auto_triage/data/error_message.txt` – the canonical deterministic error snippet (possibly empty).
    - `./auto_triage/data/commit_info.json` – every commit between the last success and the first deterministic failure. This may be an empty array or even a JSON string (for the "too many commits" fallback). Handle each possibility explicitly in your reasoning.
 2. Start by reading error_message.txt. Treat that deterministic error as the anchor. Using that error, and the knowledge of what test failed, determine what files and systems you believe are relevant in the failure. Specifically look through source files in tt-metal to determine likely sources of broken code. You must use these files to guide your analysis as you read through information on past commits.
+   - **Hang/timeout augmentation (required when available):** If the run output shows markers such as `Timeout detected`, invocation of `hang_report.py`, invocation of `tt-triage.py`, `Hang report written to ...`, or similar variants with different timestamps/paths, treat this as a **hang-detection-assisted failure**. In this situation, do not stop at a generic timeout message; extract and use the detailed hang diagnostics (for example, `check_noc_status.py` failures, `dump_running_operations.py`, and aggregated kernel callstacks) as primary evidence for subsystem attribution.
+   - The exact strings, timestamps, and file paths may vary by environment. Use fuzzy matching and reasoning (not strict exact-text matching) to decide whether hang detection ran.
+   - When hang detection is present, explicitly summarize the high-signal checks (pass/fail), the first concrete failing diagnostic block, and how those diagnostics map to likely code paths in `./workspace/`.
 3. Then read commit_info.json; do **not** re-download runs unless the existing evidence is insufficient to choose a case.
 4. If you absolutely need additional logs or metadata, justify the cost clearly in `explanation.md` and stop as soon as you have enough data. Infra/setup failures identified by the filter stage must remain excluded from your determinism logic.
 5. Determine whether tt-metal commits plausibly explain the failure:
@@ -119,6 +122,8 @@ Failure Evidence Rules
 - **Non-deterministic failures are valid and acceptable findings.** If failures appear random, inconsistent, or infrastructure-related, choose Case 3. Do not force a deterministic explanation when none exists.
 - Repeated identical **test** errors across runs strongly indicate determinism but are not strictly required for Case 1. Use your judgment: if code diffs clearly explain the failure, you may proceed with a single run.
 - Treat infrastructure/setup issues (runner disconnects, missing deps, timeouts before tests) as non-deterministic and exclude them entirely from the run history. Only consider runs where the tests actually executed.
+- If a run triggers the tt-triage hang workflow (timeout + `hang_report.py` / `tt-triage.py` markers), treat the generated hang diagnostics as part of the test-level failure signature. A bare `hang detected`/`timeout` line is insufficient by itself when richer diagnostics are available.
+- For hang-detection-assisted failures, prioritize concrete outputs such as NOC mismatch counters, stalled operation tables, and kernel callstacks over generic timeout phrasing when deciding determinism, commit plausibility, and relevant files/owners.
 - Anchor on the **most recent** run that executed the tests: its failure signature is the reference. Earlier runs only count as the start of a deterministic failure if they show the exact same test-level error.
 - If there is only one test-executing failure, or no earlier run repeats the same error, treat that lone failure as the entire signal.
 - If log archives lack the actual test output, assume that specific run is non-deterministic.
@@ -214,6 +219,18 @@ Toolbox Reference
     - Use this only when queue submitter is not already present in commit metadata.
     - Search timeline events for merge-queue enqueue actions (for example `added_to_merge_queue`) and capture the associated actor login/name.
     - If no clear enqueue actor is found, document that limitation instead of guessing.
+14. **Extract hang-detection diagnostics from logs (when timeout markers appear)**
+    - First identify whether hang detection ran by searching downloaded logs for markers like:
+      - `Timeout detected`
+      - `hang_report.py`
+      - `tt-triage.py`
+      - `Hang report written to`
+    - Then capture and summarize the diagnostic sections emitted by tt-triage, especially:
+      - `check_noc_status.py` (including mismatch-state details/counters),
+      - `dump_running_operations.py`,
+      - `dump_aggregated_callstacks.py`,
+      - and any other failing `check_*.py` blocks.
+    - Use these sections to identify implicated subsystems/files and to avoid classifying the issue as "generic timeout" when the hang report already contains a specific signal.
 
 Case 1 – Deterministic Failure With Identified Commit
 -----------------------------------------------------
