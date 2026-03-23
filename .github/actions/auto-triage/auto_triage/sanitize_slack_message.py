@@ -63,6 +63,19 @@ def require_string(value, path, allow_empty=False):
     return value
 
 
+def normalize_case_value(value):
+    """
+    Canonicalize case labels to "1".."5".
+    Assumes there is a single relevant case digit in the string
+    (e.g. "4" or "Case 4").
+    """
+    normalized = require_string(value, "case")
+    digits = re.findall(r"[1-5]", normalized)
+    if not digits:
+        raise ValueError("case must contain one of: 1, 2, 3, 4, 5")
+    return digits[0]
+
+
 def normalize_identity_fields(person: dict) -> None:
     """Trim whitespace and strip leading @ for names/logins/slack IDs."""
     if "name" in person and person["name"] is not None:
@@ -165,7 +178,11 @@ def validate_commit(commit, index):
 
 def validate_payload(payload):
     require_type(payload, dict, "root")
-    for key in ("case", "scenario", "failure_message", "slack_message"):
+    if "case" not in payload:
+        raise ValueError("Field 'case' is required at the top level")
+    payload["case"] = normalize_case_value(payload["case"])
+
+    for key in ("scenario", "failure_message", "slack_message"):
         if key not in payload:
             raise ValueError(f"Field '{key}' is required at the top level")
         require_string(payload[key], key)
