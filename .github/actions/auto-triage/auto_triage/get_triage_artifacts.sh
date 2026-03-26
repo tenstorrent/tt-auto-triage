@@ -1,25 +1,12 @@
 #!/bin/bash
 #
-# Download tt-triage artifacts (triage output and debug bus signals) for a
-# GitHub Actions job that experienced a card hang.
-#
-# Usage:
-#   ./get_triage_artifacts.sh <job_url> [output_directory]
-#
-# Example:
-#   ./get_triage_artifacts.sh \
-#     https://github.com/tenstorrent/tt-metal/actions/runs/23559518732/job/65883041234
-#
-# Artifacts are saved to <output_directory>/hang_triage/ (default: auto_triage/data/hang_triage/).
-# The script looks for artifacts named:
-#   - triage_output_<job_id>     (full tt-triage stdout+stderr capture)
-#   - debug_bus_signals_<job_id> (structured JSON debug bus signal groups)
-#
-# If no matching artifacts are found the script exits 0 with a warning — the
-# hang may not have produced artifacts (e.g., tt-triage crashed before writing).
+# Download tt-triage artifacts for a failing job URL.
+# Writes canonical files to: <output_directory>/hang_triage/
+#   - triage_output.txt
+#   - debug_bus_signal_groups.json
 #
 
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
@@ -36,11 +23,12 @@ fi
 
 JOB_URL="$1"
 OUTPUT_BASE="${2:-auto_triage/data}"
+DEST_DIR="${OUTPUT_BASE%/}/hang_triage"
 
 check_command gh jq unzip
 
 if ! parse_job_url "$JOB_URL"; then
-    log_error "Unable to parse job URL. Expected: https://github.com/<owner>/<repo>/actions/runs/<run_id>/job/<job_id>"
+    log_error "Invalid job URL: $JOB_URL"
     exit 1
 fi
 
@@ -50,108 +38,79 @@ export AT_OWNER_REPO="${_owner}/${_repo}"
 RUN_ID="$_run_id"
 JOB_ID="$_job_id"
 
-DEST_DIR="${OUTPUT_BASE%/}/hang_triage"
 rm -rf "$DEST_DIR"
 mkdir -p "$DEST_DIR"
 
-log_info "Listing artifacts for run ${RUN_ID}..."
-ARTIFACTS_JSON=$(gh_api "repos/${AT_OWNER_REPO}/actions/runs/${RUN_ID}/artifacts" '{"artifacts":[]}')
-TOTAL_ARTIFACTS=$(echo "$ARTIFACTS_JSON" | jq '.total_count // 0')
-log_info "Found ${TOTAL_ARTIFACTS} artifact(s) in run"
-
-DOWNLOADED=0
-
-download_artifact() {
-    local artifact_id="$1"
-    local artifact_name="$2"
-    local dest_file="$3"
-
-    local tmp_zip
-    tmp_zip="$(mktemp --suffix=.zip 2>/dev/null || mktemp)"
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
-
-    if gh api "repos/${AT_OWNER_REPO}/actions/artifacts/${artifact_id}/zip" > "$tmp_zip" 2>/dev/null; then
-        if unzip -oq "$tmp_zip" -d "$tmp_dir" 2>/dev/null; then
-            # Artifacts may contain a single file or a directory; flatten into dest
-            local found_files=0
-            while IFS= read -r f; do
-                [ -f "$f" ] || continue
-                local basename
-                basename="$(basename "$f")"
-                cp "$f" "${DEST_DIR}/${basename}"
-                found_files=$((found_files + 1))
-            done < <(find "$tmp_dir" -type f -print 2>/dev/null)
-
-            if [ "$found_files" -gt 0 ]; then
-                log_success "Downloaded artifact '${artifact_name}' (${found_files} file(s))"
-                DOWNLOADED=$((DOWNLOADED + 1))
-            else
-                log_warn "Artifact '${artifact_name}' zip was empty"
-            fi
-        else
-            log_warn "Failed to unzip artifact '${artifact_name}'"
-        fi
-    else
-        log_warn "Failed to download artifact '${artifact_name}'"
-    fi
-
-    rm -f "$tmp_zip"
-    rm -rf "$tmp_dir"
+extract_check_run_id() {
+    local job_id="$1"
+    local check_url
+    check_url="$(get_job_info "$job_id" | jq -r '.check_run_url // empty' 2>/dev/null || true)"
+    echo "$check_url" | sed -n 's#.*/check-runs/\([0-9][0-9]*\).*#\1#p'
 }
 
-# Search for triage_output artifact (named triage_output_<check_run_id>)
-TRIAGE_OUTPUT_ID=$(echo "$ARTIFACTS_JSON" | jq -r \
-    --arg job_id "$JOB_ID" \
-    '.artifacts[] | select(.name == ("triage_output_" + $job_id)) | .id // empty' 2>/dev/null | head -1)
+download_named_artifact() {
+    local artifact_name="$1"
+    local output_file="$2"
+    local info zip_url tmp_zip tmp_dir src_file
 
-if [ -z "$TRIAGE_OUTPUT_ID" ]; then
-    # Fallback: search by prefix in case naming convention differs
-    TRIAGE_OUTPUT_ID=$(echo "$ARTIFACTS_JSON" | jq -r \
-        '.artifacts[] | select(.name | startswith("triage_output_")) | .id // empty' 2>/dev/null | head -1)
-fi
+    info="$(gh_api "repos/${AT_OWNER_REPO}/actions/runs/${RUN_ID}/artifacts?name=${artifact_name}" '{"artifacts":[]}' )"
+    zip_url="$(echo "$info" | jq -r '.artifacts[0].archive_download_url // empty' 2>/dev/null || true)"
+    if [ -z "$zip_url" ]; then
+        log_warn "Artifact not found: ${artifact_name}"
+        return 1
+    fi
 
-if [ -n "$TRIAGE_OUTPUT_ID" ]; then
-    TRIAGE_NAME=$(echo "$ARTIFACTS_JSON" | jq -r \
-        --arg id "$TRIAGE_OUTPUT_ID" \
-        '.artifacts[] | select(.id == ($id | tonumber)) | .name' 2>/dev/null)
-    download_artifact "$TRIAGE_OUTPUT_ID" "$TRIAGE_NAME" "triage_output.txt"
-else
-    log_warn "No triage_output artifact found for run ${RUN_ID}"
-fi
+    tmp_zip="$(mktemp --suffix=.zip 2>/dev/null || mktemp)"
+    tmp_dir="$(mktemp -d)"
+    if ! gh api "$zip_url" >"$tmp_zip" 2>/dev/null; then
+        log_warn "Failed to download artifact: ${artifact_name}"
+        rm -f "$tmp_zip"; rm -rf "$tmp_dir"
+        return 1
+    fi
+    if ! unzip -oq "$tmp_zip" -d "$tmp_dir" 2>/dev/null; then
+        log_warn "Failed to unzip artifact: ${artifact_name}"
+        rm -f "$tmp_zip"; rm -rf "$tmp_dir"
+        return 1
+    fi
 
-# Search for debug_bus_signals artifact (named debug_bus_signals_<check_run_id>)
-DEBUG_SIGNALS_ID=$(echo "$ARTIFACTS_JSON" | jq -r \
-    --arg job_id "$JOB_ID" \
-    '.artifacts[] | select(.name == ("debug_bus_signals_" + $job_id)) | .id // empty' 2>/dev/null | head -1)
+    src_file="$(find "$tmp_dir" -type f -print 2>/dev/null | LC_ALL=C sort | jq -R -s 'split("\n") | map(select(length>0)) | .[0] // empty' -r)"
+    if [ -z "$src_file" ]; then
+        log_warn "Artifact zip empty: ${artifact_name}"
+        rm -f "$tmp_zip"; rm -rf "$tmp_dir"
+        return 1
+    fi
 
-if [ -z "$DEBUG_SIGNALS_ID" ]; then
-    # Fallback: search by prefix (older naming used a UUID instead of job_id)
-    DEBUG_SIGNALS_ID=$(echo "$ARTIFACTS_JSON" | jq -r \
-        '.artifacts[] | select(.name | startswith("debug_bus_signals_")) | .id // empty' 2>/dev/null | head -1)
-fi
+    cp "$src_file" "${DEST_DIR}/${output_file}"
+    rm -f "$tmp_zip"; rm -rf "$tmp_dir"
+    log_success "Downloaded ${artifact_name} -> ${output_file}"
+    return 0
+}
 
-if [ -n "$DEBUG_SIGNALS_ID" ]; then
-    DEBUG_NAME=$(echo "$ARTIFACTS_JSON" | jq -r \
-        --arg id "$DEBUG_SIGNALS_ID" \
-        '.artifacts[] | select(.id == ($id | tonumber)) | .name' 2>/dev/null)
-    download_artifact "$DEBUG_SIGNALS_ID" "$DEBUG_NAME" "debug_bus_signal_groups.json"
-else
-    log_warn "No debug_bus_signals artifact found for run ${RUN_ID}"
-fi
+CHECK_RUN_ID="$(extract_check_run_id "$JOB_ID")"
+ARTIFACT_SUFFIX="${CHECK_RUN_ID:-$JOB_ID}"
+[ -z "$CHECK_RUN_ID" ] && log_warn "Could not resolve check_run_id; using job_id suffix (${JOB_ID})."
+
+TRIAGE_ARTIFACT="triage_output_${ARTIFACT_SUFFIX}"
+DEBUG_ARTIFACT="debug_bus_signals_${ARTIFACT_SUFFIX}"
+log_info "Target artifact names: ${TRIAGE_ARTIFACT}, ${DEBUG_ARTIFACT}"
+
+DOWNLOADED=0
+download_named_artifact "$TRIAGE_ARTIFACT" "triage_output.txt" && DOWNLOADED=$((DOWNLOADED + 1))
+download_named_artifact "$DEBUG_ARTIFACT" "debug_bus_signal_groups.json" && DOWNLOADED=$((DOWNLOADED + 1))
 
 if [ "$DOWNLOADED" -gt 0 ]; then
-    log_success "Hang triage artifacts saved to ${DEST_DIR}/"
-    ls -la "$DEST_DIR/"
+    log_success "Saved ${DOWNLOADED} hang artifact(s) to ${DEST_DIR}/"
 else
-    log_warn "No hang triage artifacts were downloaded. The hang may not have produced downloadable artifacts."
+    log_warn "No hang artifacts downloaded."
 fi
 
-cat > "${DEST_DIR}/metadata.txt" <<EOF
+cat >"${DEST_DIR}/metadata.txt" <<EOF
 Job URL: ${JOB_URL}
 Repository: ${AT_OWNER_REPO}
 Run ID: ${RUN_ID}
 Job ID: ${JOB_ID}
+Check run ID: ${CHECK_RUN_ID:-}
+Artifact suffix used: ${ARTIFACT_SUFFIX}
 Artifacts downloaded: ${DOWNLOADED}
 Downloaded: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 EOF

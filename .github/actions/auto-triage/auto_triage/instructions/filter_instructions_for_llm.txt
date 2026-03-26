@@ -199,7 +199,7 @@ Outputs
   - `triage_output.txt` — full tt-triage diagnostic output (callstacks, NOC status, broken cores, ARC heartbeat).
   - `debug_bus_signal_groups.json` — structured debug bus signal readings per core per device.
   - `metadata.txt` — download metadata (job URL, run ID, timestamp).
-  - Created by `./get_triage_artifacts.sh` when the error message contains `[HANG DETECTED]`.
+  - Created by `./get_triage_artifacts.sh` when hang markers appear (e.g. `[HANG DETECTED]` or `Card hang detected`) and the filter stage runs that script.
 
 What **Not** to Do
 ------------------

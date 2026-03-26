@@ -11,9 +11,16 @@ shellcheck auto_triage.sh filter_triage.sh lib/hang_detect.sh lib/instructions_p
 
 Fix any new warnings.
 
-## 2. Unit / harness tests (if present)
+## 2. Unit / harness tests
 
-Run the repo’s auto-triage test workflow or local harness (see `ARCHITECTURE.md` → Testing and `.github/workflows/test-auto-triage-lib.yml`). After edits, re-run so shell helpers still load and any mocked Copilot paths still pass.
+From `auto_triage/`:
+
+```bash
+./tests/lib/hang_detect_test.sh
+./tests/lib/instructions_pipeline_test.sh
+```
+
+Also run the full suite via `.github/workflows/test-auto-triage-lib.yml` (or `for t in tests/lib/*_test.sh; do bash "$t"; done`).
 
 ## 3. Trigger logic (`should_run_hang_followup_analysis`)
 
@@ -50,7 +57,7 @@ Both should succeed; line counts should be non-zero. Intentionally break a path 
 
 ## 6. End-to-end (recommended)
 
-- **Artifact download:** Run `./get_triage_artifacts.sh` with a real failing **tt-metal** job URL that uploaded `triage_output_*` and `debug_bus_signals_*`; confirm files under `data/hang_triage/`.
+- **Artifact download:** Run `./get_triage_artifacts.sh` with a real failing **tt-metal** job URL that uploaded `triage_output_*` and `debug_bus_signals_*`; confirm `hang_triage/triage_output.txt` and `hang_triage/debug_bus_signal_groups.json` (the script resolves **check run id** from the job API for exact name matching; see `get_triage_artifacts.sh` header).
 - **Workflow:** Dispatch or run the composite action on a branch with a hang-like failure (or synthetic `error_message.txt` + copied triage files in the triage workspace). Confirm:
   - Logs show **main** Copilot pass, then **follow-up** log line (`Copilot follow-up: hang_stage_instructions_for_llm.txt` or similar).
   - `output/explanation.md` ends with `## Hardware diagnostics (tt-triage)` when the hang follow-up ran.
