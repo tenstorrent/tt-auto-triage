@@ -8,4 +8,4 @@ Hang detection and triage artifacts (filter stage)
    ```
    Use `job_url` from the **most recent failing run** with the hang signature. Saves `triage_output.txt` and `debug_bus_signal_groups.json` under `./auto_triage/data/hang_triage/`. If the script warns (no artifacts), continue — triage text may still be in logs.
 
-6c. **Do not interpret triage output here** — only download. The main analysis prompt includes hang-specific reading guidance when applicable.
+6c. **Do not interpret triage output here** — only download. Interpretation runs in a separate follow-up pass when hang artifacts or markers are present.

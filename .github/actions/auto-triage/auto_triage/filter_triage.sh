@@ -1,8 +1,7 @@
 #!/bin/bash
 #
-# Filter stage driver: determines deterministic failures, gathers commits, and identifies commit ranges.
-# Usage:
-#   ./filter_triage.sh <workflow_name> <subjob_name> [ci-mode]
+# Filter stage: deterministic error + commit window. Prompt = filter.fragments (incl. hang download).
+# Usage: ./filter_triage.sh <workflow_name> <subjob_name> [ci-mode]
 #
 
 set -euo pipefail
@@ -15,7 +14,7 @@ source "$SCRIPT_DIR/modules/analysis/llm_runner.sh"
 # shellcheck source=lib/instructions_pipeline.sh
 source "$SCRIPT_DIR/lib/instructions_pipeline.sh"
 
-if [ $# -lt 2 ]; then
+if [[ $# -lt 2 ]]; then
     log_error "Usage: $0 <workflow_name> <subjob_name> [ci-mode]"
     exit 1
 fi
@@ -23,54 +22,45 @@ fi
 WORKFLOW="$1"
 SUBJOB="$2"
 CI_MODE="${3:-}"
-
 ROOT="$AUTO_TRIAGE_ROOT"
 FIND_SCRIPT="${ROOT}/modules/boundaries/find_boundaries.sh"
 
-log_info "Filter stage: preparing directories"
+log_info "Filter stage: setup"
 setup_triage_dirs "$ROOT"
 
-if [ "$CI_MODE" = "ci" ]; then
-    log_info "Filter stage CI mode detected, removing find_boundaries to prevent re-execution."
+if [[ "$CI_MODE" == "ci" ]]; then
+    log_info "CI mode: skip re-running find_boundaries"
     rm -f "$FIND_SCRIPT"
 fi
 
-log_info "Verifying boundary artifacts for filter stage"
 SUBJOB_RUNS_FILE="${CANON_DATA_DIR}/subjob_runs.json"
-if [ ! -s "$SUBJOB_RUNS_FILE" ]; then
-    log_error "Boundary metadata missing (expected at ${SUBJOB_RUNS_FILE})."
+if [[ ! -s "$SUBJOB_RUNS_FILE" ]]; then
+    log_error "Boundary metadata missing: $SUBJOB_RUNS_FILE"
     ls -l "$CANON_DATA_DIR"
     exit 1
 fi
 
 FILTER_MERGED=$(mktemp)
-if ! build_instruction_bundle "$FILTER_MERGED" "$ROOT" "instructions/pipelines/filter.fragments"; then
+if ! build_instruction_bundle "$FILTER_MERGED" "$ROOT" "$AT_PIPELINE_FILTER_FRAGMENTS"; then
     rm -f "$FILTER_MERGED"
     exit 1
 fi
 
-log_info "Launching GitHub Copilot CLI filter stage"
+log_info "Copilot: filter pass"
 if ! run_llm_analysis "$FILTER_MERGED" "$WORKFLOW" "$SUBJOB" "$CI_MODE"; then
     rm -f "$FILTER_MERGED"
     exit 1
 fi
 rm -f "$FILTER_MERGED"
 
-# De-duplicate commit_info.json entries after the filter LLM has finished.
-# This ensures that any overlapping batches or manual backfills in the filter
-# stage do not cause the main analysis LLM to see duplicate commits.
 COMMIT_FILE="${CANON_DATA_DIR}/commit_info.json"
-if [ -f "$COMMIT_FILE" ]; then
-    # Only attempt de-duplication when the file is a JSON array. If it is a
-    # string (e.g., "too many commits" fallback), leave it untouched.
-    if jq -e 'type == "array"' "$COMMIT_FILE" >/dev/null 2>&1; then
-        log_info "De-duplicating commit_info.json entries (filter stage)"
-        TMP_COMMIT_FILE="$(mktemp)"
-        if jq 'unique_by(.commit // .commit_short // .commit_sha // "")' "$COMMIT_FILE" > "$TMP_COMMIT_FILE" 2>/dev/null; then
-            mv "$TMP_COMMIT_FILE" "$COMMIT_FILE"
-        else
-            log_warn "Failed to de-duplicate commit_info.json; leaving original file unchanged."
-            rm -f "$TMP_COMMIT_FILE" || true
-        fi
+if [[ -f "$COMMIT_FILE" ]] && jq -e 'type == "array"' "$COMMIT_FILE" &>/dev/null; then
+    log_info "De-duplicating commit_info.json"
+    TMP="$(mktemp)"
+    if jq 'unique_by(.commit // .commit_short // .commit_sha // "")' "$COMMIT_FILE" >"$TMP" 2>/dev/null; then
+        mv "$TMP" "$COMMIT_FILE"
+    else
+        rm -f "$TMP"
+        log_warn "commit_info.json de-dupe skipped"
     fi
 fi

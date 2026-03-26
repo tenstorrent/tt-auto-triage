@@ -1,8 +1,7 @@
 #!/bin/bash
 #
-# instructions_pipeline.sh — build concatenated prompts and run manifest-driven follow-ups.
-#
-# Usage: source after lib/config.sh (for log_* and CANON_DATA_DIR) and modules/analysis/llm_runner.sh.
+# Concatenate instruction fragments (*.fragments) and run optional follow-up Copilot passes
+# (followups.manifest). Source after config.sh + llm_runner.sh.
 #
 
 if [ -n "${_AUTO_TRIAGE_INSTRUCTIONS_PIPELINE_LOADED:-}" ]; then
@@ -14,93 +13,77 @@ _IP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$_IP_DIR/common.sh"
 
-# Trim leading / trailing whitespace (no external commands).
-_ip_trim() {
+# Paths are relative to the auto_triage/ root (directory containing instructions/ and lib/).
+AT_PIPELINE_FILTER_FRAGMENTS="instructions/pipelines/filter.fragments"
+AT_PIPELINE_MAIN_FRAGMENTS="instructions/pipelines/main.fragments"
+AT_PIPELINE_FOLLOWUPS_MANIFEST="instructions/pipelines/followups.manifest"
+
+_trim() {
     local s="$1"
     s="${s#"${s%%[![:space:]]*}"}"
     s="${s%"${s##*[![:space:]]}"}"
     printf '%s' "$s"
 }
 
-# Concatenate instruction fragments listed in a manifest into out_file.
-# manifest_rel is relative to root (e.g. instructions/pipelines/main.fragments).
-# Returns 1 if a listed file is missing.
+# Concatenate files listed in manifest_rel (one relative path per line; # comments ok).
 build_instruction_bundle() {
-    local out_file="$1"
-    local root="$2"
-    local manifest_rel="$3"
+    local out_file="$1" root="$2" manifest_rel="$3"
     local manifest="${root}/${manifest_rel}"
 
-    if [ ! -f "$manifest" ]; then
-        log_error "Instruction manifest not found: $manifest"
-        return 1
-    fi
+    [[ -f "$manifest" ]] || { log_error "Missing manifest: $manifest"; return 1; }
 
     : > "$out_file"
-    local line relpath abs
-    while IFS= read -r line || [ -n "$line" ]; do
+    local line abs
+    while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line%%#*}"
-        line="$(_ip_trim "$line")"
-        [ -z "$line" ] && continue
-        relpath="$line"
-        abs="${root}/${relpath}"
-        if [ ! -f "$abs" ]; then
-            log_error "Instruction fragment missing: $abs (manifest $manifest)"
+        line="$(_trim "$line")"
+        [[ -z "$line" ]] && continue
+        abs="${root}/${line}"
+        if [[ ! -f "$abs" ]]; then
+            log_error "Missing fragment: $abs (from $manifest)"
             return 1
         fi
         cat "$abs" >> "$out_file"
-    done < "$manifest"
+    done <"$manifest"
 }
 
-# Run conditional follow-up Copilot passes from followups.manifest.
-# manifest_rel is relative to root (e.g. instructions/pipelines/followups.manifest).
-# Trigger names must be safe shell identifiers; only declared functions are invoked.
+# For each followups.manifest row: trigger_name rest_of_line_is_path → if trigger(data_dir)
+# succeeds, run Copilot on that instruction file. Follow-up failures are warnings only.
 run_instruction_followups() {
-    local root="$1"
-    local workflow="$2"
-    local subjob="$3"
-    local ci_mode="$4"
-    local manifest_rel="$5"
+    local root="$1" workflow="$2" subjob="$3" ci_mode="$4" manifest_rel="$5"
     local manifest="${root}/${manifest_rel}"
 
-    [ -f "$manifest" ] || return 0
+    [[ -f "$manifest" ]] || return 0
 
     local raw line trigger relpath abs
-    while IFS= read -r raw || [ -n "$raw" ]; do
+    while IFS= read -r raw || [[ -n "$raw" ]]; do
         line="${raw%%#*}"
-        line="$(_ip_trim "$line")"
-        [ -z "$line" ] && continue
+        line="$(_trim "$line")"
+        [[ -z "$line" ]] && continue
 
-        # First shell identifier, then any whitespace, then path (rest of line; may contain spaces).
+        # trigger + whitespace + path (path may contain spaces)
         if ! [[ "$line" =~ ^([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]+(.+)$ ]]; then
-            log_warn "Skipping malformed followups.manifest line (need: trigger then whitespace then path): $line"
+            log_warn "followups.manifest: bad line (want: trigger path): $line"
             continue
         fi
         trigger="${BASH_REMATCH[1]}"
-        relpath="$(_ip_trim "${BASH_REMATCH[2]}")"
-        if [ -z "$relpath" ]; then
-            log_warn "Skipping followups.manifest line with empty path: $line"
-            continue
-        fi
-        if ! [[ "$trigger" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-            log_warn "Skipping follow-up with invalid trigger name: $trigger"
-            continue
-        fi
-        if ! declare -F "$trigger" >/dev/null 2>&1; then
-            log_warn "Follow-up trigger not defined: $trigger (source it from lib/followup_triggers.sh)"
+        relpath="$(_trim "${BASH_REMATCH[2]}")"
+        [[ -n "$relpath" ]] || continue
+
+        if ! declare -F "$trigger" &>/dev/null; then
+            log_warn "followups.manifest: unknown trigger '$trigger' (define it and source from auto_triage.sh)"
             continue
         fi
 
         abs="${root}/${relpath}"
-        if ! "$trigger" "$CANON_DATA_DIR"; then
-            continue
-        fi
-        if [ ! -f "$abs" ]; then
-            log_warn "Follow-up triggered ($trigger) but instruction file missing: $abs"
+        "$trigger" "$CANON_DATA_DIR" || continue
+        if [[ ! -f "$abs" ]]; then
+            log_warn "followups.manifest: trigger $trigger fired but missing file $abs"
             continue
         fi
 
-        log_info "Launching GitHub Copilot CLI (follow-up: ${relpath##*/})"
-        run_llm_analysis "$abs" "$workflow" "$subjob" "$ci_mode" || log_warn "Follow-up pass failed (${relpath##*/}); earlier outputs kept."
-    done < "$manifest"
+        log_info "Copilot follow-up: ${relpath##*/}"
+        run_llm_analysis "$abs" "$workflow" "$subjob" "$ci_mode" ||
+            log_warn "Follow-up failed (${relpath##*/}); main outputs unchanged."
+    done <"$manifest"
 }

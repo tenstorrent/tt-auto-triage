@@ -1,25 +1,25 @@
 # Instruction pipelines
 
-## Filter and main passes (`*.fragments`)
+## `*.fragments` (filter + main)
 
-Each line is a path **relative to the `auto_triage/` root** (the directory that contains `instructions/` and `lib/`).
+One path per line, **relative to `auto_triage/`** (the tree with `instructions/` and `lib/`). Blank lines and `#` comments are ignored.
 
-- **`filter.fragments`** — files concatenated in order for `filter_triage.sh` (single Copilot call).
-- **`main.fragments`** — files concatenated in order for the main `auto_triage.sh` Copilot call.
+| File | Used by |
+|------|---------|
+| `filter.fragments` | `filter_triage.sh` |
+| `main.fragments` | `auto_triage.sh` |
 
-Lines starting with `#` and blank lines are ignored. To add another analysis hook at filter time (similar to hangs), add a new instruction file under `instructions/` and append its path here.
+To extend: add an instruction file under `instructions/` and append its path to the right manifest.
 
-## Conditional follow-ups (`followups.manifest`)
+## `followups.manifest` (after main pass)
 
-Runs **after** the main pass, each as its **own** Copilot invocation when the trigger succeeds.
+Each matching trigger runs a **separate** Copilot call.
 
-Format: **trigger**, then **any whitespace** (spaces, tabs, etc.), then **instruction path** (the rest of the line, trimmed; can include spaces if your paths ever need them).
+**Format:** `trigger_name` + whitespace + instruction path (rest of line, trimmed).
 
-```text
-<trigger_function>  <instruction_path>
-```
+- **Trigger** — bash function `trigger_name "$data_dir"`; exit **0** to run the follow-up. Define in `lib/*.sh` and **source from `auto_triage.sh`** (see `hang_detect.sh`).
+- **Path** — relative to `auto_triage/`; file must exist when the trigger fires.
 
-- **`trigger_function`** — a bash function name. It is called as `trigger_function "$data_dir"` and must return **0** to run the follow-up. Define triggers in small `lib/*_followup.sh` modules and **source them from `lib/followup_triggers.sh`** so `auto_triage.sh` does not need edits.
-- **`instruction_path`** — relative to the `auto_triage/` root; file must exist when the trigger fires.
+Manifest paths are set in `lib/instructions_pipeline.sh` (`AT_PIPELINE_*`).
 
-Add a new row for a new follow-up type (e.g. performance regression). Implement `should_run_myfeature_followup_analysis` and source its file from `followup_triggers.sh`.
+**Verification:** see [TESTING.md](TESTING.md).

@@ -19,7 +19,7 @@ Order and conditional passes are driven by manifests under `instructions/pipelin
 
 - **`filter.fragments`** — paths concatenated for the filter-stage Copilot call (`build_instruction_bundle` in `lib/instructions_pipeline.sh`).
 - **`main.fragments`** — paths concatenated for the main Copilot call.
-- **`followups.manifest`** — `trigger_function` then whitespace then instruction path (rest of line); each matching trigger runs an extra `run_llm_analysis`. Triggers are defined in `lib/*` and sourced from `lib/followup_triggers.sh`.
+- **`followups.manifest`** — `trigger_function` then whitespace then instruction path (rest of line); each matching trigger runs an extra `run_llm_analysis`. Define triggers in `lib/*.sh` and **source them from `auto_triage.sh`** (see `hang_detect.sh`).
 
 ## Instruction files (fragments)
 

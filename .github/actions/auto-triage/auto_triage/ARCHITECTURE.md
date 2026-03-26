@@ -12,8 +12,7 @@ auto_triage/
 │   ├── common.sh           # Logging, path helpers, JSON utilities
 │   ├── config.sh           # Environment config, directory setup
 │   ├── github_api.sh       # GitHub API wrappers (gh CLI)
-│   ├── followup_triggers.sh # Sources all should_run_* follow-up predicates (see pipelines/)
-│   ├── hang_detect.sh      # Hang follow-up trigger (sourced via followup_triggers.sh)
+│   ├── hang_detect.sh      # Hang follow-up trigger (sourced from auto_triage.sh; see followups.manifest)
 │   ├── instructions_pipeline.sh  # Concatenate *.fragments; run followups.manifest
 │   ├── slack_api.sh        # Slack message formatting and posting
 │   └── validation.sh       # Input validation, SHA parsing, JSON checks
