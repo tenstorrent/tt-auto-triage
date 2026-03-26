@@ -106,7 +106,8 @@ get_workflow_id() {
 #
 get_workflow_runs() {
     local wf_id="$1" page="${2:-1}"
-    gh_api "repos/${AT_OWNER_REPO}/actions/workflows/${wf_id}/runs?branch=main&per_page=${AT_PER_PAGE}&page=${page}"
+    # TODO: revert to branch=main after E2E — hardcoded feature branch for tt-metal triage runs
+    gh_api "repos/${AT_OWNER_REPO}/actions/workflows/${wf_id}/runs?branch=dimitri%2Ftest-auto-triage&per_page=${AT_PER_PAGE}&page=${page}"
 }
 
 # ==============================================================================
