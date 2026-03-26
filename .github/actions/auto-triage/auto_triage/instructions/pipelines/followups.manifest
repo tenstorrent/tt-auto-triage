@@ -1,0 +1,6 @@
+# Optional extra Copilot passes after the main pass. One entry per line:
+#   <trigger_function> <instruction_path>
+# Use any whitespace between trigger and path (spaces/tabs). Path is the rest of the line (trimmed).
+# trigger_function must exist (see lib/followup_triggers.sh). Path is relative to auto_triage root.
+
+should_run_hang_followup_analysis instructions/hang_stage_instructions_for_llm.txt

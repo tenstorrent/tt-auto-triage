@@ -12,6 +12,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/config.sh"
 # shellcheck source=modules/analysis/llm_runner.sh
 source "$SCRIPT_DIR/modules/analysis/llm_runner.sh"
+# shellcheck source=lib/instructions_pipeline.sh
+source "$SCRIPT_DIR/lib/instructions_pipeline.sh"
 
 if [ $# -lt 2 ]; then
     log_error "Usage: $0 <workflow_name> <subjob_name> [ci-mode]"
@@ -41,15 +43,11 @@ if [ ! -s "$SUBJOB_RUNS_FILE" ]; then
     exit 1
 fi
 
-FILTER_BASE="${ROOT}/instructions/filter_instructions_for_llm.txt"
-FILTER_HANG="${ROOT}/instructions/filter_hang_instructions_for_llm.txt"
-if [ ! -f "$FILTER_BASE" ] || [ ! -f "$FILTER_HANG" ]; then
-    log_error "Filter instructions missing: need $FILTER_BASE and $FILTER_HANG"
+FILTER_MERGED=$(mktemp)
+if ! build_instruction_bundle "$FILTER_MERGED" "$ROOT" "instructions/pipelines/filter.fragments"; then
+    rm -f "$FILTER_MERGED"
     exit 1
 fi
-
-FILTER_MERGED=$(mktemp)
-cat "$FILTER_BASE" "$FILTER_HANG" > "$FILTER_MERGED"
 
 log_info "Launching GitHub Copilot CLI filter stage"
 if ! run_llm_analysis "$FILTER_MERGED" "$WORKFLOW" "$SUBJOB" "$CI_MODE"; then

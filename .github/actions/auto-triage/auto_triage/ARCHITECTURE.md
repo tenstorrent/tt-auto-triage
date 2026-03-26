@@ -12,7 +12,9 @@ auto_triage/
 │   ├── common.sh           # Logging, path helpers, JSON utilities
 │   ├── config.sh           # Environment config, directory setup
 │   ├── github_api.sh       # GitHub API wrappers (gh CLI)
-│   ├── hang_detect.sh      # Detect card hang for conditional hang LLM instructions
+│   ├── followup_triggers.sh # Sources all should_run_* follow-up predicates (see pipelines/)
+│   ├── hang_detect.sh      # Hang follow-up trigger (sourced via followup_triggers.sh)
+│   ├── instructions_pipeline.sh  # Concatenate *.fragments; run followups.manifest
 │   ├── slack_api.sh        # Slack message formatting and posting
 │   └── validation.sh       # Input validation, SHA parsing, JSON checks
 │
@@ -55,6 +57,11 @@ auto_triage/
 │   └── templates/          # Slack message templates
 │
 ├── instructions/           # LLM prompt instructions
+│   ├── pipelines/          # Manifests: which fragments to concat; conditional follow-ups
+│   │   ├── filter.fragments
+│   │   ├── main.fragments
+│   │   ├── followups.manifest
+│   │   └── README.md
 │   ├── compare_errors_instructions.txt
 │   ├── filter_instructions_for_llm.txt
 │   ├── filter_hang_instructions_for_llm.txt

@@ -2,7 +2,7 @@
 #
 # hang_detect.sh — detect hardware-hang signal for conditional LLM instructions.
 #
-# Usage: source from auto_triage.sh (after config.sh sets CANON_DATA_DIR).
+# Usage: sourced from lib/followup_triggers.sh (do not source directly from auto_triage.sh).
 #
 #   should_run_hang_followup_analysis <data_dir>
 #     Returns 0 if a second Copilot pass (hang_stage_instructions) should run.
