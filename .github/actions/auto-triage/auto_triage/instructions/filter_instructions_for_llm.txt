@@ -8,6 +8,7 @@ Identify the newest deterministic failure signature and gather the associated co
 Available Workspace
 -------------------
 - You are operating inside `.auto_triage/`.
+- This prompt includes a following section on **hardware hangs** — follow it after step 6 when applicable.
 - Run helper scripts from this directory (e.g., `./get_logs.sh`, `./download_data_between_commits.sh`).
 - Source files live under `./workspace/`.
 - Data artifacts should be written to `./auto_triage/data/` (also symlinked at `./data/`).
@@ -194,6 +195,11 @@ Outputs
   - Contains the deterministic failure excerpt (or is empty if determinism could not be established or failures are non-deterministic).
 - `./auto_triage/data/commit_download_status.json` (optional)
   - When present, this file documents whether commit metadata is **complete** or **partial**, along with counts and any known missing SHAs/PRs. The main analysis model will use this to decide whether full commit coverage exists (Cases 1/4) or whether it must fall back to the partial-information Case 5.
+- `./auto_triage/data/hang_triage/` (optional, only for hardware hangs)
+  - `triage_output.txt` — full tt-triage diagnostic output (callstacks, NOC status, broken cores, ARC heartbeat).
+  - `debug_bus_signal_groups.json` — structured debug bus signal readings per core per device.
+  - `metadata.txt` — download metadata (job URL, run ID, timestamp).
+  - Created by `./get_triage_artifacts.sh` when the error message contains `[HANG DETECTED]`.
 
 What **Not** to Do
 ------------------

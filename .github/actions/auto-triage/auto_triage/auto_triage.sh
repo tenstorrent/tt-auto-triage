@@ -12,6 +12,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/config.sh
 source "$SCRIPT_DIR/lib/config.sh"
+# shellcheck source=lib/hang_detect.sh
+source "$SCRIPT_DIR/lib/hang_detect.sh"
 # shellcheck source=modules/analysis/llm_runner.sh
 source "$SCRIPT_DIR/modules/analysis/llm_runner.sh"
 
@@ -48,14 +50,35 @@ FAIL_COUNT=$(jq 'if type=="array"
 log_info "runs recorded: $SUMMARY_COUNT"
 log_info "failures recorded: $FAIL_COUNT"
 
-INSTRUCTIONS_FILE="${ROOT}/instructions/instructions_for_llm.txt"
-if [ ! -f "$INSTRUCTIONS_FILE" ]; then
-    log_error "${INSTRUCTIONS_FILE} not found."
-    exit 1
-fi
+INSTRUCTIONS_BASE="${ROOT}/instructions/instructions_for_llm.txt"
+INSTRUCTIONS_FOOTER="${ROOT}/instructions/instructions_footer_for_llm.txt"
+INSTRUCTIONS_HANG_STAGE="${ROOT}/instructions/hang_stage_instructions_for_llm.txt"
+for f in "$INSTRUCTIONS_BASE" "$INSTRUCTIONS_FOOTER"; do
+    if [ ! -f "$f" ]; then
+        log_error "Required instructions file not found: $f"
+        exit 1
+    fi
+done
 
-log_info "Launching GitHub Copilot CLI"
-run_llm_analysis "$INSTRUCTIONS_FILE" "$WORKFLOW" "$SUBJOB" "$CI_MODE" || exit $?
+PROMPT_FILE=$(mktemp)
+cleanup_prompt() { rm -f "$PROMPT_FILE"; }
+trap cleanup_prompt EXIT
+
+cat "$INSTRUCTIONS_BASE" "$INSTRUCTIONS_FOOTER" > "$PROMPT_FILE"
+
+log_info "Launching GitHub Copilot CLI (main triage pass)"
+run_llm_analysis "$PROMPT_FILE" "$WORKFLOW" "$SUBJOB" "$CI_MODE" || exit $?
+trap - EXIT
+rm -f "$PROMPT_FILE"
+
+if should_run_hang_followup_analysis "$CANON_DATA_DIR"; then
+    if [ -f "$INSTRUCTIONS_HANG_STAGE" ]; then
+        log_info "Launching GitHub Copilot CLI (hang follow-up pass)"
+        run_llm_analysis "$INSTRUCTIONS_HANG_STAGE" "$WORKFLOW" "$SUBJOB" "$CI_MODE" || log_warn "Hang follow-up pass failed; main triage outputs kept."
+    else
+        log_warn "Hang indicators present but ${INSTRUCTIONS_HANG_STAGE} missing; skipping hang follow-up."
+    fi
+fi
 
 VERIFY_SCRIPT="${ROOT}/verify_commit_metadata.sh"
 if [ -x "$VERIFY_SCRIPT" ]; then

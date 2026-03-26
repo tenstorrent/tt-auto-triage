@@ -41,14 +41,22 @@ if [ ! -s "$SUBJOB_RUNS_FILE" ]; then
     exit 1
 fi
 
-INSTRUCTIONS_FILE="${ROOT}/instructions/filter_instructions_for_llm.txt"
-if [ ! -f "$INSTRUCTIONS_FILE" ]; then
-    log_error "${INSTRUCTIONS_FILE} not found."
+FILTER_BASE="${ROOT}/instructions/filter_instructions_for_llm.txt"
+FILTER_HANG="${ROOT}/instructions/filter_hang_instructions_for_llm.txt"
+if [ ! -f "$FILTER_BASE" ] || [ ! -f "$FILTER_HANG" ]; then
+    log_error "Filter instructions missing: need $FILTER_BASE and $FILTER_HANG"
     exit 1
 fi
 
+FILTER_MERGED=$(mktemp)
+cat "$FILTER_BASE" "$FILTER_HANG" > "$FILTER_MERGED"
+
 log_info "Launching GitHub Copilot CLI filter stage"
-run_llm_analysis "$INSTRUCTIONS_FILE" "$WORKFLOW" "$SUBJOB" "$CI_MODE" || exit $?
+if ! run_llm_analysis "$FILTER_MERGED" "$WORKFLOW" "$SUBJOB" "$CI_MODE"; then
+    rm -f "$FILTER_MERGED"
+    exit 1
+fi
+rm -f "$FILTER_MERGED"
 
 # De-duplicate commit_info.json entries after the filter LLM has finished.
 # This ensures that any overlapping batches or manual backfills in the filter

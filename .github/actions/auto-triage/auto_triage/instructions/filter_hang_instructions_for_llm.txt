@@ -1,0 +1,11 @@
+Hang detection and triage artifacts (filter stage)
+==================================================
+6a. **After saving the error message, check for a hardware hang.** Markers: `[HANG DETECTED]` or `Card hang detected` in the error text or CI logs. The device stopped responding; `tt-triage` runs automatically.
+
+6b. **If a hang is detected**, run:
+   ```
+   ./get_triage_artifacts.sh <job_url>
+   ```
+   Use `job_url` from the **most recent failing run** with the hang signature. Saves `triage_output.txt` and `debug_bus_signal_groups.json` under `./auto_triage/data/hang_triage/`. If the script warns (no artifacts), continue — triage text may still be in logs.
+
+6c. **Do not interpret triage output here** — only download. The main analysis prompt includes hang-specific reading guidance when applicable.

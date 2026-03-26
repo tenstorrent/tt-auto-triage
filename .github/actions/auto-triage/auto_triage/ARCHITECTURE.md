@@ -12,6 +12,7 @@ auto_triage/
 │   ├── common.sh           # Logging, path helpers, JSON utilities
 │   ├── config.sh           # Environment config, directory setup
 │   ├── github_api.sh       # GitHub API wrappers (gh CLI)
+│   ├── hang_detect.sh      # Detect card hang for conditional hang LLM instructions
 │   ├── slack_api.sh        # Slack message formatting and posting
 │   └── validation.sh       # Input validation, SHA parsing, JSON checks
 │
@@ -56,7 +57,10 @@ auto_triage/
 ├── instructions/           # LLM prompt instructions
 │   ├── compare_errors_instructions.txt
 │   ├── filter_instructions_for_llm.txt
-│   └── instructions_for_llm.txt
+│   ├── filter_hang_instructions_for_llm.txt
+│   ├── instructions_for_llm.txt
+│   ├── instructions_footer_for_llm.txt
+│   └── hang_stage_instructions_for_llm.txt
 │
 ├── tests/                  # Test suite (mirrors module structure)
 │   ├── lib/

@@ -1,0 +1,39 @@
+Hang follow-up (second Copilot pass — tt-triage)
+================================================
+
+Context
+-------
+Main auto-triage already produced `./output/explanation.md` and `./output/slack_message.json`. **Do not** re-bisect commits or change the chosen case in the main narrative unless you find a direct contradiction (rare).
+
+You are operating in the same `.auto_triage/` workspace as the main pass.
+
+Inputs
+------
+- `./output/explanation.md` — read in full before editing.
+- `./auto_triage/data/hang_triage/` — `triage_output.txt`, `debug_bus_signal_groups.json`, `metadata.txt` when present.
+- `./auto_triage/data/error_message.txt`
+- If triage files are missing, search `./auto_triage/logs/` (job-specific dirs) for `tt-triage` / hang output.
+
+Reading tt-triage (priority)
+----------------------------
+1. **check_arc** — Dead ARC → chip unresponsive; often infra/Case-3 style.
+2. **check_noc_status** — Sent vs acked mismatch → stuck or unreachable destination; note NOC0/NOC1.
+3. **dump_callstacks** / **dump_aggregated_callstacks** — BRISC (dataflow/NOC), NCRISC (I/O), TRISC0/1/2 (unpack/math/pack).
+4. **check_broken_components**, **dump_running_operations**, **dump_risc_debug_signals** / JSON artifact.
+
+Required actions
+----------------
+1. **Append** to `./output/explanation.md` a new final section:
+   `## Hardware diagnostics (tt-triage)`
+   Quote decisive lines (callstack, NOC, ARC). Tie findings to subsystem owners or paths already mentioned above. **Do not remove or rewrite** existing sections—only append.
+
+2. **Slack (optional but preferred):** If `./output/slack_message.json` exists, prepend **one short clause** to the `slack_message` string (e.g. “Hardware: NCRISC waiting on NOC … — ”) so the thread shows the hang angle; keep the rest of the string intact. Then run `./sanitize_slack_message.py ./output/slack_message.json` and fix the JSON if the sanitizer errors.
+
+3. If `./output/explanation.md` is missing, create it containing only the hang section and a note that the main pass produced no report.
+
+Toolbox
+-------
+```
+./get_triage_artifacts.sh <job_url> [output_directory]
+```
+Use only if `./data/hang_triage/` is empty and you have a `job_url` from `./data/subjob_runs.json`.
