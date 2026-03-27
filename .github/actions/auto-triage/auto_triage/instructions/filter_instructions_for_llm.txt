@@ -180,6 +180,7 @@ Special Cases
   - Write a JSON string to `commit_info.json`, for example: `"failure_limit_exceeded: more than 30 failed runs without a success; default to Case 2 or Case 3."`
   - This string instructs the main analysis to pick either Case 2 (if the error is deterministic and clearly tt-metal related) or Case 3 (if it appears external/non-deterministic).
 - If the workflow/job inputs were incorrect or no subjob could be found at all, set `data/config/cancel.json` with `message: "this run was invoked in error"` so downstream stages are skipped entirely.
+  - **Do not** use that cancel path when logs show the job ran real steps (checkout, tests, uploads) and then failed—extract `error_message.txt` and continue even if the failure text is vague (e.g. "Post-triage validation step failed").
 - **Partial commit downloads despite retries/manual backfill:** When specific commits cannot be retrieved even after the manual process above (API errors, permission denials, corrupted metadata), treat this as **partial but still useful** metadata.
   - **Do not** replace the JSON array with a string and **do not** discard successfully downloaded commits.
   - Instead, leave `commit_info.json` as a truncated array containing all commits whose metadata you were able to fetch, and populate `commit_download_status.json` (or an equivalent status file) with a descriptive message such as `"partial_commit_download: missing 9 of 36 commits due to GitHub API failures"`, including the missing PR numbers or SHAs when known.
