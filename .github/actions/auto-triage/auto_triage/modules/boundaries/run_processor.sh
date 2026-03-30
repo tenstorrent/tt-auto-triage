@@ -56,9 +56,8 @@ process_workflow_runs() {
     local max_job_pages="${MAX_JOB_PAGES:-20}"
     local base_url="${BASE_URL:-https://github.com/${repo}}"
 
-    # TODO: revert to main after E2E — hardcoded feature branch for tt-metal triage runs
-    local wf_branch="dimitri/test-auto-triage"
-    local wf_branch_enc="dimitri%2Ftest-auto-triage"
+    local wf_branch="main"
+    local wf_branch_enc="main"
 
     local page=1 processed=0
     local last_successful_run="" last_successful_run_id="" last_successful_commit="" last_successful_job_url=""

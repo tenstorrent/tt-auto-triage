@@ -14,7 +14,7 @@ source "$SCRIPT_DIR/modules/analysis/llm_runner.sh"
 # shellcheck source=lib/instructions_pipeline.sh
 source "$SCRIPT_DIR/lib/instructions_pipeline.sh"
 
-if [[ $# -lt 2 ]]; then
+if [ $# -lt 2 ]; then
     log_error "Usage: $0 <workflow_name> <subjob_name> [ci-mode]"
     exit 1
 fi
@@ -28,13 +28,13 @@ FIND_SCRIPT="${ROOT}/modules/boundaries/find_boundaries.sh"
 log_info "Filter stage: setup"
 setup_triage_dirs "$ROOT"
 
-if [[ "$CI_MODE" == "ci" ]]; then
+if [ "$CI_MODE" = "ci" ]; then
     log_info "CI mode: skip re-running find_boundaries"
     rm -f "$FIND_SCRIPT"
 fi
 
 SUBJOB_RUNS_FILE="${CANON_DATA_DIR}/subjob_runs.json"
-if [[ ! -s "$SUBJOB_RUNS_FILE" ]]; then
+if [ ! -s "$SUBJOB_RUNS_FILE" ]; then
     log_error "Boundary metadata missing: $SUBJOB_RUNS_FILE"
     ls -l "$CANON_DATA_DIR"
     exit 1
@@ -54,7 +54,7 @@ fi
 rm -f "$FILTER_MERGED"
 
 COMMIT_FILE="${CANON_DATA_DIR}/commit_info.json"
-if [[ -f "$COMMIT_FILE" ]] && jq -e 'type == "array"' "$COMMIT_FILE" &>/dev/null; then
+if [ -f "$COMMIT_FILE" ] && jq -e 'type == "array"' "$COMMIT_FILE" &>/dev/null; then
     log_info "De-duplicating commit_info.json"
     TMP="$(mktemp)"
     if jq 'unique_by(.commit // .commit_short // .commit_sha // "")' "$COMMIT_FILE" >"$TMP" 2>/dev/null; then

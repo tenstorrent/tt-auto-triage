@@ -16,7 +16,7 @@ source "$SCRIPT_DIR/modules/analysis/llm_runner.sh"
 # shellcheck source=lib/instructions_pipeline.sh
 source "$SCRIPT_DIR/lib/instructions_pipeline.sh"
 
-if [[ $# -lt 2 ]]; then
+if [ $# -lt 2 ]; then
     log_error "Usage: $0 <workflow_name> <subjob_name> [ci-mode]"
     exit 1
 fi
@@ -34,7 +34,7 @@ cd "$ROOT"
 
 log_info "Verifying boundary artifacts"
 SUBJOB_RUNS_FILE="${CANON_DATA_DIR}/subjob_runs.json"
-if [[ ! -s "$SUBJOB_RUNS_FILE" ]]; then
+if [ ! -s "$SUBJOB_RUNS_FILE" ]; then
     log_error "subjob_runs.json not found at $SUBJOB_RUNS_FILE"
     ls -l "$CANON_DATA_DIR"
     exit 1
@@ -60,6 +60,6 @@ rm -f "$PROMPT_FILE"
 run_instruction_followups "$ROOT" "$WORKFLOW" "$SUBJOB" "$CI_MODE" "$AT_PIPELINE_FOLLOWUPS_MANIFEST"
 
 VERIFY_SCRIPT="${ROOT}/verify_commit_metadata.sh"
-if [[ -x "$VERIFY_SCRIPT" ]] && ! "$VERIFY_SCRIPT"; then
+if [ -x "$VERIFY_SCRIPT" ] && ! "$VERIFY_SCRIPT"; then
     exit 1
 fi
