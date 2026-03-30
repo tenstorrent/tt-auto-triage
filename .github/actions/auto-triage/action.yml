@@ -3,7 +3,7 @@ name: auto-triage
 description: Run auto_triage automation with GitHub Copilot CLI and GitHub API access.
 inputs:
   workflow-name:
-    description: Workflow file name to inspect.
+    description: "Workflow name without .yaml/.yml extension (e.g., galaxy-quick). The action tries both extensions automatically."
     required: true
   job-name:
     description: Job/subjob name within the workflow.
