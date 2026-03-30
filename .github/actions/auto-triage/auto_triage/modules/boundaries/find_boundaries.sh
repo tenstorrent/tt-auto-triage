@@ -10,6 +10,8 @@ set -euo pipefail
 _MOD_FB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../lib/config.sh
 source "$_MOD_FB_DIR/../../lib/config.sh"
+# shellcheck source=../../lib/validation.sh
+source "$_MOD_FB_DIR/../../lib/validation.sh"
 # shellcheck source=workflow_finder.sh
 source "$_MOD_FB_DIR/workflow_finder.sh"
 # shellcheck source=run_processor.sh
@@ -28,6 +30,10 @@ fi
 WORKFLOW_NAME="$1"
 SUBJOB_NAME="$2"
 CUTOFF_COMMIT="${3:-${CUTOFF_COMMIT:-}}"
+
+if [ -n "$CUTOFF_COMMIT" ]; then
+    validate_commit_sha "$CUTOFF_COMMIT" "cutoff_commit"
+fi
 
 # normalize_hyphens(text) -> normalized string (Unicode dashes replaced with ASCII '-')
 # Replaces Unicode dash characters with ASCII hyphen via Python.
