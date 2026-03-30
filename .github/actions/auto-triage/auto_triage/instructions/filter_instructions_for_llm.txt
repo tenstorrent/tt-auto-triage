@@ -8,6 +8,7 @@ Identify the newest deterministic failure signature and gather the associated co
 Available Workspace
 -------------------
 - You are operating inside `.auto_triage/`.
+- This prompt includes a following section on **hardware hangs** — follow it after step 6 when applicable.
 - Run helper scripts from this directory (e.g., `./get_logs.sh`, `./download_data_between_commits.sh`).
 - Source files live under `./workspace/`.
 - Data artifacts should be written to `./auto_triage/data/` (also symlinked at `./data/`).
@@ -179,6 +180,7 @@ Special Cases
   - Write a JSON string to `commit_info.json`, for example: `"failure_limit_exceeded: more than 30 failed runs without a success; default to Case 2 or Case 3."`
   - This string instructs the main analysis to pick either Case 2 (if the error is deterministic and clearly tt-metal related) or Case 3 (if it appears external/non-deterministic).
 - If the workflow/job inputs were incorrect or no subjob could be found at all, set `data/config/cancel.json` with `message: "this run was invoked in error"` so downstream stages are skipped entirely.
+  - **Do not** use that cancel path when logs show the job ran real steps (checkout, tests, uploads) and then failed—extract `error_message.txt` and continue even if the failure text is vague (e.g. "Post-triage validation step failed").
 - **Partial commit downloads despite retries/manual backfill:** When specific commits cannot be retrieved even after the manual process above (API errors, permission denials, corrupted metadata), treat this as **partial but still useful** metadata.
   - **Do not** replace the JSON array with a string and **do not** discard successfully downloaded commits.
   - Instead, leave `commit_info.json` as a truncated array containing all commits whose metadata you were able to fetch, and populate `commit_download_status.json` (or an equivalent status file) with a descriptive message such as `"partial_commit_download: missing 9 of 36 commits due to GitHub API failures"`, including the missing PR numbers or SHAs when known.
@@ -194,6 +196,11 @@ Outputs
   - Contains the deterministic failure excerpt (or is empty if determinism could not be established or failures are non-deterministic).
 - `./auto_triage/data/commit_download_status.json` (optional)
   - When present, this file documents whether commit metadata is **complete** or **partial**, along with counts and any known missing SHAs/PRs. The main analysis model will use this to decide whether full commit coverage exists (Cases 1/4) or whether it must fall back to the partial-information Case 5.
+- `./auto_triage/data/hang_triage/` (optional, only for hardware hangs)
+  - `triage_output.txt` — full tt-triage diagnostic output (callstacks, NOC status, broken cores, ARC heartbeat).
+  - `debug_bus_signal_groups.json` — structured debug bus signal readings per core per device.
+  - `metadata.txt` — download metadata (job URL, run ID, timestamp).
+  - Created by `./get_triage_artifacts.sh` when hang markers appear (e.g. `[HANG DETECTED]` or `Card hang detected`) and the filter stage runs that script.
 
 What **Not** to Do
 ------------------

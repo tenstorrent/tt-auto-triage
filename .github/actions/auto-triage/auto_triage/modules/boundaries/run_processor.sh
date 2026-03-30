@@ -56,6 +56,9 @@ process_workflow_runs() {
     local max_job_pages="${MAX_JOB_PAGES:-20}"
     local base_url="${BASE_URL:-https://github.com/${repo}}"
 
+    local wf_branch="main"
+    local wf_branch_enc="main"
+
     local page=1 processed=0
     local last_successful_run="" last_successful_run_id="" last_successful_commit="" last_successful_job_url=""
     local first_failing_run="" first_failing_run_id="" first_failing_commit="" first_failing_job_url=""
@@ -66,7 +69,7 @@ process_workflow_runs() {
 
     while [ "$page" -le "$max_pages" ]; do
         local page_resp
-        page_resp=$(gh_api "repos/${repo}/actions/workflows/${WORKFLOW_ID}/runs?branch=main&per_page=${per_page}&page=${page}" "")
+        page_resp=$(gh_api "repos/${repo}/actions/workflows/${WORKFLOW_ID}/runs?branch=${wf_branch_enc}&per_page=${per_page}&page=${page}" "")
         if [ -z "$page_resp" ]; then
             if [ "$page" -eq 1 ]; then
                 write_cancel_and_exit "Could not fetch workflow runs for workflow '${WORKFLOW_NAME}' (check that the workflow exists and that permissions are correct)."
@@ -85,7 +88,8 @@ process_workflow_runs() {
         fi
 
         local valid_page
-        valid_page=$(echo "$runs_page" | jq -r "[.[] | select(.head_branch == \"main\" and ((.status == \"completed\") or (.status == \"in_progress\") or (.status == \"waiting\") or (.status == \"queued\")) and (.conclusion != \"cancelled\"))]")
+        valid_page=$(echo "$runs_page" | jq -c --arg br "$wf_branch" \
+            '[.[] | select(.head_branch == $br and ((.status == "completed") or (.status == "in_progress") or (.status == "waiting") or (.status == "queued")) and (.conclusion != "cancelled"))]')
         local valid_count
         valid_count=$(echo "$valid_page" | jq 'length')
 
@@ -228,7 +232,7 @@ process_workflow_runs() {
                 # Cancel after N consecutive runs without subjob (job renamed/removed from workflow)
                 consecutive_missing=$((consecutive_missing + 1))
                 if [ "$consecutive_missing" -ge "$subjob_missing_cancel_limit" ]; then
-                    write_cancel_and_exit "Subjob '${SUBJOB_NAME}' was not found in ${subjob_missing_cancel_limit} consecutive main-branch runs of workflow '${WORKFLOW_NAME}'. Please verify the job name."
+                    write_cancel_and_exit "Subjob '${SUBJOB_NAME}' was not found in ${subjob_missing_cancel_limit} consecutive runs on branch '${wf_branch}' of workflow '${WORKFLOW_NAME}'. Please verify the job name."
                 fi
                 continue
             fi
