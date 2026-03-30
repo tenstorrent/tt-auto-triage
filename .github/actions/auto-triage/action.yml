@@ -80,11 +80,11 @@ runs:
         fi
         ./modules/boundaries/find_boundaries.sh \
           "${{ inputs.workflow-name }}" \
-          "${{ inputs.job-name }}"
+          "${{ inputs.job-name }}" \
+          "${{ inputs.cutoff-commit }}"
       env:
         GH_TOKEN: ${{ github.token }}
         GITHUB_TOKEN: ${{ github.token }}
-        CUTOFF_COMMIT: ${{ inputs.cutoff-commit }}
 
     - name: Download Slack directory
       if: inputs.slack-test-only != 'true'
