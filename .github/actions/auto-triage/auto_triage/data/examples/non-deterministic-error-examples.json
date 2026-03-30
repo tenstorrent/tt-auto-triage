@@ -11,11 +11,6 @@
       "error_message": "The self-hosted runner lost communication with the server. Verify the machine is running and has a healthy network connection. Anything in your workflow that terminates the runner process, starves it for CPU/Memory, or blocks its network access can cause this error.."
     },
     {
-      "job": "t3000-unit-tests / t3k ttmetal tests",
-      "test": "MeshBufferTest.DeallocationWithoutMeshDevice",
-      "error_message": "Timeout waiting for Ethernet core service remote IO request flush" 
-    },
-    {
       "job": "many jobs",
       "test": "many tests",
       "error_message": "RuntimeError: Failed to allocate the TLB with size ..."
