@@ -15,9 +15,11 @@ source "$_MOD_FB_DIR/workflow_finder.sh"
 # shellcheck source=run_processor.sh
 source "$_MOD_FB_DIR/run_processor.sh"
 
+CUTOFF_COMMIT="${CUTOFF_COMMIT:-}"
+
 if [ $# -lt 2 ]; then
     log_error "Missing required arguments"
-    echo "Usage: $0 <workflow_name> <subjob_name> [cutoff_commit]"
+    echo "Usage: $0 <workflow_name> <subjob_name>"
     echo ""
     echo "Examples:"
     echo "  $0 single-card-demo-tests yolov5x-N150-func"
@@ -27,7 +29,6 @@ fi
 
 WORKFLOW_NAME="$1"
 SUBJOB_NAME="$2"
-CUTOFF_COMMIT="${3:-${CUTOFF_COMMIT:-}}"
 
 # normalize_hyphens(text) -> normalized string (Unicode dashes replaced with ASCII '-')
 # Replaces Unicode dash characters with ASCII hyphen via Python.
