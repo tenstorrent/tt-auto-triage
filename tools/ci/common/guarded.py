@@ -5,10 +5,12 @@ from __future__ import annotations
 import shlex
 import subprocess
 import sys
+from pathlib import Path
 
 from .run_helper import run
 
-_GUARDED_GH_DEFAULT: list[str] = [sys.executable, "tools/ci/guarded_gh.py"]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_GUARDED_GH_DEFAULT: list[str] = [sys.executable, str(_REPO_ROOT / "tools" / "ci" / "guarded_gh.py")]
 
 
 def run_guarded_gh(

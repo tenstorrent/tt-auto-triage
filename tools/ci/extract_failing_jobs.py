@@ -142,7 +142,7 @@ def load_cache(path: Path) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
-def gh_api_request(url: str, token: str | None, max_retries: int = 3) -> dict:
+def gh_api_request(url: str, token: str | None, max_retries: int = 5) -> dict:
     for attempt in range(max_retries):
         req = Request(
             url,

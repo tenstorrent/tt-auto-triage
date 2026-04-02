@@ -38,7 +38,7 @@ DEFAULT_PR_REPO = "ebanerjeeTT/tt-metal"
 DEFAULT_PR_BASE = "main"
 PRIMARY_REPO = "tenstorrent/tt-metal"
 ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
-GUARDED_GH = [sys.executable, "tools/ci/guarded_gh.py"]
+GUARDED_GH = [sys.executable, str(REPO_ROOT / "tools" / "ci" / "guarded_gh.py")]
 PROTECTED_AGENT_PATHS = {
     "tools/ci/guarded_gh.py",
     "tools/ci/execute_disable_actions.py",
@@ -206,7 +206,7 @@ def run_guarded_gh(tokens: list[str], *, capture: bool = True, check: bool = Tru
 
 
 def prepare_guarded_gh_runtime_copy() -> None:
-    source = Path("tools/ci/guarded_gh.py")
+    source = REPO_ROOT / "tools" / "ci" / "guarded_gh.py"
     if not source.exists():
         raise RuntimeError(f"Missing guarded gh wrapper at {source}")
     tmp_dir = Path(tempfile.mkdtemp(prefix="guarded-gh-"))
