@@ -225,6 +225,7 @@ def extract_failing_jobs(
             "total_jobs_affected": len(results),
             "jobs": results,
         }
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
         print(f"    Wrote {len(results)} jobs to {output_path}", file=sys.stderr)
