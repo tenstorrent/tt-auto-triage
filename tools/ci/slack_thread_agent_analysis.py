@@ -4,34 +4,18 @@
 from __future__ import annotations
 
 import json
-import shlex
-import subprocess
+import sys
+from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.ci.common.markers import parse_json_after_marker  # noqa: F401 – re-exported
+from tools.ci.common.run_helper import run
+
 FINAL_MARKER = "===FINAL_THREAD_ANALYSIS_JSON==="
-
-
-def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"Command failed ({proc.returncode}): {' '.join(shlex.quote(x) for x in cmd)}\n"
-            f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
-        )
-    return proc
-
-
-def parse_json_after_marker(text: str, marker: str) -> dict[str, Any]:
-    idx = text.find(marker)
-    if idx < 0:
-        raise ValueError(f"marker not found: {marker}")
-    payload = text[idx + len(marker) :].strip()
-    if not payload:
-        raise ValueError("empty json payload after marker")
-    obj = json.loads(payload)
-    if not isinstance(obj, dict):
-        raise ValueError("payload after marker is not a JSON object")
-    return obj
 
 
 def analyze_thread_with_agent(

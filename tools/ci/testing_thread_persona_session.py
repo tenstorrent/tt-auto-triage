@@ -7,16 +7,14 @@ import argparse
 import json
 import os
 import sys
-import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any
 
-# Ensure repository root is importable when running as `python tools/ci/<script>.py`.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tools.ci.common.slack import post_slack_message
 from tools.ci.slack_thread_agent_analysis import analyze_thread_with_agent
 
 
@@ -37,29 +35,8 @@ def require_env(name: str) -> str:
     return value
 
 
-def slack_api_form(token: str, endpoint: str, fields: dict[str, str]) -> dict[str, Any]:
-    data = urllib.parse.urlencode(fields).encode("utf-8")
-    req = urllib.request.Request(
-        f"https://slack.com/api/{endpoint}",
-        data=data,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
 def post_message(*, token: str, channel: str, text: str, thread_ts: str | None = None) -> str:
-    fields = {"channel": channel, "text": text}
-    if thread_ts:
-        fields["thread_ts"] = thread_ts
-    payload = slack_api_form(token, "chat.postMessage", fields)
-    if not payload.get("ok"):
-        raise RuntimeError(f"chat.postMessage failed: {payload.get('error', 'unknown_error')}")
-    return str(payload.get("ts", "")).strip()
+    return post_slack_message(slack_token=token, channel_id=channel, text=text, thread_ts=thread_ts)
 
 
 def build_summary(result: dict[str, Any]) -> str:

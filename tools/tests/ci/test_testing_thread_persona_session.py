@@ -1,22 +1,10 @@
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
-
-def _load_module():
-    repo_root = Path(__file__).resolve().parents[3]
-    module_path = repo_root / "tools/ci/testing_thread_persona_session.py"
-    spec = importlib.util.spec_from_file_location("testing_thread_persona_session", module_path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+from tools.ci.testing_thread_persona_session import build_summary
 
 
 def test_build_summary_contains_scenario_rows() -> None:
-    mod = _load_module()
-    md = mod.build_summary(
+    md = build_summary(
         {
             "anchor_ts": "123.45",
             "scenarios": [

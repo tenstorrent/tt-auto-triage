@@ -6,24 +6,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shlex
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-GUARDED_GH = [sys.executable, "tools/ci/guarded_gh.py"]
-
-
-def run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, check=check, text=True, capture_output=True)
-
-
-def run_guarded_gh(tokens: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    command_str = " ".join(shlex.quote(tok) for tok in tokens)
-    return run([*GUARDED_GH, "--command", command_str], check=check)
+from tools.ci.common.guarded import run_guarded_gh
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,7 +55,7 @@ def main() -> int:
                 "databaseId,conclusion",
             ]
         )
-    except subprocess.CalledProcessError:
+    except RuntimeError:
         print(json.dumps({"restored": False, "reason": "run_list_failed"}))
         return 0
 

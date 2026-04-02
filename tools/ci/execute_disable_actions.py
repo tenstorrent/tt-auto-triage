@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import os
 import base64
@@ -21,6 +20,19 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.ci.common.markers import parse_agent_json_after_marker  # noqa: F401 – re-exported
+from tools.ci.common.state import (  # noqa: F401 – re-exported
+    ALLOWED_STATUS,
+    append_history,
+    empty_state,
+    load_state as _load_state_common,
+    save_state,
+)
+from tools.ci.common.timestamps import now_utc  # noqa: F401 – re-exported
 
 DEFAULT_PR_REPO = "ebanerjeeTT/tt-metal"
 DEFAULT_PR_BASE = "main"
@@ -54,16 +66,6 @@ ALLOWED_MOCK_WORKFLOW_OUTCOMES = {
 }
 MockWorkflowSpec = dict[str, dict[str, Any]]
 WorkflowDispatchRecord = dict[str, Any]
-ALLOWED_STATUS = {
-    "new",
-    "planned",
-    "pr_open",
-    "kickoff_running",
-    "kickoff_failed_new_failure",
-    "completed",
-    "needs_human",
-    "paused",
-}
 
 
 def redact_secrets(text: str) -> str:
@@ -285,34 +287,6 @@ def is_pr_open(pr_url: str, default_repo: str) -> bool:
     except json.JSONDecodeError:
         return False
     return str(payload.get("state", "")).upper() == "OPEN"
-
-
-def parse_agent_json_after_marker(text: str, marker: str) -> dict[str, Any]:
-    idx = text.rfind(marker)
-    marker_end = idx + len(marker) if idx >= 0 else -1
-    if idx < 0:
-        marker_re = re.compile(rf"`?\s*{re.escape(marker)}\s*`?")
-        matches = list(marker_re.finditer(text))
-        if matches:
-            marker_end = matches[-1].end()
-    if marker_end < 0:
-        raise ValueError(f"marker not found: {marker}")
-
-    payload = text[marker_end:].strip()
-    if payload.startswith("```"):
-        # Accept fenced JSON payloads while still requiring JSON parseability.
-        payload = re.sub(r"^```(?:json)?\s*", "", payload)
-        payload = re.sub(r"\s*```$", "", payload)
-        payload = payload.strip()
-
-    try:
-        return json.loads(payload)
-    except json.JSONDecodeError:
-        # Fall back to parsing from the first JSON object start after the marker.
-        brace_idx = payload.find("{")
-        if brace_idx < 0:
-            raise
-        return json.loads(payload[brace_idx:])
 
 
 def load_disable_command_spec() -> str:
@@ -579,10 +553,6 @@ def has_issue_reference_in_working_diff(*, issue_number: int, issue_url: str) ->
         if any(needle and needle in line for needle in needles):
             return True
     return False
-
-
-def now_utc() -> str:
-    return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def log(message: str) -> None:
@@ -901,53 +871,12 @@ def pr_label(pr_url: str) -> str:
     return f"{m.group(1)}#{m.group(2)}"
 
 
-def empty_state() -> dict[str, Any]:
-    return {"version": 1, "updated_at_utc": now_utc(), "items": []}
-
-
 def load_state(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return empty_state()
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError("state must be a JSON object")
-    if not isinstance(data.get("items"), list):
-        raise ValueError("state.items must be a list")
-    seen: set[str] = set()
-    for item in data["items"]:
-        if not isinstance(item, dict):
-            raise ValueError("state items must be objects")
-        key = str(item.get("key", ""))
-        if not key:
-            raise ValueError("state item missing key")
-        if key in seen:
-            raise ValueError(f"duplicate state key: {key}")
-        seen.add(key)
-        status = str(item.get("status", ""))
-        if status not in ALLOWED_STATUS:
-            raise ValueError(f"invalid state status for {key}: {status}")
-        attempts = item.get("attempts", 0)
-        if not isinstance(attempts, int) or attempts < 0:
-            raise ValueError(f"invalid attempts for {key}")
-    return data
-
-
-def save_state(path: Path, state: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    state["updated_at_utc"] = now_utc()
-    path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    return _load_state_common(path, schema="disable")
 
 
 def state_index(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {str(item["key"]): item for item in state.get("items", []) if isinstance(item, dict) and "key" in item}
-
-
-def append_history(item: dict[str, Any], event: str, details: str) -> None:
-    history = item.setdefault("history", [])
-    if not isinstance(history, list):
-        item["history"] = []
-        history = item["history"]
-    history.append({"ts_utc": now_utc(), "event": event, "details": details})
 
 
 def ensure_state_item(state: dict[str, Any], action: dict[str, Any]) -> dict[str, Any]:

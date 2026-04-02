@@ -9,19 +9,23 @@ import json
 import os
 import hashlib
 import re
-import shlex
-import subprocess
 import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
 
-# Ensure repository root is importable when running as `python tools/ci/<script>.py`.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tools.ci.common.codeowners import codeowners_match  # noqa: F401 – re-exported
+from tools.ci.common.github import github_user_info  # noqa: F401 – re-exported
+from tools.ci.common.guarded import run_guarded_gh  # noqa: F401 – re-exported
+from tools.ci.common.markers import parse_json_after_marker  # noqa: F401 – re-exported
+from tools.ci.common.run_helper import run  # noqa: F401 – re-exported
+from tools.ci.common.slack import post_slack_message, slack_api_form  # noqa: F401 – re-exported
+from tools.ci.common.timestamps import now_utc  # noqa: F401 – re-exported
 from tools.ci.slack_thread_agent_analysis import analyze_thread_with_agent
 
 ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
@@ -33,34 +37,6 @@ def now_unix() -> float:
     import time
 
     return time.time()
-
-
-def now_utc() -> str:
-    import datetime as dt
-
-    return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def run(cmd: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    merged_env = None
-    if env:
-        merged_env = os.environ.copy()
-        merged_env.update(env)
-    proc = subprocess.run(cmd, text=True, capture_output=True, check=False, env=merged_env)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"Command failed ({proc.returncode}): {' '.join(shlex.quote(x) for x in cmd)}\n"
-            f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
-        )
-    return proc
-
-
-def run_guarded_gh(tokens: list[str], *, github_token: str) -> subprocess.CompletedProcess[str]:
-    command = " ".join(shlex.quote(tok) for tok in tokens)
-    return run(
-        [sys.executable, "tools/ci/guarded_gh.py", "--command", command],
-        env={"GITHUB_TOKEN": github_token},
-    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,27 +54,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def parse_codeowners(path: Path) -> list[tuple[str, list[str]]]:
-    if not path.exists():
-        return []
-    rules: list[tuple[str, list[str]]] = []
-    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        pattern = parts[0].lstrip("/")
-        owners = [tok[1:] for tok in parts[1:] if tok.startswith("@") and "/" not in tok[1:]]
-        if owners:
-            rules.append((pattern, owners))
-    return rules
+    from tools.ci.common.codeowners import parse_codeowners as _parse
 
-
-def codeowners_match(path: str, pattern: str) -> bool:
-    p = path.lstrip("/")
-    pat = pattern.lstrip("/")
-    return fnmatch.fnmatch(p, pat) or (pat.endswith("/") and p.startswith(pat))
+    return _parse(path, keep_teams=False)
 
 
 def extract_repo_paths(text: str) -> list[str]:
@@ -129,46 +87,8 @@ def candidate_github_owners_from_text(text: str, rules: list[tuple[str, list[str
     return owners
 
 
-def slack_api_form(token: str, endpoint: str, fields: dict[str, str]) -> dict[str, Any]:
-    data = urllib.parse.urlencode(fields).encode("utf-8")
-    req = urllib.request.Request(
-        f"https://slack.com/api/{endpoint}",
-        data=data,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
 def post_slack_thread_message(*, slack_token: str, channel: str, thread_ts: str, text: str) -> str:
-    payload = slack_api_form(
-        slack_token,
-        "chat.postMessage",
-        {"channel": channel, "thread_ts": thread_ts, "text": text},
-    )
-    if not payload.get("ok"):
-        raise RuntimeError(f"chat.postMessage failed: {payload.get('error', 'unknown_error')}")
-    return str(payload.get("ts", "")).strip()
-
-
-def github_user_info(token: str, username: str) -> dict[str, Any]:
-    req = urllib.request.Request(
-        f"https://api.github.com/users/{urllib.parse.quote(username)}",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "tt-metal-m5-lifecycle",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return {}
+    return post_slack_message(slack_token=slack_token, channel_id=channel, text=text, thread_ts=thread_ts)
 
 
 def slack_lookup_by_email(token: str, email: str) -> str | None:
@@ -182,19 +102,6 @@ def slack_lookup_by_email(token: str, email: str) -> str | None:
         return None
     uid = str(payload.get("user", {}).get("id", "")).strip()
     return uid or None
-
-
-def parse_json_after_marker(text: str, marker: str) -> dict[str, Any]:
-    idx = text.find(marker)
-    if idx < 0:
-        raise ValueError(f"marker not found: {marker}")
-    payload = text[idx + len(marker) :].strip()
-    if not payload:
-        raise ValueError("empty json payload after marker")
-    obj = json.loads(payload)
-    if not isinstance(obj, dict):
-        raise ValueError("payload after marker is not a JSON object")
-    return obj
 
 
 def slack_auth_user_id(token: str) -> str | None:

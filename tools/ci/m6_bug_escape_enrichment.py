@@ -6,42 +6,21 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.ci.common.guarded import run_guarded_gh  # noqa: F401 – re-exported
+from tools.ci.common.run_helper import run  # noqa: F401 – re-exported
+from tools.ci.common.timestamps import now_utc  # noqa: F401 – re-exported
+
 ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 PRIMARY_REPO = "tenstorrent/tt-metal"
 LAYER_ORDER = {"llk": 1, "metalium": 2, "ttnn": 3, "models": 4, "infra": 5, "unknown": 99}
-
-
-def now_utc() -> str:
-    import datetime as dt
-
-    return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def run(cmd: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    merged_env = None
-    if env:
-        merged_env = os.environ.copy()
-        merged_env.update(env)
-    proc = subprocess.run(cmd, text=True, capture_output=True, check=False, env=merged_env)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"Command failed ({proc.returncode}): {' '.join(shlex.quote(x) for x in cmd)}\n"
-            f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
-        )
-    return proc
-
-
-def run_guarded_gh(tokens: list[str], *, github_token: str) -> subprocess.CompletedProcess[str]:
-    cmd = " ".join(shlex.quote(tok) for tok in tokens)
-    return run(
-        [sys.executable, "tools/ci/guarded_gh.py", "--command", cmd],
-        env={"GITHUB_TOKEN": github_token},
-    )
 
 
 def parse_args() -> argparse.Namespace:

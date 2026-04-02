@@ -4,65 +4,29 @@
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import os
 import re
-import shlex
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.ci.common.guarded import run_guarded_gh  # noqa: F401 – re-exported
+from tools.ci.common.markers import parse_json_after_marker  # noqa: F401 – re-exported
+from tools.ci.common.run_helper import run  # noqa: F401 – re-exported
+from tools.ci.common.state import load_state as _load_state_common, save_state  # noqa: F401
+from tools.ci.common.timestamps import now_iso, now_utc_dt as now_utc, parse_iso_utc  # noqa: F401
 
 RUN_JOB_URL_RE = re.compile(r"https://github\.com/tenstorrent/tt-metal/actions/runs/(\d+)/job/(\d+)")
 FINAL_MARKER = "===FINAL_ISSUE_LIFECYCLE_DECISION==="
 
 
-def now_utc() -> dt.datetime:
-    return dt.datetime.now(dt.UTC)
-
-
-def now_iso() -> str:
-    return now_utc().replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def parse_iso_utc(text: str | None) -> dt.datetime | None:
-    if not text:
-        return None
-    value = text.strip()
-    if not value:
-        return None
-    if value.endswith("Z"):
-        value = value[:-1] + "+00:00"
-    try:
-        parsed = dt.datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.UTC)
-    return parsed.astimezone(dt.UTC)
-
-
-def run(cmd: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    merged_env = None
-    if env:
-        merged_env = os.environ.copy()
-        merged_env.update(env)
-    proc = subprocess.run(cmd, text=True, capture_output=True, check=False, env=merged_env)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"Command failed ({proc.returncode}): {' '.join(shlex.quote(x) for x in cmd)}\n"
-            f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
-        )
-    return proc
-
-
-def run_guarded_gh(tokens: list[str], *, github_token: str) -> subprocess.CompletedProcess[str]:
-    command = " ".join(shlex.quote(tok) for tok in tokens)
-    return run(
-        [sys.executable, "tools/ci/guarded_gh.py", "--command", command],
-        env={"GITHUB_TOKEN": github_token},
-    )
+def load_state(path: Path) -> dict[str, Any]:
+    return _load_state_common(path, schema="issue_lifecycle")
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,42 +40,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max-issues", type=int, default=3)
     p.add_argument("--model", default="auto")
     return p.parse_args()
-
-
-def load_state(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {"version": 1, "updated_at_utc": now_iso(), "items": [], "issue_lifecycle": {"issues": {}}}
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        payload = {"version": 1, "updated_at_utc": now_iso(), "items": []}
-    issue_lifecycle = payload.get("issue_lifecycle")
-    if not isinstance(issue_lifecycle, dict):
-        issue_lifecycle = {}
-    issues = issue_lifecycle.get("issues")
-    if not isinstance(issues, dict):
-        issues = {}
-    issue_lifecycle["issues"] = issues
-    payload["issue_lifecycle"] = issue_lifecycle
-    return payload
-
-
-def save_state(path: Path, state: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    state["updated_at_utc"] = now_iso()
-    path.write_text(json.dumps(state, indent=2), encoding="utf-8")
-
-
-def parse_json_after_marker(text: str, marker: str) -> dict[str, Any]:
-    idx = text.find(marker)
-    if idx < 0:
-        raise ValueError(f"marker not found: {marker}")
-    payload = text[idx + len(marker) :].strip()
-    if not payload:
-        raise ValueError("empty payload after marker")
-    obj = json.loads(payload)
-    if not isinstance(obj, dict):
-        raise ValueError("payload must be object")
-    return obj
 
 
 def list_open_ci_issues(issue_repo: str, issue_token: str) -> list[dict[str, Any]]:

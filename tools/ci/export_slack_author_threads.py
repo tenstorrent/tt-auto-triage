@@ -8,48 +8,15 @@ import json
 import os
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-API_BASE = "https://slack.com/api"
-
-
-def iso_utc(ts: float) -> str:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-
-
-def slack_api_get(token: str, endpoint: str, params: dict[str, Any], max_retries: int = 5) -> dict[str, Any]:
-    url = f"{API_BASE}/{endpoint}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                payload = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            if exc.code == 429 and attempt <= max_retries:
-                retry_after = int(exc.headers.get("Retry-After", "1"))
-                time.sleep(retry_after)
-                continue
-            raise RuntimeError(f"HTTP error from Slack API ({endpoint}): {exc}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Network error calling Slack API ({endpoint}): {exc}") from exc
-
-        if payload.get("ok", False):
-            return payload
-
-        error = payload.get("error", "unknown_error")
-        if error == "ratelimited" and attempt <= max_retries:
-            time.sleep(min(2**attempt, 30))
-            continue
-        raise RuntimeError(f"Slack API error from {endpoint}: {error}")
+from tools.ci.common.slack import slack_api_get
+from tools.ci.common.timestamps import iso_utc
 
 
 def fetch_channel_messages(token: str, channel_id: str, oldest_ts: float, latest_ts: float) -> list[dict[str, Any]]:

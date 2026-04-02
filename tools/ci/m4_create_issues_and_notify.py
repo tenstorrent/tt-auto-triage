@@ -9,7 +9,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -18,6 +17,17 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.ci.common.codeowners import codeowners_match, parse_codeowners  # noqa: F401 – re-exported
+from tools.ci.common.github import github_user_info  # noqa: F401 – re-exported
+from tools.ci.common.guarded import run_guarded_gh  # noqa: F401 – re-exported
+from tools.ci.common.markers import parse_agent_json_payload, strip_json_fence  # noqa: F401
+from tools.ci.common.run_helper import run  # noqa: F401 – re-exported
+from tools.ci.common.slack import post_slack_message, slack_api_form  # noqa: F401 – re-exported
 
 PRIMARY_REPO = "tenstorrent/tt-metal"
 ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
@@ -30,30 +40,6 @@ JOB_OWNERS_PATH = Path(".github/actions/analyze-workflow-data/owners.json")
 
 def log(message: str) -> None:
     print(f"[m4] {message}", flush=True)
-
-
-def run(
-    cmd: list[str], *, env: dict[str, str] | None = None, check: bool = True, capture: bool = True
-) -> subprocess.CompletedProcess[str]:
-    proc_env = None
-    if env:
-        proc_env = os.environ.copy()
-        proc_env.update(env)
-    proc = subprocess.run(cmd, text=True, capture_output=capture, env=proc_env, check=False)
-    if check and proc.returncode != 0:
-        raise RuntimeError(
-            f"Command failed ({proc.returncode}): {' '.join(shlex.quote(x) for x in cmd)}\n"
-            f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
-        )
-    return proc
-
-
-def run_guarded_gh(tokens: list[str], *, github_token: str) -> subprocess.CompletedProcess[str]:
-    command = " ".join(shlex.quote(tok) for tok in tokens)
-    return run(
-        [sys.executable, "tools/ci/guarded_gh.py", "--command", command],
-        env={"GITHUB_TOKEN": github_token},
-    )
 
 
 def parse_job_url(url: str) -> tuple[int, int]:
@@ -106,52 +92,8 @@ def parse_agent_json(text: str) -> dict[str, Any]:
     return parsed
 
 
-def _strip_json_fence(payload: str) -> str:
-    stripped = payload.strip()
-    if stripped.startswith("```"):
-        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
-        stripped = re.sub(r"\s*```$", "", stripped)
-        stripped = stripped.strip()
-    return stripped
-
-
-def _parse_agent_json_payload(text: str, *, marker: str) -> Any:
-    idx = text.rfind(marker)
-    if idx >= 0:
-        payload = _strip_json_fence(text[idx + len(marker) :])
-        return json.loads(payload)
-
-    stripped = text.strip()
-    if not stripped:
-        raise ValueError(f"marker not found: {marker}. output excerpt: <empty>")
-
-    # Fallback 1: raw JSON in stdout without marker.
-    try:
-        return json.loads(_strip_json_fence(stripped))
-    except Exception:
-        pass
-
-    # Fallback 2: parse last fenced block.
-    fenced = re.findall(r"```(?:json)?\s*(.*?)```", stripped, flags=re.IGNORECASE | re.DOTALL)
-    for block in reversed(fenced):
-        candidate = block.strip()
-        if not candidate:
-            continue
-        try:
-            return json.loads(candidate)
-        except Exception:
-            continue
-
-    # Fallback 3: scan for trailing JSON object/array start.
-    for match in re.finditer(r"[\{\[]", stripped):
-        candidate = stripped[match.start() :].strip()
-        try:
-            return json.loads(candidate)
-        except Exception:
-            continue
-
-    excerpt = stripped[-600:].replace("\n", "\\n")
-    raise ValueError(f"marker not found: {marker}. Could not parse fallback JSON. output excerpt: {excerpt}")
+_parse_agent_json_payload = parse_agent_json_payload
+_strip_json_fence = strip_json_fence
 
 
 def load_command_spec(path: str, fallback: str) -> str:
@@ -162,16 +104,9 @@ def load_command_spec(path: str, fallback: str) -> str:
 
 
 def fetch_recent_slack_messages(*, slack_token: str, channel_id: str, limit: int = 20) -> list[dict[str, Any]]:
-    query = urllib.parse.urlencode({"channel": channel_id, "limit": str(limit)})
-    req = urllib.request.Request(
-        f"https://slack.com/api/conversations.history?{query}",
-        headers={"Authorization": f"Bearer {slack_token}"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"Slack history fetch failed: http_{exc.code}") from exc
+    from tools.ci.common.slack import slack_api_get_simple
+
+    payload = slack_api_get_simple(slack_token, "conversations.history", {"channel": channel_id, "limit": str(limit)})
     if not payload.get("ok", False):
         raise RuntimeError(f"Slack history fetch failed: {payload.get('error', 'unknown_error')}")
     messages = payload.get("messages", [])
@@ -201,36 +136,6 @@ def build_recent_slack_context(messages: list[dict[str, Any]], cap: int = 10) ->
             text = text[:220] + "..."
         lines.append(f"- ts={ts} user={user} text={text}")
     return "\n".join(lines) if lines else "(none)"
-
-
-def parse_codeowners(path: Path) -> list[tuple[str, list[str]]]:
-    if not path.exists():
-        return []
-    rules: list[tuple[str, list[str]]] = []
-    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        pattern = parts[0].lstrip("/")
-        owners = [p[1:] for p in parts[1:] if p.startswith("@")]
-        if owners:
-            rules.append((pattern, owners))
-    return rules
-
-
-def codeowners_match(path: str, pattern: str) -> bool:
-    p = path.lstrip("/")
-    pat = pattern.lstrip("/")
-    if fnmatch.fnmatch(p, pat):
-        return True
-    if pat.endswith("/") and p.startswith(pat):
-        return True
-    if "/" not in pat and fnmatch.fnmatch(Path(p).name, pat):
-        return True
-    return False
 
 
 def owners_for_paths(paths: list[str], rules: list[tuple[str, list[str]]]) -> set[str]:
@@ -375,38 +280,6 @@ def extract_repo_paths(text: str) -> list[str]:
         if value and value not in out:
             out.append(value)
     return out
-
-
-def github_user_info(token: str, username: str) -> dict[str, Any]:
-    req = urllib.request.Request(
-        f"https://api.github.com/users/{urllib.parse.quote(username)}",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "tt-metal-m4-owner-resolver",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return {}
-
-
-def slack_api_form(token: str, endpoint: str, fields: dict[str, str]) -> dict[str, Any]:
-    data = urllib.parse.urlencode(fields).encode("utf-8")
-    req = urllib.request.Request(
-        f"https://slack.com/api/{endpoint}",
-        data=data,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
-    return payload
 
 
 def slack_lookup_by_email(token: str, email: str) -> str | None:
@@ -903,27 +776,6 @@ def create_issue(
         github_token=issue_token,
     )
     return (proc.stdout or "").strip().splitlines()[-1].strip()
-
-
-def post_slack_message(*, slack_token: str, channel_id: str, text: str) -> str:
-    data = urllib.parse.urlencode({"channel": channel_id, "text": text}).encode("utf-8")
-    req = urllib.request.Request(
-        "https://slack.com/api/chat.postMessage",
-        data=data,
-        headers={
-            "Authorization": f"Bearer {slack_token}",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"Slack post failed: http_{exc.code}") from exc
-    if not payload.get("ok", False):
-        raise RuntimeError(f"Slack post failed: {payload.get('error', 'unknown_error')}")
-    return str(payload.get("ts", "")).strip()
 
 
 def main() -> int:

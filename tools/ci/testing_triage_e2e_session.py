@@ -8,16 +8,16 @@ import json
 import os
 import re
 import sys
-import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any
 
-# Ensure repository root is importable when running as `python tools/ci/<script>.py`.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tools.ci.common.codeowners import parse_codeowners_logins
+from tools.ci.common.github import github_api_get
+from tools.ci.common.slack import post_slack_message, slack_api_get_simple
 from tools.ci.slack_thread_agent_analysis import analyze_thread_with_agent
 
 ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
@@ -40,58 +40,16 @@ def require_env(name: str) -> str:
     return value
 
 
-def slack_api_form(token: str, endpoint: str, fields: dict[str, str]) -> dict[str, Any]:
-    data = urllib.parse.urlencode(fields).encode("utf-8")
-    req = urllib.request.Request(
-        f"https://slack.com/api/{endpoint}",
-        data=data,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def slack_api_get(token: str, endpoint: str, params: dict[str, str]) -> dict[str, Any]:
-    query = urllib.parse.urlencode(params)
-    req = urllib.request.Request(
-        f"https://slack.com/api/{endpoint}?{query}",
-        headers={"Authorization": f"Bearer {token}"},
-        method="GET",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
 def gh_api_get(token: str, endpoint: str) -> dict[str, Any]:
-    req = urllib.request.Request(
-        f"https://api.github.com{endpoint}",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "tt-metal-testing-triage-e2e",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    return github_api_get(token, endpoint, user_agent="tt-metal-testing-triage-e2e")
 
 
 def post_thread_message(*, token: str, channel: str, thread_ts: str, text: str) -> str:
-    payload = slack_api_form(
-        token,
-        "chat.postMessage",
-        {"channel": channel, "thread_ts": thread_ts, "text": text},
-    )
-    if not payload.get("ok"):
-        raise RuntimeError(f"chat.postMessage failed: {payload.get('error', 'unknown_error')}")
-    return str(payload.get("ts", "")).strip()
+    return post_slack_message(slack_token=token, channel_id=channel, text=text, thread_ts=thread_ts)
 
 
 def read_channel_messages(token: str, channel_id: str, limit: int = 120) -> list[dict[str, Any]]:
-    payload = slack_api_get(token, "conversations.history", {"channel": channel_id, "limit": str(limit)})
+    payload = slack_api_get_simple(token, "conversations.history", {"channel": channel_id, "limit": str(limit)})
     if not payload.get("ok"):
         raise RuntimeError(f"conversations.history failed: {payload.get('error', 'unknown_error')}")
     messages = payload.get("messages", [])
@@ -99,7 +57,7 @@ def read_channel_messages(token: str, channel_id: str, limit: int = 120) -> list
 
 
 def read_thread_messages(token: str, channel_id: str, thread_ts: str) -> list[dict[str, Any]]:
-    payload = slack_api_get(token, "conversations.replies", {"channel": channel_id, "ts": thread_ts, "limit": "100"})
+    payload = slack_api_get_simple(token, "conversations.replies", {"channel": channel_id, "ts": thread_ts, "limit": "100"})
     if not payload.get("ok"):
         raise RuntimeError(f"conversations.replies failed: {payload.get('error', 'unknown_error')}")
     messages = payload.get("messages", [])
@@ -111,29 +69,6 @@ def parse_issue_number(text: str) -> int:
     if not m:
         return 0
     return int(m.group(1))
-
-
-def parse_codeowners_logins(path: Path) -> list[str]:
-    if not path.exists():
-        return []
-    out: list[str] = []
-    seen: set[str] = set()
-    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        for tok in line.split()[1:]:
-            if not tok.startswith("@"):
-                continue
-            login = tok[1:].strip()
-            if not login or "/" in login:
-                continue
-            low = login.lower()
-            if low in seen:
-                continue
-            seen.add(low)
-            out.append(login)
-    return out
 
 
 def find_real_issue_threads(messages: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:

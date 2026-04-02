@@ -15,13 +15,18 @@ import argparse
 import json
 import os
 import re
+import sys
 import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any
 
-SLACK_API_BASE = "https://slack.com/api"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.ci.common.codeowners import parse_codeowners_logins as parse_codeowners_users
+from tools.ci.common.slack import slack_api_form, slack_api_get_simple as slack_api_get
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,71 +47,14 @@ def require_env(name: str) -> str:
 
 
 def github_api_get(token: str, endpoint: str) -> dict[str, Any]:
-    req = urllib.request.Request(
-        f"https://api.github.com{endpoint}",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "tt-metal-ci-triage-testing",
-        },
-    )
+    from tools.ci.common.github import github_api_get as _gh_get
+
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        return _gh_get(token, endpoint, user_agent="tt-metal-ci-triage-testing")
     except urllib.error.HTTPError as exc:
         return {"_error": f"http_{exc.code}"}
     except Exception as exc:  # noqa: BLE001
         return {"_error": f"request_failed:{exc}"}
-
-
-def slack_api_form(token: str, endpoint: str, fields: dict[str, str]) -> dict[str, Any]:
-    data = urllib.parse.urlencode(fields).encode("utf-8")
-    req = urllib.request.Request(
-        f"{SLACK_API_BASE}/{endpoint}",
-        data=data,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/x-www-form-urlencoded",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def slack_api_get(token: str, endpoint: str, params: dict[str, str]) -> dict[str, Any]:
-    query = urllib.parse.urlencode(params)
-    req = urllib.request.Request(
-        f"{SLACK_API_BASE}/{endpoint}?{query}",
-        headers={"Authorization": f"Bearer {token}"},
-        method="GET",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-def parse_codeowners_users(path: Path) -> list[str]:
-    users: list[str] = []
-    seen: set[str] = set()
-    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        for tok in parts[1:]:
-            if not tok.startswith("@"):
-                continue
-            handle = tok[1:].strip()
-            if not handle or "/" in handle:
-                continue
-            lowered = handle.lower()
-            if lowered in seen:
-                continue
-            seen.add(lowered)
-            users.append(handle)
-    return users
 
 
 def slack_list_members(token: str) -> list[dict[str, Any]]:
