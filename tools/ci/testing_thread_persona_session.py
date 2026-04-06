@@ -1,0 +1,113 @@
+#!/usr/bin/env python3
+"""Testing-mode thread persona simulation for CI triage behavior."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.ci.common.slack import post_slack_message
+from tools.ci.slack_thread_agent_analysis import analyze_thread_with_agent
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Post simulated developer thread replies and evaluate triage interpretation."
+    )
+    p.add_argument("--slack-channel-id", required=True)
+    p.add_argument("--output-json", required=True)
+    p.add_argument("--summary-md", required=True)
+    return p.parse_args()
+
+
+def require_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"missing env var: {name}")
+    return value
+
+
+def post_message(*, token: str, channel: str, text: str, thread_ts: str | None = None) -> str:
+    return post_slack_message(slack_token=token, channel_id=channel, text=text, thread_ts=thread_ts)
+
+
+def build_summary(result: dict[str, Any]) -> str:
+    lines = [
+        "## Thread Persona Simulation Session",
+        "",
+        f"- Anchor thread ts: `{result.get('anchor_ts','')}`",
+        f"- Personas simulated: {len(result.get('scenarios', []))}",
+        "",
+        "## Scenario Results",
+    ]
+    for row in result.get("scenarios", []):
+        lines.append(
+            f"- `{row['name']}` -> state `{row['progress_state']}`, defer_disable={row['defer_disable']}, "
+            f"fix_request={row['fix_request_requested']}"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main() -> int:
+    args = parse_args()
+    token = require_env("SLACK_BOT_TOKEN")
+    anchor_text = (
+        "CI triage testing-mode thread persona simulation anchor. "
+        "This is synthetic test data and not a real incident."
+    )
+    anchor_ts = post_message(token=token, channel=args.slack_channel_id, text=anchor_text)
+
+    scenarios = [
+        ("active_plan", "Looking now, I will post PR in 2 hours."),
+        ("wip_pr", "Fix in progress: https://github.com/tenstorrent/tt-metal/pull/12345"),
+        ("blocked", "Blocked on infra/hardware dependency."),
+        ("resolved_claim", "Should be fixed by https://github.com/tenstorrent/tt-metal/pull/12346; please verify."),
+        ("vague", "Taking a look."),
+        ("fix_request", "Can agent fix this and draft a fix PR if possible?"),
+    ]
+
+    outputs: list[dict[str, Any]] = []
+    for name, text in scenarios:
+        ts = post_message(token=token, channel=args.slack_channel_id, text=text, thread_ts=anchor_ts)
+        analysis = analyze_thread_with_agent(
+            top_level_text=anchor_text,
+            thread_replies=[{"ts": ts, "text": text}],
+            include_owner_claim=False,
+            model="auto",
+        )
+        outputs.append(
+            {
+                "name": name,
+                "reply_ts": ts,
+                "reply_text": text,
+                "progress_state": analysis.get("progress_state"),
+                "defer_disable": bool(analysis.get("defer_disable", False)),
+                "progress_reason": analysis.get("progress_reason", ""),
+                "fix_request_requested": bool(analysis.get("fix_request_requested", False)),
+                "fix_request_reason": analysis.get("fix_request_reason", ""),
+            }
+        )
+
+    result = {"anchor_ts": anchor_ts, "scenarios": outputs}
+    out_json = Path(args.output_json)
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    out_json.write_text(json.dumps(result, indent=2), encoding="utf-8")
+
+    out_md = Path(args.summary_md)
+    out_md.parent.mkdir(parents=True, exist_ok=True)
+    out_md.write_text(build_summary(result), encoding="utf-8")
+    print(json.dumps({"anchor_ts": anchor_ts, "scenario_count": len(outputs)}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
