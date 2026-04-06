@@ -13,8 +13,11 @@ _DEFAULT_UA = "tt-metal-ci-triage"
 
 def github_api_get(
     token: str, endpoint: str, *, user_agent: str = _DEFAULT_UA,
-) -> dict[str, Any]:
-    """GET a GitHub REST API endpoint.  *endpoint* should start with ``/``."""
+) -> Any:
+    """GET a GitHub REST API endpoint.  *endpoint* should start with ``/``.
+
+    Returns a dict for object endpoints or a list for collection endpoints.
+    """
     req = urllib.request.Request(
         f"https://api.github.com{endpoint}",
         headers={

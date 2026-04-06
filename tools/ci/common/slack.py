@@ -40,22 +40,25 @@ def slack_api_get_simple(token: str, endpoint: str, params: dict[str, str]) -> d
         return json.loads(resp.read().decode("utf-8"))
 
 
+_MAX_RETRY_AFTER = 120
+
+
 def slack_api_get(
     token: str, endpoint: str, params: dict[str, Any], *, max_retries: int = 5,
 ) -> dict[str, Any]:
     """GET with automatic retry on HTTP 429 and Slack-level rate limiting."""
     url = f"{API_BASE}/{endpoint}?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
 
     attempt = 0
     while True:
         attempt += 1
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code == 429 and attempt <= max_retries:
-                retry_after = int(exc.headers.get("Retry-After", "1"))
+                retry_after = min(int(exc.headers.get("Retry-After", "1")), _MAX_RETRY_AFTER)
                 time.sleep(retry_after)
                 continue
             raise RuntimeError(f"HTTP error from Slack API ({endpoint}): {exc}") from exc
