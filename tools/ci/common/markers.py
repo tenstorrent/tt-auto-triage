@@ -1,4 +1,17 @@
-"""JSON-after-marker parsing helpers for agent output."""
+"""JSON-after-marker parsing helpers for agent output.
+
+Three parsers with increasing flexibility:
+
+* ``parse_strict``  — exact marker match, JSON object only.
+                      Used by M5, issue_lifecycle, slack_thread_agent_analysis.
+* ``parse_with_fallbacks`` — marker + multiple fallback strategies (raw, fenced, brace scan).
+                      Used by M4 batch issue creation.
+* ``parse_with_regex``  — regex-tolerant marker match + fence stripping + brace fallback.
+                      Used by execute_disable_actions.
+
+Legacy aliases (``parse_json_after_marker``, ``parse_agent_json_payload``,
+``parse_agent_json_after_marker``) are kept for backward compatibility.
+"""
 
 from __future__ import annotations
 
@@ -7,8 +20,8 @@ import re
 from typing import Any
 
 
-def parse_json_after_marker(text: str, marker: str) -> dict[str, Any]:
-    """Simple ``str.find`` parser (M5 / issue_lifecycle / slack_thread pattern).
+def parse_strict(text: str, marker: str) -> dict[str, Any]:
+    """Exact marker match, returns a single JSON object.
 
     Raises on missing marker or non-object payload.
     """
@@ -34,11 +47,11 @@ def strip_json_fence(payload: str) -> str:
     return stripped
 
 
-def parse_agent_json_payload(text: str, *, marker: str) -> Any:
-    """Robust ``rfind``-based parser with multiple fallbacks (M4 pattern).
+def parse_with_fallbacks(text: str, *, marker: str) -> Any:
+    """Marker match with multiple fallback strategies.
 
     Tries, in order: marker extraction, raw JSON, last fenced block,
-    trailing ``{`` / ``[`` scan.
+    last ``{`` / ``[`` scan (scanning from end for robustness).
     """
     idx = text.rfind(marker)
     if idx >= 0:
@@ -64,7 +77,7 @@ def parse_agent_json_payload(text: str, *, marker: str) -> Any:
         except Exception:
             continue
 
-    for match in re.finditer(r"[\{\[]", stripped):
+    for match in reversed(list(re.finditer(r"[\{\[]", stripped))):
         candidate = stripped[match.start() :].strip()
         try:
             return json.loads(candidate)
@@ -75,10 +88,8 @@ def parse_agent_json_payload(text: str, *, marker: str) -> Any:
     raise ValueError(f"marker not found: {marker}. Could not parse fallback JSON. output excerpt: {excerpt}")
 
 
-def parse_agent_json_after_marker(text: str, marker: str) -> dict[str, Any]:
-    """``rfind``-based parser with regex marker matching and fence
-    stripping (execute_disable pattern).
-    """
+def parse_with_regex(text: str, marker: str) -> dict[str, Any]:
+    """Regex-tolerant marker match with fence stripping and brace fallback."""
     idx = text.rfind(marker)
     marker_end = idx + len(marker) if idx >= 0 else -1
     if idx < 0:
@@ -102,3 +113,9 @@ def parse_agent_json_after_marker(text: str, marker: str) -> dict[str, Any]:
         if brace_idx < 0:
             raise
         return json.loads(payload[brace_idx:])
+
+
+# Backward-compatible aliases
+parse_json_after_marker = parse_strict
+parse_agent_json_payload = parse_with_fallbacks
+parse_agent_json_after_marker = parse_with_regex
