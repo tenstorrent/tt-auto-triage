@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime as dt
-from datetime import datetime, timezone
 
 
 def now_utc() -> str:
@@ -39,4 +38,4 @@ def parse_iso_utc(text: str | None) -> dt.datetime | None:
 
 def iso_utc(ts: float) -> str:
     """Convert a POSIX timestamp to an ISO 8601 UTC string."""
-    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    return dt.datetime.fromtimestamp(ts, tz=dt.UTC).isoformat()
