@@ -99,3 +99,32 @@ def test_append_history():
 def test_allowed_status_has_expected_values():
     for s in ("new", "planned", "completed", "needs_human"):
         assert s in ALLOWED_STATUS
+
+
+def test_load_disable_non_string_key_raises(tmp_path):
+    path = tmp_path / "state.json"
+    data = {"version": 1, "items": [{"key": 42, "status": "new", "attempts": 0}]}
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="non-string key"):
+        load_state(path, schema="disable")
+
+
+def test_unsupported_version_logs_warning(tmp_path, caplog):
+    path = tmp_path / "state.json"
+    data = {"version": 99, "items": []}
+    path.write_text(json.dumps(data))
+    import logging
+    with caplog.at_level(logging.WARNING, logger="tools.ci.common.state"):
+        loaded = load_state(path, schema="base")
+    assert loaded["version"] == 99
+    assert "version 99" in caplog.text
+
+
+def test_append_history_resets_non_list(caplog):
+    import logging
+    item: dict = {"key": "test", "history": "not-a-list"}
+    with caplog.at_level(logging.WARNING, logger="tools.ci.common.state"):
+        append_history(item, "created", "initial")
+    assert isinstance(item["history"], list)
+    assert len(item["history"]) == 1
+    assert "resetting to list" in caplog.text
