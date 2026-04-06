@@ -149,8 +149,11 @@ TEXT=$(jq -r -f "$SCRIPT_DIR/slack_message.jq" \
   "$MESSAGE_PATH")
 
 # Special-case ping for triage evaluation:
-# For Case 1 in sanity-tests, append an explicit RELEVANT DEVELOPERS ping
+# For Case 1 in sanity-tests, prepend an explicit RELEVANT DEVELOPERS ping
 # even though normal Case 1 formatting omits top-level relevant_developers.
+# NOTE: the ping must appear at the START of the message — nanoclaw (BrAIn bot)
+# only triggers when the message begins with its keyword. Appending at the end
+# means the bot never sees the notification.
 SHOULD_ADD_SANITY_CASE1_PING=$(jq -r --arg workflow_input "${WORKFLOW_NAME:-}" '
   def lc: ascii_downcase;
   (.case | tostring) as $case
@@ -163,7 +166,7 @@ SHOULD_ADD_SANITY_CASE1_PING=$(jq -r --arg workflow_input "${WORKFLOW_NAME:-}" '
 ' "$MESSAGE_PATH" 2>/dev/null || echo "false")
 
 if [ "$SHOULD_ADD_SANITY_CASE1_PING" = "true" ] && [[ "$TEXT" != *"<@${SANITY_CASE1_EXTRA_PING_ID}>"* ]]; then
-  TEXT="${TEXT}"$'\n'"*RELEVANT DEVELOPERS:* <@${SANITY_CASE1_EXTRA_PING_ID}>"
+  TEXT="*RELEVANT DEVELOPERS:* <@${SANITY_CASE1_EXTRA_PING_ID}>"$'\n'"${TEXT}"
 fi
 
 if [ -z "$TEXT" ]; then
