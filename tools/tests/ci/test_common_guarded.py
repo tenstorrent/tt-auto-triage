@@ -1,10 +1,11 @@
-"""Tests for tools.ci.common.guarded."""
+"""Tests for tools.ci.common.guarded and guarded_gh.py helpers."""
 
 from __future__ import annotations
 
 from unittest.mock import patch
 
 from tools.ci.common.guarded import run_guarded_gh
+from tools.ci.guarded_gh import has_option, validate
 
 
 def test_run_guarded_gh_builds_command_string():
@@ -42,3 +43,26 @@ def test_run_guarded_gh_custom_cmd():
         cmd = args[0]
         assert cmd[0] == "python3"
         assert cmd[1] == "/custom/guard.py"
+
+
+def test_has_option_detects_flag_without_value():
+    """has_option must return True even when the flag has no following token."""
+    tokens = ["gh", "pr", "comment", "--repo", "org/repo", "--body"]
+    assert has_option(tokens, "--body") is True
+
+
+def test_has_option_detects_equals_form():
+    tokens = ["gh", "pr", "create", "--title=hello"]
+    assert has_option(tokens, "--title") is True
+
+
+def test_has_option_returns_false_when_absent():
+    tokens = ["gh", "pr", "create", "--title=hello"]
+    assert has_option(tokens, "--body") is False
+
+
+def test_validate_pr_comment_allows_body_at_end():
+    """Regression: --body at end of tokens (no value after) must still pass validation."""
+    tokens = ["gh", "pr", "comment", "--repo", "tenstorrent/tt-metal", "123", "--body", "msg"]
+    decision = validate(tokens)
+    assert decision.allowed, decision.reason

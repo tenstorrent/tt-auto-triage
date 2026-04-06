@@ -74,7 +74,19 @@ def first_positional_after(tokens: Sequence[str], start_idx: int) -> str | None:
 
 
 def has_option(tokens: Sequence[str], long_opt: str, short_opt: str | None = None) -> bool:
-    return extract_option(tokens, long_opt, short_opt) is not None
+    """Check whether *long_opt* (or *short_opt*) appears in *tokens*.
+
+    Unlike ``extract_option``, this detects flags that are present but have no
+    following value (e.g. ``--body`` at end-of-list or ``--body=...`` form).
+    """
+    for tok in tokens:
+        if tok == long_opt or (short_opt and tok == short_opt):
+            return True
+        if tok.startswith(f"{long_opt}="):
+            return True
+        if short_opt and tok.startswith(f"{short_opt}="):
+            return True
+    return False
 
 
 def repo_for_command(tokens: Sequence[str]) -> str | None:
@@ -310,20 +322,28 @@ def main() -> int:
         return 0
 
     if len(tokens) >= 2 and tokens[0] == "git" and tokens[1] == "commit":
+        dirty_before = subprocess.run(
+            ["git", "diff", "--name-only"],
+            check=False, capture_output=True, text=True,
+        )
         first = subprocess.run(tokens, check=False)
         if first.returncode == 0:
             return 0
         print(
-            "git commit failed; retrying once after staging hook-modified tracked files.",
+            "git commit failed; retrying once after staging hook-modified files.",
             file=sys.stderr,
         )
-        add = subprocess.run(["git", "add", "--update"], check=False)
-        if add.returncode != 0:
-            print("Retry aborted: git add --update failed.", file=sys.stderr)
+        dirty_after = subprocess.run(
+            ["git", "diff", "--name-only"],
+            check=False, capture_output=True, text=True,
+        )
+        newly_dirty = set(dirty_after.stdout.splitlines()) - set(dirty_before.stdout.splitlines())
+        if not newly_dirty:
+            print("Retry aborted: no new dirty files after hook run.", file=sys.stderr)
             return first.returncode
-        staged = subprocess.run(["git", "diff", "--cached", "--quiet"], check=False)
-        if staged.returncode == 0:
-            print("Retry aborted: no staged changes after hook run.", file=sys.stderr)
+        add = subprocess.run(["git", "add", "--"] + sorted(newly_dirty), check=False)
+        if add.returncode != 0:
+            print("Retry aborted: git add failed.", file=sys.stderr)
             return first.returncode
         retry = subprocess.run(tokens, check=False)
         return retry.returncode

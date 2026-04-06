@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .run_helper import run
 
+# parents[3]: common/ -> ci/ -> tools/ -> repo root
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _GUARDED_GH_DEFAULT: list[str] = [sys.executable, str(_REPO_ROOT / "tools" / "ci" / "guarded_gh.py")]
 
