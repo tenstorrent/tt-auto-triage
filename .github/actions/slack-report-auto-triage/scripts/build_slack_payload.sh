@@ -166,7 +166,7 @@ SHOULD_ADD_SANITY_CASE1_PING=$(jq -r --arg workflow_input "${WORKFLOW_NAME:-}" '
 ' "$MESSAGE_PATH" 2>/dev/null || echo "false")
 
 if [ "$SHOULD_ADD_SANITY_CASE1_PING" = "true" ] && [[ "$TEXT" != *"<@${SANITY_CASE1_EXTRA_PING_ID}>"* ]]; then
-  TEXT="*RELEVANT DEVELOPERS:* <@${SANITY_CASE1_EXTRA_PING_ID}>"$'\n'"${TEXT}"
+  TEXT="<@${SANITY_CASE1_EXTRA_PING_ID}>"$'\n'"${TEXT}"
 fi
 
 if [ -z "$TEXT" ]; then
