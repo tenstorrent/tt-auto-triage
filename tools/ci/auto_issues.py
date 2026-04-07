@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.ci.helpers import (
+    download_slack_directory,
     fingerprint_for,
     gh,
     job_identity_key,
@@ -146,6 +147,7 @@ def send_slack_notification(job: dict[str, Any], issue_url: str, owners: list[di
             oid = o["id"]
             source = o.get("source", "")
             if source in ("CODEOWNERS", "agent"):
+                # Unresolved GitHub username -- couldn't find Slack ID
                 parts.append(f"`{oid}` ({o.get('name') or oid}, via {source})")
             else:
                 parts.append(f"<@{oid}>")
@@ -196,6 +198,17 @@ def main() -> int:
     pipeline_owners = load_pipeline_reorg_owners(PIPELINE_REORG_DIR)
     codeowners = load_codeowners(CODEOWNERS_PATH)
     log(f"Loaded {len(owners_json)} owners.json entries, {len(pipeline_owners)} pipeline_reorg entries, {len(codeowners)} CODEOWNERS rules")
+
+    # Step 4b: Download Slack directory for GitHub username -> Slack ID resolution
+    slack_directory: list[dict[str, Any]] = []
+    if SLACK_BOT_TOKEN:
+        try:
+            slack_directory = download_slack_directory(SLACK_BOT_TOKEN)
+            log(f"Downloaded Slack directory: {len(slack_directory)} users")
+        except Exception as exc:
+            log(f"  Warning: failed to download Slack directory: {exc}")
+    else:
+        log("  Skipping Slack directory download (no token)")
 
     # Step 5: Download logs for new failures only
     new_jobs: list[dict[str, Any]] = []
@@ -262,6 +275,7 @@ def main() -> int:
                 owners_json, pipeline_owners,
                 codeowners=codeowners,
                 agent_suggested=agent_suggested,
+                slack_directory=slack_directory,
             )
             owner_names = [o.get("name") or o["id"] for o in owners]
             owner_source = owners[0].get("source", "pipeline/owners.json") if owners else "none"
