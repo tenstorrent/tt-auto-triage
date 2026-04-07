@@ -40,11 +40,13 @@ def draft_issue_body(
     job: dict[str, Any],
     log_paths: list[str],
     model: str = "claude-4-sonnet",
+    codeowners_path: str = "",
 ) -> dict[str, Any] | None:
     """Ask Cursor agent to analyze logs and draft an issue body.
 
     Returns a dict with keys: deterministic, confidence, signature,
-    issue_title, issue_body, error_excerpt.  Returns None on failure.
+    issue_title, issue_body, error_excerpt, suggested_owners.
+    Returns None on failure.
     """
     workflow_name = job["workflow_name"]
     job_name = job["job_name"]
@@ -57,6 +59,14 @@ def draft_issue_body(
 
     run_url_list = "\n".join(f"  - Run {i}: {u}" for i, u in enumerate(run_urls, 1) if u)
     job_url_list = "\n".join(f"  - Run {i}: {u}" for i, u in enumerate(job_urls, 1) if u)
+
+    codeowners_section = ""
+    if codeowners_path:
+        codeowners_section = f"""
+A CODEOWNERS file is available at: {codeowners_path}
+Read this file to identify GitHub usernames who own the failing test paths or
+workflow file. Ignore team handles (containing '/') and @tenstorrent/codeowner-bypass.
+"""
 
     prompt = f"""\
 You are reviewing a CI failure for deterministic issue creation.
@@ -75,7 +85,7 @@ You MUST read each log file and determine the terminal failure.
 
 Log file references:
 {chr(10).join(f"- {section}" for section in log_sections)}
-
+{codeowners_section}
 INSTRUCTIONS:
 1. Read ALL three log files using your file reading tools.
 2. Identify the terminal failure or error in each log.
@@ -97,10 +107,13 @@ INSTRUCTIONS:
      ### Notes
      (any additional context, e.g. timeout vs assertion failure)
 5. If the errors are NOT semantically identical across all 3 runs, set deterministic to false.
+6. IMPORTANT: Identify likely owners for this failure. Check CODEOWNERS for the failing
+   test paths and workflow file. Return their GitHub usernames (without @) in
+   "suggested_owners". If you cannot identify anyone, return an empty list.
 
 Output the marker below on its own line, followed by compact JSON only:
 {MARKER}
-{{"deterministic": true/false, "confidence": "low|medium|high", "signature": "short error signature", "error_excerpt": "key error text", "issue_title": "[CI] ...", "issue_body": "full markdown body"}}
+{{"deterministic": true/false, "confidence": "low|medium|high", "signature": "short error signature", "error_excerpt": "key error text", "issue_title": "[CI] ...", "issue_body": "full markdown body", "suggested_owners": ["github_username1", ...]}}
 """
     try:
         output = _run_cursor_agent(prompt, model)

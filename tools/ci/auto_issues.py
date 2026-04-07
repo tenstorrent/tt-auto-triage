@@ -35,6 +35,7 @@ from tools.ci.helpers import (
 from tools.ci.download_data import download_workflow_data
 from tools.ci.detect_failures import find_failing_jobs, download_job_logs
 from tools.ci.resolve_owners import (
+    load_codeowners,
     load_owners_json,
     load_pipeline_reorg_owners,
     resolve_owners,
@@ -58,6 +59,8 @@ PIPELINE_REORG_DIR = Path(os.environ.get("PIPELINE_REORG_DIR", "tt-metal/tests/p
 ISSUE_WRITE_TOKEN = os.environ.get("ISSUE_WRITE_TOKEN", "")
 CURSOR_MODEL = os.environ.get("CURSOR_MODEL", "claude-4-sonnet")
 SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
+MAX_ISSUES = int(os.environ.get("MAX_ISSUES", "0"))  # 0 = unlimited
+CODEOWNERS_PATH = Path(os.environ.get("CODEOWNERS_PATH", "tt-metal/.github/CODEOWNERS"))
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +140,18 @@ def send_slack_notification(job: dict[str, Any], issue_url: str, owners: list[di
     if not SLACK_BOT_TOKEN or not SLACK_CHANNEL_ID:
         log("  Skipping Slack notification (no token or channel)")
         return
-    owner_text = ", ".join(f"<@{o['id']}>" for o in owners) if owners else "No owners identified -- please triage manually"
+    if owners:
+        parts: list[str] = []
+        for o in owners:
+            oid = o["id"]
+            source = o.get("source", "")
+            if source in ("CODEOWNERS", "agent"):
+                parts.append(f"`{oid}` ({o.get('name') or oid}, via {source})")
+            else:
+                parts.append(f"<@{oid}>")
+        owner_text = ", ".join(parts)
+    else:
+        owner_text = "No owners identified -- please triage manually"
     run_links = ", ".join(f"<{url}|run>" for url in job["run_urls"][:3] if url)
     text = (
         f":rotating_light: *New CI auto-triage issue created*\n"
@@ -160,6 +174,7 @@ def main() -> int:
     log(f"Target repo: {TARGET_REPO}")
     log(f"Issue repo:  {ISSUE_REPO}")
     log(f"Create issues: {CREATE_ISSUES}")
+    log(f"Max issues: {MAX_ISSUES or 'unlimited'}")
 
     # Step 1: Download workflow data
     workflow_data = download_workflow_data(TARGET_REPO)
@@ -179,7 +194,8 @@ def main() -> int:
     # Step 4: Load owners
     owners_json = load_owners_json(OWNERS_JSON_PATH)
     pipeline_owners = load_pipeline_reorg_owners(PIPELINE_REORG_DIR)
-    log(f"Loaded {len(owners_json)} owners.json entries, {len(pipeline_owners)} pipeline_reorg entries")
+    codeowners = load_codeowners(CODEOWNERS_PATH)
+    log(f"Loaded {len(owners_json)} owners.json entries, {len(pipeline_owners)} pipeline_reorg entries, {len(codeowners)} CODEOWNERS rules")
 
     # Step 5: Download logs for new failures only
     new_jobs: list[dict[str, Any]] = []
@@ -202,20 +218,30 @@ def main() -> int:
             "existing": sj["existing"],
         })
 
+    created_so_far = 0
     if new_jobs:
         logs_dir = Path("build_ci/auto_issues/logs")
         enriched_jobs = download_job_logs(new_jobs, TARGET_REPO, logs_dir)
 
         for job in enriched_jobs:
-            owners = resolve_owners(job["workflow_name"], job["job_name"], owners_json, pipeline_owners)
-            owner_names = [o.get("name") or o["id"] for o in owners]
-            log(f"  New failure: {job['job_name']} (owners: {owner_names})")
+            if MAX_ISSUES and created_so_far >= MAX_ISSUES:
+                log(f"  Hit MAX_ISSUES limit ({MAX_ISSUES}), stopping")
+                summary.append({
+                    "workflow_name": job["workflow_name"],
+                    "job": job["job_name"],
+                    "action": "limit_reached",
+                })
+                continue
 
-            # Step 6: Cursor agent drafting
+            # Step 6: Cursor agent drafting (before owner resolution so we can use suggested_owners)
             agent_result: dict[str, Any] | None = None
+            codeowners_abs = str(CODEOWNERS_PATH) if CODEOWNERS_PATH.exists() else ""
             if os.environ.get("CURSOR_API_KEY"):
                 log(f"  Drafting issue via Cursor agent...")
-                agent_result = draft_issue_body(job, job.get("log_paths", []), CURSOR_MODEL)
+                agent_result = draft_issue_body(
+                    job, job.get("log_paths", []), CURSOR_MODEL,
+                    codeowners_path=codeowners_abs,
+                )
                 if agent_result:
                     det = agent_result.get("deterministic", False)
                     conf = agent_result.get("confidence", "?")
@@ -227,9 +253,19 @@ def main() -> int:
                             "job": job["job_name"],
                             "action": "agent_skipped",
                             "reason": agent_result.get("reason", "not deterministic"),
-                            "owners": owner_names,
                         })
                         continue
+
+            agent_suggested = (agent_result or {}).get("suggested_owners", [])
+            owners = resolve_owners(
+                job["workflow_name"], job["job_name"],
+                owners_json, pipeline_owners,
+                codeowners=codeowners,
+                agent_suggested=agent_suggested,
+            )
+            owner_names = [o.get("name") or o["id"] for o in owners]
+            owner_source = owners[0].get("source", "pipeline/owners.json") if owners else "none"
+            log(f"  New failure: {job['job_name']} (owners: {owner_names}, source: {owner_source})")
 
             if not CREATE_ISSUES:
                 log("  Dry run -- would create issue")
@@ -243,6 +279,7 @@ def main() -> int:
 
             issue_url = create_issue(job, agent_result)
             send_slack_notification(job, issue_url, owners)
+            created_so_far += 1
             signature = (agent_result or {}).get("signature", "")
             summary.append({
                 "workflow_name": job["workflow_name"],
@@ -254,7 +291,7 @@ def main() -> int:
             })
 
     # Step 7: Render summary
-    created_count = sum(1 for s in summary if s["action"] == "created")
+    created_count = created_so_far
     skipped_count = sum(1 for s in summary if s["action"] == "skipped")
     log(f"\nDone: {created_count} created, {skipped_count} skipped, {len(failing_jobs)} total failures")
 
