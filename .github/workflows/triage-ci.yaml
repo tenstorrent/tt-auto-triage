@@ -1,0 +1,65 @@
+name: "(triage) Auto Issue Creation"
+
+on:
+  workflow_call:
+    inputs:
+      create-issues:
+        description: "Create GitHub issues for deterministic failures"
+        type: boolean
+        default: false
+      issue-repo:
+        description: "Repository to create issues in"
+        type: string
+        default: "ebanerjeeTT/issue_dump"
+      target-repo:
+        description: "Repository to analyze workflow data from"
+        type: string
+        default: "tenstorrent/tt-metal"
+    secrets:
+      AGGREGATE_READ_TOKEN:
+        description: "Token with read access to target-repo workflow runs and artifacts"
+        required: true
+      ISSUE_WRITE_TOKEN:
+        description: "Token with write access to issue-repo"
+        required: true
+      SLACK_BOT_TOKEN:
+        description: "Slack bot token for posting messages"
+        required: true
+      SLACK_CHANNEL_ID:
+        description: "Slack channel ID to post notifications to"
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  create-issues:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout tt-auto-triage
+        uses: actions/checkout@v4
+
+      - name: Checkout tt-metal (for owners data)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target-repo }}
+          path: tt-metal
+          sparse-checkout: |
+            .github/actions/analyze-workflow-data/owners.json
+            tests/pipeline_reorg
+          token: ${{ secrets.AGGREGATE_READ_TOKEN }}
+
+      - name: Run auto-issue creation
+        env:
+          GITHUB_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+          ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          CREATE_ISSUES: ${{ inputs.create-issues }}
+          ISSUE_REPO: ${{ inputs.issue-repo }}
+          TARGET_REPO: ${{ inputs.target-repo }}
+          OWNERS_JSON_PATH: tt-metal/.github/actions/analyze-workflow-data/owners.json
+          PIPELINE_REORG_DIR: tt-metal/tests/pipeline_reorg
+        run: python3 tools/ci/auto_issues.py
