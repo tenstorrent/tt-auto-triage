@@ -12,9 +12,9 @@ MARKER = "===FINAL_REVIEW==="
 
 
 def _run_cursor_agent(prompt: str, model: str = "claude-4-sonnet") -> str:
-    cmd = ["cursor", "agent", "--trust", "-p", prompt]
+    cmd = ["agent", "--trust", "-p", prompt]
     if model != "auto":
-        cmd[2:2] = ["--model", model]
+        cmd[1:1] = ["--model", model]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if proc.returncode != 0:
         log(f"  Cursor agent returned exit code {proc.returncode}")
