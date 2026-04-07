@@ -12,6 +12,48 @@ from .helpers import log
 IGNORE_CODEOWNERS = {"@tenstorrent/codeowner-bypass", "@tenstorrent/metalium-developers-infra"}
 
 
+def _normalize(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", value.lower())
+
+
+def lookup_slack_id(
+    query: str,
+    slack_directory: list[dict[str, Any]],
+) -> dict[str, str] | None:
+    """Look up a GitHub username, real name, or email in the Slack directory.
+
+    Returns {"id": slack_id, "name": real_name} or None if no match.
+    """
+    query_norm = _normalize(query)
+    if not query_norm:
+        return None
+
+    best_score = 0
+    best_user: dict[str, Any] | None = None
+
+    for user in slack_directory:
+        if user.get("deleted") or user.get("is_bot"):
+            continue
+        for field in ("display_name", "real_name", "username", "email"):
+            val = user.get(field, "")
+            if not val:
+                continue
+            val_norm = _normalize(val)
+            if not val_norm:
+                continue
+            if val_norm == query_norm:
+                return {"id": user["id"], "name": user.get("real_name") or user.get("display_name") or query}
+            if query_norm in val_norm and len(query_norm) >= 3:
+                score = len(query_norm) / len(val_norm)
+                if score > best_score:
+                    best_score = score
+                    best_user = user
+
+    if best_user and best_score >= 0.5:
+        return {"id": best_user["id"], "name": best_user.get("real_name") or best_user.get("display_name") or query}
+    return None
+
+
 def load_owners_json(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         log(f"  Warning: {path} not found")
@@ -73,14 +115,35 @@ def load_codeowners(path: Path) -> dict[str, list[str]]:
     return rules
 
 
+def _gh_users_to_slack(
+    gh_usernames: list[str],
+    slack_directory: list[dict[str, Any]],
+    source: str,
+) -> list[dict[str, str]]:
+    """Resolve a list of GitHub usernames to Slack IDs via directory lookup."""
+    seen: set[str] = set()
+    result: list[dict[str, str]] = []
+    for gh_user in gh_usernames:
+        if gh_user in seen:
+            continue
+        seen.add(gh_user)
+        resolved = lookup_slack_id(gh_user, slack_directory)
+        if resolved:
+            result.append({"id": resolved["id"], "name": resolved["name"]})
+        else:
+            result.append({"id": f"@{gh_user}", "name": gh_user, "source": source})
+    return result
+
+
 def _match_codeowners(
     workflow_name: str,
     codeowners: dict[str, list[str]],
+    slack_directory: list[dict[str, Any]],
 ) -> list[dict[str, str]]:
     """Try to match workflow name to a CODEOWNERS pattern.
 
     Looks for .github/workflows/<workflow>.yaml patterns and returns
-    matching individual GitHub usernames (not team handles).
+    matching individual GitHub usernames resolved to Slack IDs.
     """
     wf_lower = workflow_name.lower().replace(" ", "-").replace("(", "").replace(")", "")
     candidates: list[str] = []
@@ -90,13 +153,9 @@ def _match_codeowners(
             pat_base = pat_lower.rsplit("/", 1)[-1].replace(".yaml", "").replace(".yml", "").replace("*", "")
             if pat_base and pat_base in wf_lower:
                 candidates.extend(owners)
-    seen: set[str] = set()
-    result: list[dict[str, str]] = []
-    for gh_user in candidates:
-        if gh_user not in seen:
-            seen.add(gh_user)
-            result.append({"id": f"@{gh_user}", "name": gh_user, "source": "CODEOWNERS"})
-    return result
+    if not candidates:
+        return []
+    return _gh_users_to_slack(candidates, slack_directory, "CODEOWNERS")
 
 
 def resolve_owners(
@@ -106,10 +165,12 @@ def resolve_owners(
     pipeline_owners: list[dict[str, Any]],
     codeowners: dict[str, list[str]] | None = None,
     agent_suggested: list[str] | None = None,
+    slack_directory: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
     """Resolve owners from multiple sources with priority: pipeline_reorg > owners.json > CODEOWNERS > agent."""
     combined = f"{workflow_name} / {job_name}".lower()
     job_lower = job_name.lower()
+    slack_dir = slack_directory or []
 
     for entry in pipeline_owners:
         entry_name = entry["name"].lower()
@@ -128,11 +189,11 @@ def resolve_owners(
                 return [{"id": owner["id"], "name": owner.get("name", "")}]
 
     if codeowners:
-        co_owners = _match_codeowners(workflow_name, codeowners)
+        co_owners = _match_codeowners(workflow_name, codeowners, slack_dir)
         if co_owners:
             return co_owners
 
     if agent_suggested:
-        return [{"id": f"@{u}", "name": u, "source": "agent"} for u in agent_suggested]
+        return _gh_users_to_slack(agent_suggested, slack_dir, "agent")
 
     return []
