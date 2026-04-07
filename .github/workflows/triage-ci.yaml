@@ -15,6 +15,10 @@ on:
         description: "Repository to analyze workflow data from"
         type: string
         default: "tenstorrent/tt-metal"
+      max-issues:
+        description: "Maximum number of issues to create (0 = unlimited)"
+        type: number
+        default: 0
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to target-repo workflow runs and artifacts"
@@ -54,6 +58,7 @@ jobs:
           path: tt-metal
           sparse-checkout: |
             .github/actions/analyze-workflow-data/owners.json
+            .github/CODEOWNERS
             tests/pipeline_reorg
           token: ${{ secrets.AGGREGATE_READ_TOKEN }}
 
@@ -89,6 +94,8 @@ jobs:
           TARGET_REPO: ${{ inputs.target-repo }}
           OWNERS_JSON_PATH: tt-metal/.github/actions/analyze-workflow-data/owners.json
           PIPELINE_REORG_DIR: tt-metal/tests/pipeline_reorg
+          CODEOWNERS_PATH: tt-metal/.github/CODEOWNERS
+          MAX_ISSUES: ${{ inputs.max-issues }}
           SUMMARY_OUTPUT: summary.md
           PYTHONPATH: .
         run: python3 -m tools.ci.auto_issues
