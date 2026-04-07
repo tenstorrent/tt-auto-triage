@@ -276,6 +276,7 @@ def main() -> int:
                 codeowners=codeowners,
                 agent_suggested=agent_suggested,
                 slack_directory=slack_directory,
+                github_token=os.environ.get("GITHUB_TOKEN"),
             )
             owner_names = [o.get("name") or o["id"] for o in owners]
             owner_source = owners[0].get("source", "pipeline/owners.json") if owners else "none"

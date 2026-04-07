@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .helpers import log
+from .helpers import api_get, log
 
 IGNORE_CODEOWNERS = {"@tenstorrent/codeowner-bypass", "@tenstorrent/metalium-developers-infra"}
 
@@ -16,11 +16,24 @@ def _normalize(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
+def _github_user_info(gh_username: str, token: str | None = None) -> dict[str, str]:
+    """Fetch a GitHub user's real name and email via the REST API."""
+    try:
+        data = api_get(f"https://api.github.com/users/{gh_username}", token)
+        return {
+            "name": data.get("name") or "",
+            "email": data.get("email") or "",
+        }
+    except Exception as exc:
+        log(f"  Warning: GitHub user lookup failed for {gh_username}: {exc}")
+        return {"name": "", "email": ""}
+
+
 def lookup_slack_id(
     query: str,
     slack_directory: list[dict[str, Any]],
 ) -> dict[str, str] | None:
-    """Look up a GitHub username, real name, or email in the Slack directory.
+    """Look up a real name or email in the Slack directory.
 
     Returns {"id": slack_id, "name": real_name} or None if no match.
     """
@@ -34,7 +47,7 @@ def lookup_slack_id(
     for user in slack_directory:
         if user.get("deleted") or user.get("is_bot"):
             continue
-        for field in ("display_name", "real_name", "username", "email"):
+        for field in ("real_name", "display_name", "email"):
             val = user.get(field, "")
             if not val:
                 continue
@@ -119,19 +132,34 @@ def _gh_users_to_slack(
     gh_usernames: list[str],
     slack_directory: list[dict[str, Any]],
     source: str,
+    github_token: str | None = None,
 ) -> list[dict[str, str]]:
-    """Resolve a list of GitHub usernames to Slack IDs via directory lookup."""
+    """Resolve GitHub usernames to Slack IDs.
+
+    Flow: GitHub username -> GitHub API (real name + email) -> Slack directory lookup.
+    """
     seen: set[str] = set()
     result: list[dict[str, str]] = []
     for gh_user in gh_usernames:
         if gh_user in seen:
             continue
         seen.add(gh_user)
-        resolved = lookup_slack_id(gh_user, slack_directory)
+
+        info = _github_user_info(gh_user, github_token)
+        real_name = info["name"]
+        email = info["email"]
+
+        resolved = None
+        if real_name:
+            resolved = lookup_slack_id(real_name, slack_directory)
+        if not resolved and email:
+            resolved = lookup_slack_id(email, slack_directory)
+
         if resolved:
             result.append({"id": resolved["id"], "name": resolved["name"]})
         else:
-            result.append({"id": f"@{gh_user}", "name": gh_user, "source": source})
+            display = real_name or gh_user
+            result.append({"id": f"@{gh_user}", "name": display, "source": source})
     return result
 
 
@@ -139,6 +167,7 @@ def _match_codeowners(
     workflow_name: str,
     codeowners: dict[str, list[str]],
     slack_directory: list[dict[str, Any]],
+    github_token: str | None = None,
 ) -> list[dict[str, str]]:
     """Try to match workflow name to a CODEOWNERS pattern.
 
@@ -155,7 +184,7 @@ def _match_codeowners(
                 candidates.extend(owners)
     if not candidates:
         return []
-    return _gh_users_to_slack(candidates, slack_directory, "CODEOWNERS")
+    return _gh_users_to_slack(candidates, slack_directory, "CODEOWNERS", github_token)
 
 
 def resolve_owners(
@@ -166,6 +195,7 @@ def resolve_owners(
     codeowners: dict[str, list[str]] | None = None,
     agent_suggested: list[str] | None = None,
     slack_directory: list[dict[str, Any]] | None = None,
+    github_token: str | None = None,
 ) -> list[dict[str, str]]:
     """Resolve owners from multiple sources with priority: pipeline_reorg > owners.json > CODEOWNERS > agent."""
     combined = f"{workflow_name} / {job_name}".lower()
@@ -189,11 +219,11 @@ def resolve_owners(
                 return [{"id": owner["id"], "name": owner.get("name", "")}]
 
     if codeowners:
-        co_owners = _match_codeowners(workflow_name, codeowners, slack_dir)
+        co_owners = _match_codeowners(workflow_name, codeowners, slack_dir, github_token)
         if co_owners:
             return co_owners
 
     if agent_suggested:
-        return _gh_users_to_slack(agent_suggested, slack_dir, "agent")
+        return _gh_users_to_slack(agent_suggested, slack_dir, "agent", github_token)
 
     return []
