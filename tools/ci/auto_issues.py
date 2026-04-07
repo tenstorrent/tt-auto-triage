@@ -36,7 +36,7 @@ SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 SLACK_CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "")
 OWNERS_JSON_PATH = Path(os.environ.get("OWNERS_JSON_PATH", "tt-metal/.github/actions/analyze-workflow-data/owners.json"))
 PIPELINE_REORG_DIR = Path(os.environ.get("PIPELINE_REORG_DIR", "tt-metal/tests/pipeline_reorg"))
-ISSUE_WRITE_TOKEN = os.environ.get("ISSUE_WRITE_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
+ISSUE_WRITE_TOKEN = os.environ.get("ISSUE_WRITE_TOKEN", "")
 
 SKIP_KEYWORDS: tuple[str, ...] = ("sanity",)
 WORKFLOW_FILE = "aggregate-workflow-data.yaml"

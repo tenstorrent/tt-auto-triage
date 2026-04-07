@@ -57,7 +57,7 @@ jobs:
       - name: Run auto-issue creation
         env:
           GITHUB_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
-          ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN || secrets.AGGREGATE_READ_TOKEN }}
+          ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
           CREATE_ISSUES: ${{ inputs.create-issues }}
