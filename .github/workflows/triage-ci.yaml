@@ -40,6 +40,9 @@ jobs:
     steps:
       - name: Checkout tt-auto-triage
         uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-auto-triage
+          ref: ebanerjee/auto-issues
 
       - name: Checkout tt-metal (for owners data)
         uses: actions/checkout@v4
@@ -54,7 +57,7 @@ jobs:
       - name: Run auto-issue creation
         env:
           GITHUB_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
-          ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+          ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN || secrets.AGGREGATE_READ_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
           CREATE_ISSUES: ${{ inputs.create-issues }}
