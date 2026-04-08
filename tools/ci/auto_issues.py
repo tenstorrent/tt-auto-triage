@@ -79,7 +79,8 @@ def has_existing_issue(job: dict[str, Any], open_issues: list[dict[str, Any]]) -
     return None
 
 
-def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> str:
+def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> tuple[str, str, str]:
+    """Create a GitHub issue. Returns (url, title, final_body)."""
     key = job_identity_key(job["workflow_name"], job["job_name"])
     title = agent_result.get("issue_title", f"[CI] {job['workflow_name']} / {job['job_name']}")
     body = agent_result["issue_body"]
@@ -101,7 +102,7 @@ def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> str:
     )
     issue_url = raw.strip()
     log(f"  Created issue: {issue_url}")
-    return issue_url
+    return issue_url, title, body
 
 
 # ---------------------------------------------------------------------------
@@ -274,9 +275,11 @@ def main() -> int:
                 })
                 continue
 
-            issue_url = create_issue(job, agent_result)
+            issue_url, issue_title, issue_body = create_issue(job, agent_result)
             send_slack_notification(job, issue_url, owners)
             created_so_far += 1
+            issue_number = issue_url.rsplit("/", 1)[-1]
+            open_issues.append({"number": issue_number, "title": issue_title, "body": issue_body, "url": issue_url})
             signature = agent_result.get("signature", "")
             summary.append({
                 "workflow_name": job["workflow_name"],
@@ -288,13 +291,8 @@ def main() -> int:
             })
 
     # Step 7: Render summary
-    created_count = created_so_far
     skipped_count = sum(1 for s in summary if s["action"] == "skipped")
-    log(f"\nDone: {created_count} created, {skipped_count} skipped, {len(failing_jobs)} total failures")
-
-    # Reload open issues to include newly created ones
-    if created_count > 0:
-        open_issues = load_all_open_issues(ISSUE_REPO, ISSUE_WRITE_TOKEN)
+    log(f"\nDone: {created_so_far} created, {skipped_count} skipped, {len(failing_jobs)} total failures")
 
     md = render(summary, open_issues, ISSUE_REPO)
     if SUMMARY_OUTPUT:
@@ -305,7 +303,7 @@ def main() -> int:
 
     # Also write JSON summary to stderr for workflow logs
     print(json.dumps({
-        "created": created_count,
+        "created": created_so_far,
         "skipped": skipped_count,
         "failures": summary,
     }, indent=2), file=sys.stderr)
