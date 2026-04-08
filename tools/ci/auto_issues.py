@@ -252,8 +252,7 @@ def main() -> int:
                 github_token=os.environ.get("GITHUB_TOKEN"),
             )
             owner_names = [o.get("name") or o["id"] for o in owners]
-            owner_source = owners[0].get("source", "pipeline/owners.json") if owners else "none"
-            log(f"  New failure: {job['job_name']} (owners: {owner_names}, source: {owner_source})")
+            log(f"  New failure: {job['job_name']} (owners: {owner_names})")
 
             if not agent_result or not agent_result.get("issue_body"):
                 log(f"  Agent returned no issue body for {job['job_name']}, skipping")
