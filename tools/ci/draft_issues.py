@@ -41,6 +41,7 @@ def draft_issue_body(
     log_paths: list[str],
     model: str = "claude-4-sonnet",
     codeowners_path: str = "",
+    consecutive: int = 3,
 ) -> dict[str, Any] | None:
     """Ask Cursor agent to analyze logs and draft an issue body.
 
@@ -80,7 +81,7 @@ Failing run URLs:
 Failing job URLs:
 {job_url_list}
 
-Log files for each of the 3 failing runs are saved locally.
+Log files for each of the {consecutive} failing runs are saved locally.
 You MUST read each log file and determine the terminal failure.
 
 Log file references:
@@ -89,7 +90,7 @@ Log file references:
 INSTRUCTIONS:
 1. Read ALL three log files using your file reading tools.
 2. Identify the terminal failure or error in each log.
-3. Determine if all 3 runs fail with semantically identical errors.
+3. Determine if all {consecutive} runs fail with semantically identical errors.
 4. If yes: draft a GitHub issue title and body in this exact format:
    - Title: a concise description of the failure (NOT just "deterministic failure")
    - Body: a markdown CI Failure Report with these sections:

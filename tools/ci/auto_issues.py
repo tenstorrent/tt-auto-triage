@@ -88,7 +88,7 @@ def create_issue(job: dict[str, Any], agent_result: dict[str, Any] | None) -> st
         signature = agent_result.get("signature", "")
         if signature:
             fp = fingerprint_for(job["workflow_name"], job["job_name"], signature)
-            if f"Auto-triage-fingerprint:" not in body:
+            if "Auto-triage-fingerprint:" not in body:
                 body += f"\n\n`Auto-triage-fingerprint: {fp}`"
         if "Auto-triage-job-key:" not in body:
             body += f"\n`Auto-triage-job-key: {key}`"
@@ -254,6 +254,7 @@ def main() -> int:
                 agent_result = draft_issue_body(
                     job, job.get("log_paths", []), CURSOR_MODEL,
                     codeowners_path=codeowners_abs,
+                    consecutive=CONSECUTIVE,
                 )
                 if agent_result:
                     det = agent_result.get("deterministic", False)

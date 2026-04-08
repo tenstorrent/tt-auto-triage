@@ -46,11 +46,19 @@ def find_failing_jobs(
             run_id = run.get("id")
             if not run_id:
                 continue
-            url = f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100"
-            data = api_get(url, token)
+            all_jobs: list[dict[str, Any]] = []
+            page = 1
+            while True:
+                url = f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100&page={page}"
+                data = api_get(url, token)
+                batch = data.get("jobs", [])
+                all_jobs.extend(batch)
+                if len(batch) < 100:
+                    break
+                page += 1
             failed = {
                 j["name"]: j.get("html_url", "")
-                for j in data.get("jobs", [])
+                for j in all_jobs
                 if j.get("conclusion") == "failure"
             }
             run_failed_jobs[run_id] = failed
