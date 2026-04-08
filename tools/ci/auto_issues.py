@@ -79,21 +79,17 @@ def has_existing_issue(job: dict[str, Any], open_issues: list[dict[str, Any]]) -
     return None
 
 
-def create_issue(job: dict[str, Any], agent_result: dict[str, Any] | None) -> str:
+def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> str:
     key = job_identity_key(job["workflow_name"], job["job_name"])
-
-    if agent_result and agent_result.get("deterministic") and agent_result.get("issue_body"):
-        title = agent_result.get("issue_title", f"[CI] {job['workflow_name']} / {job['job_name']}")
-        body = agent_result["issue_body"]
-        signature = agent_result.get("signature", "")
-        if signature:
-            fp = fingerprint_for(job["workflow_name"], job["job_name"], signature)
-            if "Auto-triage-fingerprint:" not in body:
-                body += f"\n\n`Auto-triage-fingerprint: {fp}`"
-        if "Auto-triage-job-key:" not in body:
-            body += f"\n`Auto-triage-job-key: {key}`"
-    else:
-        title, body = _fallback_issue(job, key)
+    title = agent_result.get("issue_title", f"[CI] {job['workflow_name']} / {job['job_name']}")
+    body = agent_result["issue_body"]
+    signature = agent_result.get("signature", "")
+    if signature:
+        fp = fingerprint_for(job["workflow_name"], job["job_name"], signature)
+        if "Auto-triage-fingerprint:" not in body:
+            body += f"\n\n`Auto-triage-fingerprint: {fp}`"
+    if "Auto-triage-job-key:" not in body:
+        body += f"\n`Auto-triage-job-key: {key}`"
 
     raw = gh(
         "issue", "create",
@@ -106,30 +102,6 @@ def create_issue(job: dict[str, Any], agent_result: dict[str, Any] | None) -> st
     issue_url = raw.strip()
     log(f"  Created issue: {issue_url}")
     return issue_url
-
-
-def _fallback_issue(job: dict[str, Any], key: str) -> tuple[str, str]:
-    """Procedural fallback when agent drafting fails or is unavailable."""
-    run_links = "\n".join(f"- {url}" for url in job["run_urls"] if url)
-    job_links = "\n".join(f"- {url}" for url in job["job_urls"] if url)
-    title = f"[CI] {job['workflow_name']} / {job['job_name']} -- deterministic failure"
-    body = f"""## Deterministic CI Failure
-
-**Workflow:** `{job['workflow_name']}`
-**Job:** `{job['job_name']}`
-**Consecutive failures:** {CONSECUTIVE}
-
-### Failing run links
-{run_links}
-
-### Failing job links
-{job_links}
-
----
-_Auto-created by CI triage. Do not remove the markers below._
-`Auto-triage-job-key: {key}`
-"""
-    return title, body
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +255,16 @@ def main() -> int:
             owner_source = owners[0].get("source", "pipeline/owners.json") if owners else "none"
             log(f"  New failure: {job['job_name']} (owners: {owner_names}, source: {owner_source})")
 
+            if not agent_result or not agent_result.get("issue_body"):
+                log(f"  Agent returned no issue body for {job['job_name']}, skipping")
+                summary.append({
+                    "workflow_name": job["workflow_name"],
+                    "job": job["job_name"],
+                    "action": "agent_skipped",
+                    "reason": "no issue body from agent",
+                })
+                continue
+
             if not CREATE_ISSUES:
                 log("  Dry run -- would create issue")
                 summary.append({
@@ -296,7 +278,7 @@ def main() -> int:
             issue_url = create_issue(job, agent_result)
             send_slack_notification(job, issue_url, owners)
             created_so_far += 1
-            signature = (agent_result or {}).get("signature", "")
+            signature = agent_result.get("signature", "")
             summary.append({
                 "workflow_name": job["workflow_name"],
                 "job": job["job_name"],
