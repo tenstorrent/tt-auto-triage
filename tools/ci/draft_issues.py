@@ -9,16 +9,19 @@ from typing import Any
 from .helpers import log
 
 MARKER = "===FINAL_REVIEW==="
+_DEFAULT_MODEL = "claude-4-sonnet"
+_AGENT_TIMEOUT = 300
 
 
-def _run_cursor_agent(prompt: str, model: str = "claude-4-sonnet") -> str:
+def _run_cursor_agent(prompt: str, model: str = _DEFAULT_MODEL) -> str:
     cmd = ["agent", "--trust", "-p", prompt]
     if model != "auto":
         cmd[1:1] = ["--model", model]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=_AGENT_TIMEOUT)
     if proc.returncode != 0:
-        log(f"  Cursor agent returned exit code {proc.returncode}")
-        log(f"  stderr: {proc.stderr[:500]}")
+        raise RuntimeError(
+            f"Cursor agent exited with code {proc.returncode}: {proc.stderr[:200]}"
+        )
     return proc.stdout or ""
 
 
@@ -26,20 +29,23 @@ def _parse_agent_json(text: str) -> dict[str, Any]:
     idx = text.rfind(MARKER)
     if idx < 0:
         raise ValueError(f"Marker {MARKER!r} not found in agent output")
-    payload = text[idx + len(MARKER):].strip()
-    # Strip fenced code blocks
+    payload = text[idx + len(MARKER) :].strip()
+    # Strip optional fenced code block (```[lang]\n...\n```)
+    # Use rfind so that closing-fence detection works for both compact and
+    # pretty-printed JSON: the outermost ``` is always the rightmost one.
     if payload.startswith("```"):
         first_nl = payload.index("\n")
-        payload = payload[first_nl + 1:]
-        if "```" in payload:
-            payload = payload[:payload.rindex("```")]
-    return json.loads(payload)
+        payload = payload[first_nl + 1 :]
+        close_idx = payload.rfind("\n```")
+        if close_idx >= 0:
+            payload = payload[:close_idx]
+    return json.loads(payload.strip())
 
 
 def draft_issue_body(
     job: dict[str, Any],
     log_paths: list[str],
-    model: str = "claude-4-sonnet",
+    model: str = _DEFAULT_MODEL,
     codeowners_path: str = "",
     consecutive: int = 3,
 ) -> dict[str, Any] | None:
@@ -56,10 +62,16 @@ def draft_issue_body(
 
     log_sections: list[str] = []
     for idx, (url, path) in enumerate(zip(job_urls, log_paths), start=1):
-        log_sections.append(f"Run {idx} job URL: {url}\nRun {idx} local log path: {path}")
+        log_sections.append(
+            f"Run {idx} job URL: {url}\nRun {idx} local log path: {path}"
+        )
 
-    run_url_list = "\n".join(f"  - Run {i}: {u}" for i, u in enumerate(run_urls, 1) if u)
-    job_url_list = "\n".join(f"  - Run {i}: {u}" for i, u in enumerate(job_urls, 1) if u)
+    run_url_list = "\n".join(
+        f"  - Run {i}: {u}" for i, u in enumerate(run_urls, 1) if u
+    )
+    job_url_list = "\n".join(
+        f"  - Run {i}: {u}" for i, u in enumerate(job_urls, 1) if u
+    )
 
     codeowners_section = ""
     if codeowners_path:
@@ -123,6 +135,9 @@ Output the marker below on its own line, followed by compact JSON only:
             log("  Agent returned non-dict JSON, skipping")
             return None
         return result
+    except subprocess.TimeoutExpired:
+        log(f"  Cursor agent timed out after {_AGENT_TIMEOUT}s")
+        return None
     except Exception as exc:
-        log(f"  Agent drafting failed: {exc}")
+        log(f"  Agent drafting failed ({type(exc).__name__}): {exc}")
         return None
