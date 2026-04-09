@@ -18,17 +18,41 @@ INSTRUCTIONS:
 2. For api_status == "still_failing":
    - The job is still failing in recent runs, but the failure may be for a
      DIFFERENT reason than what was originally reported in this issue.
-   - Read the current failing run logs carefully.
+   - Read ALL provided failing run logs carefully.
    - Compare the root cause of the current failure against the original error
      described in the issue body. Focus on the underlying cause, not surface
      details like line numbers, timestamps, or memory addresses.
-   - If the current failure is the SAME root cause as the original issue:
-     set should_close to false. The issue is still valid.
-   - If the current failure is a DIFFERENT root cause (the original error is
-     gone and something new is broken): set should_close to true. The original
-     issue has been resolved; the new failure needs a separate issue.
-   - If you cannot confidently determine whether it is the same or different:
+
+   You may only set should_close to true if ALL THREE of these conditions hold:
+
+   Condition A — Consistently different:
+     The new failure must show a clearly different root cause in AT LEAST 2
+     of the provided logs. If only 1 run shows a different error and the
+     others show something ambiguous or the original error, keep open.
+
+   Condition B — Test-related, not infrastructure:
+     The new failure must be clearly caused by the test or the code under
+     test, NOT by general machine or CI infrastructure problems. If any of
+     the logs show non-deterministic infrastructure failures, keep open.
+     Examples of infrastructure failures that should NOT trigger a close:
+       - Network disconnects, "connection refused", socket timeouts
+       - Runner disconnected / "lost connection to server"
+       - Runner received shutdown signal / runner crashed
+       - Docker pull failures, runner setup failures
+       - SSH disconnection during test
+       - Out-of-memory from the runner itself (not test-induced OOM)
+       - Azure / AWS / GitHub Actions internal errors
+       - Timeout waiting for a runner or hardware to become available
+     These are non-deterministic and say nothing about the original failure.
+
+   Condition C — Confident determination:
+     You must be confident the root cause has changed. If you are uncertain
+     whether the new failure is the same underlying issue or a different one,
      set should_close to false (conservative — do not close on uncertainty).
+
+   If the current failure meets all three conditions: set should_close to true.
+   The original issue has been resolved; the new failure needs a separate issue.
+   Otherwise: set should_close to false. The issue is still valid.
 
 3. For api_status == "resolved":
    - The GitHub API says the job passed in recent runs.
