@@ -103,6 +103,57 @@ def _get_recent_job_conclusions(
     return conclusions
 
 
+def get_recent_failing_run_jobs(
+    workflow_name: str,
+    job_name: str,
+    target_repo: str,
+    token: str | None,
+    n: int,
+) -> list[dict[str, Any]]:
+    """Return metadata for the last n runs where job_name concluded 'failure'.
+
+    Each entry has: run_id, job_id, job_url.
+    Used by lifecycle.py to download current failing logs for the agent to
+    compare against the original error signature in the issue body.
+    """
+    owner, repo = target_repo.split("/")
+    wf_file = workflow_file_for(workflow_name, target_repo, token)
+    if not wf_file:
+        return []
+
+    url = (
+        f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/"
+        f"{wf_file}/runs?status=completed&per_page={n * 3}"
+    )
+    try:
+        data = api_get(url, token)
+    except Exception as exc:
+        log(f"  Warning: could not fetch runs for failing-log lookup: {exc}")
+        return []
+
+    results: list[dict[str, Any]] = []
+    for run in data.get("workflow_runs", []):
+        if len(results) >= n:
+            break
+        run_id = run["id"]
+        jobs_url = f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100"
+        try:
+            jobs_data = api_get(jobs_url, token)
+            for j in jobs_data.get("jobs", []):
+                if j.get("name") == job_name and j.get("conclusion") == _FAILURE:
+                    results.append({
+                        "run_id": run_id,
+                        "job_id": j["id"],
+                        "job_url": j.get("html_url", ""),
+                    })
+                    break
+        except Exception as exc:
+            log(f"  Warning: could not fetch jobs for run {run_id}: {exc}")
+        time.sleep(0.2)
+
+    return results
+
+
 def get_recent_passing_runs(
     workflow_name: str,
     job_name: str,

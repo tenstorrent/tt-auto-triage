@@ -30,6 +30,7 @@ from tools.ci.check_job_status import (
     JobStatus,
     check_job_status,
     fetch_workflow_yaml,
+    get_recent_failing_run_jobs,
     get_recent_passing_runs,
     workflow_file_for,
 )
@@ -97,7 +98,7 @@ def _parse_agent_json(text: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _download_passing_logs(
+def _download_evidence(
     workflow_name: str,
     job_name: str,
     status: str,
@@ -105,7 +106,9 @@ def _download_passing_logs(
 ) -> list[str]:
     """Download evidence files for the agent to analyze.
 
-    For RESOLVED: download logs from recent passing runs of the job.
+    For STILL_FAILING: download logs from recent failing runs so the agent
+      can compare the current error against the original issue.
+    For RESOLVED: download logs from recent passing runs.
     For REMOVED: fetch the current workflow YAML (agent verifies job is gone).
     Returns a list of local file paths.
     """
@@ -126,6 +129,39 @@ def _download_passing_logs(
             log(f"  Warning: could not fetch workflow YAML: {exc}")
             return []
 
+    safe_job = re.sub(r"[^a-zA-Z0-9_-]", "_", job_name)[:60]
+
+    if status == JobStatus.STILL_FAILING:
+        failing_runs = get_recent_failing_run_jobs(
+            workflow_name, job_name, TARGET_REPO, token, CONSECUTIVE_RUNS
+        )
+        if not failing_runs:
+            log(f"  Warning: no failing runs found for log download")
+            return []
+        paths: list[str] = []
+        for idx, run_info in enumerate(failing_runs, start=1):
+            run_id = run_info["run_id"]
+            job_id = run_info["job_id"]
+            out = logs_dir / f"{safe_job}__failing_run{idx}.txt"
+            try:
+                text = gh(
+                    "run", "view", str(run_id),
+                    f"--repo={TARGET_REPO}", "--job", str(job_id),
+                    "--log-failed", token=token, timeout=60,
+                )
+                if not text.strip():
+                    text = gh(
+                        "run", "view", str(run_id),
+                        f"--repo={TARGET_REPO}", "--job", str(job_id),
+                        "--log", token=token, timeout=60,
+                    )
+                out.write_text(text, encoding="utf-8")
+                paths.append(str(out))
+                log(f"  Downloaded failing-run log: {out.name}")
+            except Exception as exc:
+                log(f"  Warning: could not download log for run {run_id}: {exc}")
+        return paths
+
     # RESOLVED: download logs from recent passing runs.
     passing_runs = get_recent_passing_runs(
         workflow_name, job_name, TARGET_REPO, token, CONSECUTIVE_RUNS
@@ -134,11 +170,10 @@ def _download_passing_logs(
         log(f"  Warning: no passing runs found for log download")
         return []
 
-    paths: list[str] = []
+    paths = []
     for idx, run_info in enumerate(passing_runs, start=1):
         run_id = run_info["run_id"]
         job_id = run_info["job_id"]
-        safe_job = re.sub(r"[^a-zA-Z0-9_-]", "_", job_name)[:60]
         out = logs_dir / f"{safe_job}__passing_run{idx}.txt"
         try:
             text = gh(
@@ -268,10 +303,9 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
     )
     log(f"  #{number}: API status = {status}")
 
-    # Jobs that are clearly still broken don't need agent analysis.
-    if status in (JobStatus.STILL_FAILING, JobStatus.DISABLED, JobStatus.UNKNOWN, JobStatus.SKIPPED):
+    # DISABLED/UNKNOWN/SKIPPED: no useful evidence to give the agent, keep open.
+    if status in (JobStatus.DISABLED, JobStatus.UNKNOWN, JobStatus.SKIPPED):
         reason_map = {
-            JobStatus.STILL_FAILING: "still failing",
             JobStatus.DISABLED: "job disabled in workflow (not deleted) -- failure may be hidden",
             JobStatus.SKIPPED: "job being skipped in recent runs -- failure may be hidden",
             JobStatus.UNKNOWN: "could not determine status",
@@ -283,7 +317,7 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
             "reason": reason_map.get(status, status),
         }
 
-    # Step 2: RESOLVED or REMOVED -- agent must analyze before we can close.
+    # Step 2: STILL_FAILING, RESOLVED, or REMOVED -- agent must analyze.
     if not os.environ.get("CURSOR_API_KEY"):
         log(f"  #{number}: CURSOR_API_KEY missing -- keeping open (no agent, no close)")
         return {
@@ -295,7 +329,7 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
 
     # Step 3: Download evidence for the agent.
     log(f"  #{number}: downloading evidence for agent...")
-    log_paths = _download_passing_logs(workflow_name, job_name, status, logs_dir)
+    log_paths = _download_evidence(workflow_name, job_name, status, logs_dir)
     if not log_paths:
         log(f"  #{number}: no evidence files -- keeping open")
         return {

@@ -15,7 +15,22 @@ $log_sections
 INSTRUCTIONS:
 1. Read ALL provided files using your file reading tools.
 
-2. For api_status == "resolved":
+2. For api_status == "still_failing":
+   - The job is still failing in recent runs, but the failure may be for a
+     DIFFERENT reason than what was originally reported in this issue.
+   - Read the current failing run logs carefully.
+   - Compare the root cause of the current failure against the original error
+     described in the issue body. Focus on the underlying cause, not surface
+     details like line numbers, timestamps, or memory addresses.
+   - If the current failure is the SAME root cause as the original issue:
+     set should_close to false. The issue is still valid.
+   - If the current failure is a DIFFERENT root cause (the original error is
+     gone and something new is broken): set should_close to true. The original
+     issue has been resolved; the new failure needs a separate issue.
+   - If you cannot confidently determine whether it is the same or different:
+     set should_close to false (conservative — do not close on uncertainty).
+
+3. For api_status == "resolved":
    - The GitHub API says the job passed in recent runs.
    - Read the recent passing run logs and compare them to the original failure
      described in the issue body.
@@ -27,7 +42,7 @@ INSTRUCTIONS:
    - If something looks wrong (test skipped internally, assertion removed, etc.):
      set should_close to false and explain in reason.
 
-3. For api_status == "removed":
+4. For api_status == "removed":
    - The job no longer appears in the workflow YAML at all.
    - Read the provided YAML file. Confirm the job name is absent.
    - Look at any commit/PR references visible in the log context.
@@ -36,18 +51,20 @@ INSTRUCTIONS:
    - If there is no clear rationale for removal visible in the evidence,
      set should_close to false.
 
-4. If should_close is true, draft a closing comment in markdown that:
+5. If should_close is true, draft a closing comment in markdown that:
    - States what the original failure was (summarise from the issue body).
-   - Cites specific evidence from the logs that the issue is resolved
-     (quote log lines or reference run URLs).
+   - For still_failing: explains that the original error is no longer present
+     and the job is now failing for a different reason, with evidence from logs.
+   - For resolved/removed: cites specific evidence from the logs that the
+     issue is resolved (quote log lines or reference run URLs).
    - Links the PR or commit that most likely caused the fix, if you can
      identify one from timestamps, commit SHAs, or PR references in the logs.
    - Ends with: "*Closed by tt-auto-triage lifecycle bot.*"
 
-5. If should_close is false, leave comment_body as an empty string and
+6. If should_close is false, leave comment_body as an empty string and
    explain your reasoning in reason.
 
-6. For fix_pr_hint: if you can identify a specific PR URL from the log
+7. For fix_pr_hint: if you can identify a specific PR URL from the log
    evidence, include it. Otherwise leave it as an empty string.
    Do NOT guess — only provide a URL you actually found in the evidence.
 
