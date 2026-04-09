@@ -18,16 +18,23 @@ def workflow_file_for(workflow_name: str, target_repo: str, token: str | None) -
     """Return the filename (not path) of the workflow YAML matching workflow_name.
 
     GitHub's workflow name is the `name:` field in the YAML, which may differ
-    from the filename. We fetch the list of workflows and match by name.
+    from the filename. Paginates through all workflows -- repos like tt-metal
+    have 200+ and a single page misses most of them.
     """
     owner, repo = target_repo.split("/")
-    url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows?per_page=100"
+    page = 1
     try:
-        data = api_get(url, token)
-        for wf in data.get("workflows", []):
-            if wf.get("name", "").lower() == workflow_name.lower():
-                # path is like ".github/workflows/foo.yaml"
-                return wf.get("path", "").split("/")[-1]
+        while True:
+            url = f"https://api.github.com/repos/{owner}/{repo}/actions/workflows?per_page=100&page={page}"
+            data = api_get(url, token)
+            workflows = data.get("workflows", [])
+            for wf in workflows:
+                if wf.get("name", "").lower() == workflow_name.lower():
+                    # path is like ".github/workflows/foo.yaml"
+                    return wf.get("path", "").split("/")[-1]
+            if len(workflows) < 100:
+                break
+            page += 1
     except Exception as exc:
         log(f"  Warning: could not fetch workflow list: {exc}")
     return None
