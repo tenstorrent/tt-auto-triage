@@ -2,7 +2,7 @@ You are reviewing a previously-reported CI failure to decide whether it has been
 
 Workflow: $workflow_name
 Job: $job_name
-API status: $api_status (based on the last $consecutive_runs completed runs)
+API status: $api_status (based on the last $runs_to_evaluate completed runs)
 
 Original issue body (contains the error that was reported):
 ---
@@ -26,9 +26,9 @@ INSTRUCTIONS:
    You may only set should_close to true if ALL THREE of these conditions hold:
 
    Condition A — Consistently different:
-     The new failure must show a clearly different root cause in AT LEAST 2
-     of the provided logs. If only 1 run shows a different error and the
-     others show something ambiguous or the original error, keep open.
+     The new failure must show a clearly different root cause in ALL
+     $runs_to_evaluate of the provided logs. If any run shows the original
+     error, something ambiguous, or an infrastructure failure, keep open.
 
    Condition B — Test-related, not infrastructure:
      The new failure must be clearly caused by the test or the code under

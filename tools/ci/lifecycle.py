@@ -6,7 +6,7 @@ All configuration is via environment variables:
   ISSUE_REPO        -- repo containing open auto-triage issues (default: ebanerjeeTT/issue_dump)
   GITHUB_TOKEN      -- token with read access to TARGET_REPO
   ISSUE_WRITE_TOKEN -- token with write access to ISSUE_REPO
-  CONSECUTIVE_RUNS  -- how many recent runs to evaluate (default: 3)
+  RUNS_TO_EVALUATE  -- how many recent runs to fetch and require consensus across (default: 3)
   CLOSE_ISSUES      -- "true" to actually close issues; default "false" (dry-run)
   SUMMARY_OUTPUT    -- path to write markdown summary; default stdout
   CURSOR_API_KEY    -- required for agent analysis (issues stay open if absent)
@@ -45,7 +45,7 @@ TARGET_REPO = os.environ.get("TARGET_REPO", "tenstorrent/tt-metal")
 ISSUE_REPO = os.environ.get("ISSUE_REPO", "ebanerjeeTT/issue_dump")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 ISSUE_WRITE_TOKEN = os.environ.get("ISSUE_WRITE_TOKEN", "")
-CONSECUTIVE_RUNS = int(os.environ.get("CONSECUTIVE_RUNS", "3"))
+RUNS_TO_EVALUATE = int(os.environ.get("RUNS_TO_EVALUATE", "3"))
 CLOSE_ISSUES = os.environ.get("CLOSE_ISSUES", "false").lower() == "true"
 SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
 CURSOR_MODEL = os.environ.get("CURSOR_MODEL", "claude-4-sonnet")
@@ -134,7 +134,7 @@ def _download_evidence(
 
     if status == JobStatus.STILL_FAILING:
         failing_runs = get_recent_failing_run_jobs(
-            workflow_name, job_name, TARGET_REPO, token, CONSECUTIVE_RUNS
+            workflow_name, job_name, TARGET_REPO, token, RUNS_TO_EVALUATE
         )
         if not failing_runs:
             log(f"  Warning: no failing runs found for log download")
@@ -165,7 +165,7 @@ def _download_evidence(
 
     # RESOLVED: download logs from recent passing runs.
     passing_runs = get_recent_passing_runs(
-        workflow_name, job_name, TARGET_REPO, token, CONSECUTIVE_RUNS
+        workflow_name, job_name, TARGET_REPO, token, RUNS_TO_EVALUATE
     )
     if not passing_runs:
         log(f"  Warning: no passing runs found for log download")
@@ -274,7 +274,7 @@ def _call_agent(
         workflow_name=workflow_name,
         job_name=job_name,
         api_status=status,
-        consecutive_runs=CONSECUTIVE_RUNS,
+        runs_to_evaluate=RUNS_TO_EVALUATE,
         issue_body=issue_body,
         log_sections=log_sections,
         marker=MARKER,
@@ -312,7 +312,7 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
     status = check_job_status(
         workflow_name, job_name, TARGET_REPO,
         token=GITHUB_TOKEN or None,
-        consecutive=CONSECUTIVE_RUNS,
+        consecutive=RUNS_TO_EVALUATE,
     )
     log(f"  #{number}: API status = {status}")
 
@@ -494,7 +494,7 @@ def main() -> int:
     log(f"Target repo:   {TARGET_REPO}")
     log(f"Issue repo:    {ISSUE_REPO}")
     log(f"Close issues:  {CLOSE_ISSUES}")
-    log(f"Runs to check: {CONSECUTIVE_RUNS}")
+    log(f"Runs to evaluate: {RUNS_TO_EVALUATE}")
     if not os.environ.get("CURSOR_API_KEY"):
         log("  WARNING: CURSOR_API_KEY not set -- all potentially-resolved issues will stay open")
 

@@ -15,8 +15,8 @@ on:
         description: "Repository to check workflow run history against"
         type: string
         default: "tenstorrent/tt-metal"
-      consecutive-runs:
-        description: "Number of recent runs to evaluate per job"
+      runs-to-evaluate:
+        description: "How many recent runs to fetch and require consensus across"
         type: string
         default: "3"
     secrets:
@@ -64,7 +64,7 @@ jobs:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           TARGET_REPO: ${{ inputs.target-repo }}
           ISSUE_REPO: ${{ inputs.issue-repo }}
-          CONSECUTIVE_RUNS: ${{ inputs.consecutive-runs }}
+          RUNS_TO_EVALUATE: ${{ inputs.runs-to-evaluate }}
           CLOSE_ISSUES: ${{ inputs.close-issues }}
           SUMMARY_OUTPUT: summary.md
           PYTHONPATH: .
