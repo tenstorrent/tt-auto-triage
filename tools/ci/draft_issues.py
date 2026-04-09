@@ -10,16 +10,24 @@ from typing import Any
 
 from .helpers import log
 
+# Prompt is kept in a separate .txt file so it can be edited and reviewed
+# independently of the Python code. string.Template uses $var substitution.
 _PROMPT_TEMPLATE = string.Template(
     (Path(__file__).parent / "prompts" / "draft_issue.txt").read_text()
 )
 
+# The agent is instructed to emit this exact marker line before the JSON
+# payload so we can reliably locate the structured output even when the
+# agent produces reasoning text before it.
 MARKER = "===FINAL_REVIEW==="
 _DEFAULT_MODEL = "claude-4-sonnet"
-_AGENT_TIMEOUT = 300
+_AGENT_TIMEOUT = 300  # seconds; log downloads + LLM inference can be slow
 
 
 def _run_cursor_agent(prompt: str, model: str = _DEFAULT_MODEL) -> str:
+    # "--trust" allows the agent to read local log files without interactive
+    # confirmation -- required for non-interactive CI. "--model auto" lets
+    # Cursor pick the model, so we skip the --model flag in that case.
     cmd = ["agent", "--trust", "-p", prompt]
     if model != "auto":
         cmd[1:1] = ["--model", model]
@@ -32,6 +40,8 @@ def _run_cursor_agent(prompt: str, model: str = _DEFAULT_MODEL) -> str:
 
 
 def _parse_agent_json(text: str) -> dict[str, Any]:
+    # rfind (not find) because some models echo the marker during reasoning
+    # before producing the real output; we want the *last* occurrence.
     idx = text.rfind(MARKER)
     if idx < 0:
         raise ValueError(f"Marker {MARKER!r} not found in agent output")

@@ -17,6 +17,7 @@ def find_failing_jobs(
     workflow_data: list[list[Any]],
     target_repo: str,
     consecutive: int = 3,
+    tracked_pairs: set[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     token = os.environ.get("GITHUB_TOKEN")
     owner, repo = target_repo.split("/")
@@ -29,6 +30,9 @@ def find_failing_jobs(
             log(f"  Skipping '{workflow_name}' (skip keyword)")
             continue
 
+        # Take only the N most recent runs. We check the recency sort before
+        # the failure check so we don't accidentally count stale old failures
+        # if a workflow was fixed and broke again.
         sorted_runs = sorted(
             runs,
             key=lambda r: r.get("created_at", "") or r.get("run_started_at", ""),
@@ -36,6 +40,7 @@ def find_failing_jobs(
         )[:consecutive]
 
         if len(sorted_runs) < consecutive:
+            # Not enough history yet -- skip rather than false-positive.
             continue
         if not all(r.get("conclusion") == "failure" for r in sorted_runs):
             continue
@@ -68,11 +73,17 @@ def find_failing_jobs(
             continue
 
         all_run_ids = list(run_failed_jobs.keys())
+        # Intersection across all N runs: only jobs that failed in *every* run
+        # are considered deterministic. A job that failed in 2/3 runs is not
+        # reported -- it could be flaky rather than broken.
         common_jobs = set(run_failed_jobs[all_run_ids[0]])
         for rid in all_run_ids[1:]:
             common_jobs &= set(run_failed_jobs[rid])
 
         for job_name in sorted(common_jobs):
+            if tracked_pairs and (workflow_name, job_name) in tracked_pairs:
+                log(f"  Skipping already-tracked job: {workflow_name} / {job_name}")
+                continue
             job_urls = [run_failed_jobs[rid].get(job_name, "") for rid in all_run_ids]
             run_urls = [r.get("html_url", "") for r in sorted_runs]
             results.append({
@@ -125,6 +136,9 @@ def download_job_logs(
                     "--log-failed", token=token, timeout=60,
                 )
                 if not text.strip():
+                    # --log-failed returns nothing when the job runner itself
+                    # crashed before producing step-level annotations; fall back
+                    # to the full log so the agent still has something to read.
                     text = gh(
                         "run", "view", str(run_id),
                         f"--repo={target_repo}", "--job", str(job_id),

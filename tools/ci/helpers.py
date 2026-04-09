@@ -19,6 +19,10 @@ def log(msg: str) -> None:
 
 
 def gh(*args: str, token: str | None = None, timeout: int = 30) -> str:
+    # Uses the `gh` CLI rather than raw API calls so we get built-in auth
+    # fallback, rate-limit retries, and --log-failed support for log downloads.
+    # Token is injected via env rather than --auth to avoid leaking it in
+    # process listings.
     env = {**os.environ}
     if token:
         env["GITHUB_TOKEN"] = token
@@ -32,6 +36,9 @@ def gh(*args: str, token: str | None = None, timeout: int = 30) -> str:
 
 
 def api_get(url: str, token: str | None = None, retries: int = 3) -> Any:
+    # Used for GitHub REST calls that gh CLI doesn't expose conveniently
+    # (e.g. per-user profile lookups in resolve_owners). Exponential back-off
+    # handles transient 5xx and rate-limit edge cases.
     for attempt in range(retries):
         req = urllib.request.Request(url, headers={
             "Accept": "application/vnd.github+json",
@@ -106,11 +113,9 @@ def download_slack_directory(token: str) -> list[dict[str, Any]]:
     return users
 
 
-def job_identity_key(workflow_name: str, job_name: str) -> str:
-    raw = f"{workflow_name}\n{job_name}".strip().lower().encode()
-    return hashlib.sha256(raw).hexdigest()[:16]
-
-
 def fingerprint_for(workflow_name: str, job_name: str, signature: str) -> str:
+    # Finer-grained than the job key: includes the error signature so that a
+    # new fingerprint is produced if the root cause changes, allowing a new
+    # issue to be created for a regression on a previously-fixed job.
     raw = f"{workflow_name}\n{job_name}\n{signature.strip().lower()}".encode()
     return hashlib.sha256(raw).hexdigest()[:16]
