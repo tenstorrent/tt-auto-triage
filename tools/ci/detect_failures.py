@@ -10,7 +10,7 @@ from typing import Any
 
 from .helpers import api_get, gh, log
 
-SKIP_KEYWORDS: tuple[str, ...] = ("sanity",)
+SKIP_KEYWORDS: tuple[str, ...] = ("sanity", "Nightly tt-metal L2 tests",)
 
 
 def find_failing_jobs(
