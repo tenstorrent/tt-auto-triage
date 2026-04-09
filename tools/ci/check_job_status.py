@@ -103,6 +103,29 @@ def _get_recent_job_conclusions(
     return conclusions
 
 
+def get_most_recent_run_id(
+    workflow_name: str,
+    target_repo: str,
+    token: str | None,
+) -> int | None:
+    """Return the run ID of the most recently completed run for this workflow."""
+    owner, repo = target_repo.split("/")
+    wf_file = workflow_file_for(workflow_name, target_repo, token)
+    if not wf_file:
+        return None
+    url = (
+        f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/"
+        f"{wf_file}/runs?status=completed&per_page=1"
+    )
+    try:
+        data = api_get(url, token)
+        runs = data.get("workflow_runs", [])
+        return runs[0]["id"] if runs else None
+    except Exception as exc:
+        log(f"  Warning: could not fetch most recent run: {exc}")
+        return None
+
+
 def get_recent_failing_run_jobs(
     workflow_name: str,
     job_name: str,

@@ -30,6 +30,7 @@ from tools.ci.check_job_status import (
     JobStatus,
     check_job_status,
     fetch_workflow_yaml,
+    get_most_recent_run_id,
     get_recent_failing_run_jobs,
     get_recent_passing_runs,
     workflow_file_for,
@@ -205,6 +206,18 @@ def load_open_issues(issue_repo: str, token: str) -> list[dict[str, Any]]:
     return json.loads(raw)
 
 
+def extract_issue_run_ids(body: str) -> set[int]:
+    """Extract GitHub Actions run IDs embedded in the issue body.
+
+    The auto-issues branch stores run URLs like:
+      https://github.com/.../actions/runs/12345678
+    We parse all of them so we can compare against the current newest run.
+    """
+    return {
+        int(m) for m in re.findall(r"/actions/runs/(\d+)", body)
+    }
+
+
 def extract_markers(body: str) -> tuple[str, str]:
     """Extract (workflow_name, job_name) from issue body markers."""
     wf_m = re.search(r"Auto-triage-workflow:\s*`?([^`\n]+)`?", body)
@@ -317,7 +330,25 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
             "reason": reason_map.get(status, status),
         }
 
-    # Step 2: STILL_FAILING, RESOLVED, or REMOVED -- agent must analyze.
+    # Step 2: Check whether any runs have happened since the issue was created.
+    # If the most recent workflow run was already in the issue's original run
+    # list, there is no new information -- the agent would be comparing the
+    # issue against itself, which is meaningless.
+    issue_run_ids = extract_issue_run_ids(body)
+    if issue_run_ids:
+        newest_run_id = get_most_recent_run_id(
+            workflow_name, TARGET_REPO, GITHUB_TOKEN or None
+        )
+        if newest_run_id is not None and newest_run_id in issue_run_ids:
+            log(f"  #{number}: most recent run ({newest_run_id}) is already in the issue -- no new data, skipping")
+            return {
+                "number": number, "title": title, "url": url,
+                "workflow": workflow_name, "job": job_name,
+                "action": "kept_open",
+                "reason": "no new workflow runs since issue was created",
+            }
+
+    # Step 3: STILL_FAILING, RESOLVED, or REMOVED -- agent must analyze.
     if not os.environ.get("CURSOR_API_KEY"):
         log(f"  #{number}: CURSOR_API_KEY missing -- keeping open (no agent, no close)")
         return {
@@ -327,7 +358,7 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
             "reason": "CURSOR_API_KEY not set -- agent analysis required before closing",
         }
 
-    # Step 3: Download evidence for the agent.
+    # Step 4: Download evidence for the agent.
     log(f"  #{number}: downloading evidence for agent...")
     log_paths = _download_evidence(workflow_name, job_name, status, logs_dir)
     if not log_paths:
@@ -339,7 +370,7 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
             "reason": "could not download evidence for agent analysis",
         }
 
-    # Step 4: Run the agent.
+    # Step 5: Run the agent.
     log(f"  #{number}: running Cursor agent...")
     agent_result = _call_agent(workflow_name, job_name, status, body, log_paths)
 
