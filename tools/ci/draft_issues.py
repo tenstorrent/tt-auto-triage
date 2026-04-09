@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import json
+import string
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from .helpers import log
+
+_PROMPT_TEMPLATE = string.Template(
+    (Path(__file__).parent / "prompts" / "draft_issue.txt").read_text()
+)
 
 MARKER = "===FINAL_REVIEW==="
 _DEFAULT_MODEL = "claude-4-sonnet"
@@ -75,59 +81,22 @@ def draft_issue_body(
 
     codeowners_section = ""
     if codeowners_path:
-        codeowners_section = f"""
-A CODEOWNERS file is available at: {codeowners_path}
-Read this file to identify GitHub usernames who own the failing test paths or
-workflow file. Ignore team handles (containing '/') and @tenstorrent/codeowner-bypass.
-"""
+        codeowners_section = (
+            f"A CODEOWNERS file is available at: {codeowners_path}\n"
+            "Read this file to identify GitHub usernames who own the failing test paths or\n"
+            "workflow file. Ignore team handles (containing '/') and @tenstorrent/codeowner-bypass."
+        )
 
-    prompt = f"""\
-You are reviewing a CI failure for deterministic issue creation.
-
-Workflow: {workflow_name}
-Job: {job_name}
-
-Failing run URLs:
-{run_url_list}
-
-Failing job URLs:
-{job_url_list}
-
-Log files for each of the {consecutive} failing runs are saved locally.
-You MUST read each log file and determine the terminal failure.
-
-Log file references:
-{chr(10).join(f"- {section}" for section in log_sections)}
-{codeowners_section}
-INSTRUCTIONS:
-1. Read ALL three log files using your file reading tools.
-2. Identify the terminal failure or error in each log.
-3. Determine if all {consecutive} runs fail with semantically identical errors.
-4. If yes: draft a GitHub issue title and body in this exact format:
-   - Title: a concise description of the failure (NOT just "deterministic failure")
-   - Body: a markdown CI Failure Report with these sections:
-     ## CI Failure Report
-     **Workflow:** ...
-     **Job:** ...
-     ### Failing job URLs (last 3 runs)
-     - (list each job URL)
-     ### Failing test path(s)
-     - (identify which test files/commands are failing, from log content)
-     ### Error excerpt (terminal failure from logs)
-     (fenced code blocks with the actual error messages from logs)
-     ### Reproduction steps
-     (how to reproduce locally based on the job command)
-     ### Notes
-     (any additional context, e.g. timeout vs assertion failure)
-5. If the errors are NOT semantically identical across all 3 runs, set deterministic to false.
-6. IMPORTANT: Identify likely owners for this failure. Check CODEOWNERS for the failing
-   test paths and workflow file. Return their GitHub usernames (without @) in
-   "suggested_owners". If you cannot identify anyone, return an empty list.
-
-Output the marker below on its own line, followed by compact JSON only:
-{MARKER}
-{{"deterministic": true/false, "confidence": "low|medium|high", "signature": "short error signature", "error_excerpt": "key error text", "issue_title": "[CI] ...", "issue_body": "full markdown body", "suggested_owners": ["github_username1", ...]}}
-"""
+    prompt = _PROMPT_TEMPLATE.substitute(
+        workflow_name=workflow_name,
+        job_name=job_name,
+        run_url_list=run_url_list,
+        job_url_list=job_url_list,
+        consecutive=consecutive,
+        log_sections="\n".join(f"- {s}" for s in log_sections),
+        codeowners_section=codeowners_section,
+        marker=MARKER,
+    )
     try:
         output = _run_cursor_agent(prompt, model)
         result = _parse_agent_json(output)
