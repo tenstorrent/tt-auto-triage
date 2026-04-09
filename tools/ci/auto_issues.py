@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,6 @@ from tools.ci.helpers import (
     download_slack_directory,
     fingerprint_for,
     gh,
-    job_identity_key,
     log,
     slack_post,
 )
@@ -69,19 +69,8 @@ CODEOWNERS_PATH = Path(os.environ.get("CODEOWNERS_PATH", "tt-metal/.github/CODEO
 # ---------------------------------------------------------------------------
 
 
-def has_existing_issue(job: dict[str, Any], open_issues: list[dict[str, Any]]) -> str | None:
-    key = job_identity_key(job["workflow_name"], job["job_name"])
-    marker = f"Auto-triage-job-key: {key}"
-    for issue in open_issues:
-        body = issue.get("body") or ""
-        if marker in body:
-            return issue.get("url", f"#{issue['number']}")
-    return None
-
-
 def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> tuple[str, str, str]:
     """Create a GitHub issue. Returns (url, title, final_body)."""
-    key = job_identity_key(job["workflow_name"], job["job_name"])
     title = agent_result.get("issue_title", f"[CI] {job['workflow_name']} / {job['job_name']}")
     body = agent_result["issue_body"]
     signature = agent_result.get("signature", "")
@@ -89,15 +78,18 @@ def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> tuple[str
         fp = fingerprint_for(job["workflow_name"], job["job_name"], signature)
         if "Auto-triage-fingerprint:" not in body:
             body += f"\n\n`Auto-triage-fingerprint: {fp}`"
-    if "Auto-triage-job-key:" not in body:
-        body += f"\n`Auto-triage-job-key: {key}`"
+    # Name markers are used by future runs to skip already-tracked jobs.
+    if "Auto-triage-workflow:" not in body:
+        body += f"\n`Auto-triage-workflow: {job['workflow_name']}`"
+    if "Auto-triage-job-name:" not in body:
+        body += f"\n`Auto-triage-job-name: {job['job_name']}`"
 
     raw = gh(
         "issue", "create",
         f"--repo={ISSUE_REPO}",
         f"--title={title}",
         f"--body={body}",
-        "--label=CI auto triage",
+        "--label=CI auto triage",  # label used by load_all_open_issues to scope dedup queries
         token=ISSUE_WRITE_TOKEN,
     )
     issue_url = raw.strip()
@@ -120,7 +112,9 @@ def send_slack_notification(job: dict[str, Any], issue_url: str, owners: list[di
             oid = o["id"]
             source = o.get("source", "")
             if source in ("CODEOWNERS", "agent"):
-                # Unresolved GitHub username -- couldn't find Slack ID
+                # GitHub username that couldn't be resolved to a Slack ID;
+                # rendered as plain text rather than a mention to avoid a
+                # broken <@...> in Slack.
                 parts.append(f"`{oid}` ({o.get('name') or oid}, via {source})")
             else:
                 parts.append(f"<@{oid}>")
@@ -154,17 +148,27 @@ def main() -> int:
     # Step 1: Download workflow data
     workflow_data = download_workflow_data(TARGET_REPO)
 
-    # Step 2: Find failing jobs
-    failing_jobs = find_failing_jobs(workflow_data, TARGET_REPO, CONSECUTIVE)
-
-    if not failing_jobs:
-        log("No deterministic failures found. Done.")
-        print(json.dumps({"created": 0, "skipped": 0, "failures": []}))
-        return 0
-
-    # Step 3: Check existing issues
+    # Step 2: Load existing issues before failure analysis so find_failing_jobs
+    # can skip jobs that are already tracked, avoiding unnecessary log downloads
+    # and agent calls for known failures.
     open_issues = load_all_open_issues(ISSUE_REPO, ISSUE_WRITE_TOKEN)
     log(f"Loaded {len(open_issues)} open issues from {ISSUE_REPO}")
+    tracked_pairs: set[tuple[str, str]] = set()
+    for issue in open_issues:
+        body = issue.get("body") or ""
+        wf_m = re.search(r"Auto-triage-workflow:\s*`?([^`\n]+)`?", body)
+        jn_m = re.search(r"Auto-triage-job-name:\s*`?([^`\n]+)`?", body)
+        if wf_m and jn_m:
+            tracked_pairs.add((wf_m.group(1).strip(), jn_m.group(1).strip()))
+    log(f"  Found {len(tracked_pairs)} already-tracked jobs")
+
+    # Step 3: Find failing jobs, skipping any already tracked
+    failing_jobs = find_failing_jobs(workflow_data, TARGET_REPO, CONSECUTIVE, tracked_pairs)
+
+    if not failing_jobs:
+        log("No new deterministic failures found. Done.")
+        print(json.dumps({"created": 0, "skipped": 0, "failures": []}))
+        return 0
 
     # Step 4: Load owners
     owners_json = load_owners_json(OWNERS_JSON_PATH)
@@ -183,31 +187,13 @@ def main() -> int:
     else:
         log("  Skipping Slack directory download (no token)")
 
-    # Step 5: Download logs for new failures only
-    new_jobs: list[dict[str, Any]] = []
-    skipped_jobs: list[dict[str, Any]] = []
-    for job in failing_jobs:
-        existing = has_existing_issue(job, open_issues)
-        if existing:
-            log(f"  Already tracked: {job['job_name']} -> {existing}")
-            skipped_jobs.append({**job, "existing": existing})
-        else:
-            new_jobs.append(job)
-
+    # Step 5: Download logs -- all failing_jobs are new (tracked jobs were
+    # filtered out in find_failing_jobs before being returned).
     summary: list[dict[str, Any]] = []
-
-    for sj in skipped_jobs:
-        summary.append({
-            "workflow_name": sj["workflow_name"],
-            "job": sj["job_name"],
-            "action": "skipped",
-            "existing": sj["existing"],
-        })
-
     created_so_far = 0
-    if new_jobs:
+    if failing_jobs:
         logs_dir = Path("build_ci/auto_issues/logs")
-        enriched_jobs = download_job_logs(new_jobs, TARGET_REPO, logs_dir)
+        enriched_jobs = download_job_logs(failing_jobs, TARGET_REPO, logs_dir)
 
         for job in enriched_jobs:
             if MAX_ISSUES and created_so_far >= MAX_ISSUES:
@@ -279,6 +265,8 @@ def main() -> int:
             send_slack_notification(job, issue_url, owners)
             created_so_far += 1
             issue_number = issue_url.rsplit("/", 1)[-1]
+            # Append to the in-memory list so subsequent jobs in this same run
+            # see it as already-tracked and don't create duplicates.
             open_issues.append({"number": issue_number, "title": issue_title, "body": issue_body, "url": issue_url})
             signature = agent_result.get("signature", "")
             summary.append({
@@ -291,8 +279,10 @@ def main() -> int:
             })
 
     # Step 7: Render summary
-    skipped_count = sum(1 for s in summary if s["action"] == "skipped")
-    log(f"\nDone: {created_so_far} created, {skipped_count} skipped, {len(failing_jobs)} total failures")
+    # "skipped" no longer appears here -- tracked jobs are filtered before
+    # find_failing_jobs returns, so the count comes from tracked_keys instead.
+    skipped_count = len(tracked_pairs)
+    log(f"\nDone: {created_so_far} created, {skipped_count} already-tracked, {len(failing_jobs)} new failures")
 
     md = render(summary, open_issues, ISSUE_REPO)
     if SUMMARY_OUTPUT:

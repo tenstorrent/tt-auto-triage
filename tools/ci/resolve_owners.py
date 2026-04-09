@@ -13,6 +13,8 @@ IGNORE_CODEOWNERS = {"@tenstorrent/codeowner-bypass", "@tenstorrent/metalium-dev
 
 
 def _normalize(value: str) -> str:
+    # Strip punctuation/spaces so "John Smith" and "johnsmith" compare equal
+    # when matching GitHub names against Slack display names.
     return re.sub(r"[^a-z0-9]", "", value.lower())
 
 
@@ -79,6 +81,9 @@ def load_pipeline_reorg_owners(reorg_dir: Path) -> list[dict[str, Any]]:
     """Parse pipeline_reorg YAMLs for name + owner_id entries.
 
     Uses simple regex parsing to avoid a PyYAML dependency.
+    Each YAML has a list of test suites with a `name` key and an
+    `owner_id` key (Slack member ID). Owner names are stored in comments
+    on the same line as owner_id, parsed by splitting on '#'.
     """
     entries: list[dict[str, Any]] = []
     if not reorg_dir.exists():
@@ -105,7 +110,9 @@ def load_pipeline_reorg_owners(reorg_dir: Path) -> list[dict[str, Any]]:
 def load_codeowners(path: Path) -> dict[str, list[str]]:
     """Parse CODEOWNERS file into {pattern: [github_username, ...]} mappings.
 
-    Filters out team handles and generic bypass accounts.
+    Filters out team handles (containing '/') and the two generic bypass
+    accounts defined in IGNORE_CODEOWNERS. Only individual usernames are
+    retained so we can do a GitHub -> Slack lookup for each one.
     """
     rules: dict[str, list[str]] = {}
     if not path.exists():
@@ -137,6 +144,10 @@ def _gh_users_to_slack(
     """Resolve GitHub usernames to Slack IDs.
 
     Flow: GitHub username -> GitHub API (real name + email) -> Slack directory lookup.
+    If no Slack match is found, we still return the GitHub username prefixed
+    with '@' so callers always get a usable handle. The `source` field lets
+    send_slack_notification() distinguish unresolved handles and format them
+    differently (backtick vs <@mention>).
     """
     seen: set[str] = set()
     result: list[dict[str, str]] = []
@@ -197,7 +208,13 @@ def resolve_owners(
     slack_directory: list[dict[str, Any]] | None = None,
     github_token: str | None = None,
 ) -> list[dict[str, str]]:
-    """Resolve owners from multiple sources with priority: pipeline_reorg > owners.json > CODEOWNERS > agent."""
+    """Resolve owners from multiple sources with priority: pipeline_reorg > owners.json > CODEOWNERS > agent.
+
+    Returns on the first source that produces a match -- later sources are
+    not consulted. This means pipeline_reorg (most curated) wins over the
+    broader CODEOWNERS file, and the agent's best-guess suggestions are only
+    used as a last resort.
+    """
     combined = f"{workflow_name} / {job_name}".lower()
     job_lower = job_name.lower()
     slack_dir = slack_directory or []

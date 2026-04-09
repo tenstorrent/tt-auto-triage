@@ -10,7 +10,12 @@ from .helpers import gh, log
 
 
 def _extract_signature_snippet(body: str, max_len: int = 80) -> str:
-    """Try to pull a short error signature from an issue body."""
+    """Try to pull a short error signature from an issue body.
+
+    Prefers human-readable error lines over the opaque fingerprint hash.
+    Checks for the most common tt-metal failure patterns first; falls back
+    to the embedded fingerprint so the summary table always has *something*.
+    """
     m = re.search(r"Auto-triage-fingerprint:\s*(\S+)", body)
     fp = m.group(1) if m else ""
     for line in body.splitlines():
