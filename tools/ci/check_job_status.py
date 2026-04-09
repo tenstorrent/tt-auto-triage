@@ -14,7 +14,7 @@ _SUCCESS = "success"
 _SKIPPED = "skipped"
 
 
-def _workflow_file_for(workflow_name: str, target_repo: str, token: str | None) -> str | None:
+def workflow_file_for(workflow_name: str, target_repo: str, token: str | None) -> str | None:
     """Return the filename (not path) of the workflow YAML matching workflow_name.
 
     GitHub's workflow name is the `name:` field in the YAML, which may differ
@@ -33,7 +33,7 @@ def _workflow_file_for(workflow_name: str, target_repo: str, token: str | None) 
     return None
 
 
-def _fetch_workflow_yaml(workflow_file: str, target_repo: str, token: str | None) -> str:
+def fetch_workflow_yaml(workflow_file: str, target_repo: str, token: str | None) -> str:
     """Fetch the raw text of a workflow YAML file from the default branch."""
     owner, repo = target_repo.split("/")
     url = f"https://api.github.com/repos/{owner}/{repo}/contents/.github/workflows/{workflow_file}"
@@ -62,7 +62,7 @@ def _get_recent_job_conclusions(
     owner, repo = target_repo.split("/")
 
     # Find the workflow ID by name so we can filter runs to this workflow only.
-    workflow_file = _workflow_file_for(workflow_name, target_repo, token)
+    workflow_file = workflow_file_for(workflow_name, target_repo, token)
     if not workflow_file:
         log(f"  Warning: workflow '{workflow_name}' not found in {target_repo}")
         return []
@@ -94,6 +94,56 @@ def _get_recent_job_conclusions(
         time.sleep(0.2)
 
     return conclusions
+
+
+def get_recent_passing_runs(
+    workflow_name: str,
+    job_name: str,
+    target_repo: str,
+    token: str | None,
+    n: int,
+) -> list[dict[str, Any]]:
+    """Return metadata for the last n runs where job_name concluded 'success'.
+
+    Each entry has: run_id, job_id, job_url.
+    Used by lifecycle.py to download logs for the agent to analyze.
+    """
+    owner, repo = target_repo.split("/")
+    wf_file = workflow_file_for(workflow_name, target_repo, token)
+    if not wf_file:
+        return []
+
+    url = (
+        f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/"
+        f"{wf_file}/runs?status=completed&per_page={n * 3}"  # fetch more to find n passing
+    )
+    try:
+        data = api_get(url, token)
+    except Exception as exc:
+        log(f"  Warning: could not fetch runs for passing-log lookup: {exc}")
+        return []
+
+    results: list[dict[str, Any]] = []
+    for run in data.get("workflow_runs", []):
+        if len(results) >= n:
+            break
+        run_id = run["id"]
+        jobs_url = f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100"
+        try:
+            jobs_data = api_get(jobs_url, token)
+            for j in jobs_data.get("jobs", []):
+                if j.get("name") == job_name and j.get("conclusion") == _SUCCESS:
+                    results.append({
+                        "run_id": run_id,
+                        "job_id": j["id"],
+                        "job_url": j.get("html_url", ""),
+                    })
+                    break
+        except Exception as exc:
+            log(f"  Warning: could not fetch jobs for run {run_id}: {exc}")
+        time.sleep(0.2)
+
+    return results
 
 
 class JobStatus:
@@ -138,11 +188,11 @@ def check_job_status(
     if not conclusions:
         # Job produced no conclusions in recent runs -- check the YAML.
         log(f"  No recent conclusions for '{job_name}', checking workflow YAML...")
-        workflow_file = _workflow_file_for(workflow_name, target_repo, token)
+        workflow_file = workflow_file_for(workflow_name, target_repo, token)
         if not workflow_file:
             return JobStatus.UNKNOWN
         try:
-            yaml_text = _fetch_workflow_yaml(workflow_file, target_repo, token)
+            yaml_text = fetch_workflow_yaml(workflow_file, target_repo, token)
         except Exception as exc:
             log(f"  Warning: could not fetch workflow YAML: {exc}")
             return JobStatus.UNKNOWN

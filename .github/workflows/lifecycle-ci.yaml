@@ -26,6 +26,9 @@ on:
       ISSUE_WRITE_TOKEN:
         description: "Token with write/close access to issue-repo"
         required: true
+      CURSOR_API_KEY:
+        description: "Cursor API key -- issues will not be closed without this"
+        required: true
 
 permissions:
   contents: read
@@ -46,6 +49,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_READ_TOKEN }}
           ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           TARGET_REPO: ${{ inputs.target-repo }}
           ISSUE_REPO: ${{ inputs.issue-repo }}
           CONSECUTIVE_RUNS: ${{ inputs.consecutive-runs }}

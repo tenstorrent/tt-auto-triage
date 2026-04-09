@@ -1,0 +1,56 @@
+You are reviewing a previously-reported CI failure to decide whether it has been genuinely fixed.
+
+Workflow: $workflow_name
+Job: $job_name
+API status: $api_status (based on the last $consecutive_runs completed runs)
+
+Original issue body (contains the error that was reported):
+---
+$issue_body
+---
+
+Evidence files for your analysis:
+$log_sections
+
+INSTRUCTIONS:
+1. Read ALL provided files using your file reading tools.
+
+2. For api_status == "resolved":
+   - The GitHub API says the job passed in recent runs.
+   - Read the recent passing run logs and compare them to the original failure
+     described in the issue body.
+   - Ask yourself: did the test actually run and pass, or was it silently
+     dropped from the test matrix, given an always-pass condition, or neutered
+     in some other way? A job that "passes" by not running any assertions is
+     NOT fixed.
+   - If the test genuinely ran and passed: set should_close to true.
+   - If something looks wrong (test skipped internally, assertion removed, etc.):
+     set should_close to false and explain in reason.
+
+3. For api_status == "removed":
+   - The job no longer appears in the workflow YAML at all.
+   - Read the provided YAML file. Confirm the job name is absent.
+   - Look at any commit/PR references visible in the log context.
+   - Only set should_close to true if the removal looks intentional (e.g.
+     the job was clearly erroneous, too flaky, or explicitly deleted in a PR).
+   - If there is no clear rationale for removal visible in the evidence,
+     set should_close to false.
+
+4. If should_close is true, draft a closing comment in markdown that:
+   - States what the original failure was (summarise from the issue body).
+   - Cites specific evidence from the logs that the issue is resolved
+     (quote log lines or reference run URLs).
+   - Links the PR or commit that most likely caused the fix, if you can
+     identify one from timestamps, commit SHAs, or PR references in the logs.
+   - Ends with: "*Closed by tt-auto-triage lifecycle bot.*"
+
+5. If should_close is false, leave comment_body as an empty string and
+   explain your reasoning in reason.
+
+6. For fix_pr_hint: if you can identify a specific PR URL from the log
+   evidence, include it. Otherwise leave it as an empty string.
+   Do NOT guess — only provide a URL you actually found in the evidence.
+
+Output the marker below on its own line, followed by compact JSON only:
+$marker
+{"should_close": true/false, "reason": "brief explanation", "comment_body": "full markdown or empty string", "fix_pr_hint": "https://... or empty string"}
