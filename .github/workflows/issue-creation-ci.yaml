@@ -1,0 +1,116 @@
+name: "(triage) Auto Issue Creation"
+
+on:
+  workflow_call:
+    inputs:
+      create-issues:
+        description: "Create GitHub issues for deterministic failures"
+        type: boolean
+        default: false
+      issue-repo:
+        description: "Repository to create issues in"
+        type: string
+        default: "ebanerjeeTT/issue_dump"
+      target-repo:
+        description: "Repository to analyze workflow data from"
+        type: string
+        default: "tenstorrent/tt-metal"
+      max-issues:
+        description: "Maximum number of issues to create (0 = unlimited)"
+        type: string
+        default: "0"
+    secrets:
+      AGGREGATE_READ_TOKEN:
+        description: "Token with read access to target-repo workflow runs and artifacts"
+        required: true
+      ISSUE_WRITE_TOKEN:
+        description: "Token with write access to issue-repo"
+        required: true
+      SLACK_BOT_TOKEN:
+        description: "Slack bot token for posting messages"
+        required: true
+      SLACK_CHANNEL_ID:
+        description: "Slack channel ID to post notifications to"
+        required: true
+      CURSOR_API_KEY:
+        description: "Cursor API key for agent-driven issue drafting"
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  create-issues:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout tt-auto-triage
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-auto-triage
+          ref: ebanerjee/auto-issues
+
+      # Sparse checkout of tt-metal: only the three owner-mapping paths needed
+      # by resolve_owners.py. Avoids pulling the full repo (~1 GB) just for
+      # a handful of YAML/JSON files.
+      - name: Checkout tt-metal (for owners data)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target-repo }}
+          path: tt-metal
+          sparse-checkout: |
+            .github/actions/analyze-workflow-data/owners.json
+            .github/CODEOWNERS
+            tests/pipeline_reorg
+          token: ${{ secrets.AGGREGATE_READ_TOKEN }}
+
+      # Cursor CLI is used as the agent runner in draft_issues.py. Installed
+      # from the official install script; the bin dir is added to PATH so
+      # `agent` is available in subsequent steps.
+      - name: Install Cursor CLI
+        run: |
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: Ensure CURSOR_API_KEY is configured
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "::warning::Missing CURSOR_API_KEY -- agent drafting will be skipped"
+          fi
+
+      - name: Run auto-issue creation
+        env:
+          GITHUB_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+          ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          CREATE_ISSUES: ${{ inputs.create-issues }}
+          ISSUE_REPO: ${{ inputs.issue-repo }}
+          TARGET_REPO: ${{ inputs.target-repo }}
+          OWNERS_JSON_PATH: tt-metal/.github/actions/analyze-workflow-data/owners.json
+          PIPELINE_REORG_DIR: tt-metal/tests/pipeline_reorg
+          CODEOWNERS_PATH: tt-metal/.github/CODEOWNERS
+          MAX_ISSUES: ${{ inputs.max-issues }}
+          SUMMARY_OUTPUT: summary.md
+          PYTHONPATH: .
+        run: python3 -m tools.ci.auto_issues
+
+      - name: Publish summary to run output
+        if: always()
+        run: |
+          if [ -f summary.md ]; then
+            cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No summary produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
