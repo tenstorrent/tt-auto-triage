@@ -18,6 +18,7 @@ FIX_POINTS_INPUT="$OUTPUT_DIR/fix-points.json"
 BUG_ESCAPES_OUTPUT="$OUTPUT_DIR/bug-escapes-output.json"
 
 LOOKBACK_DAYS="${LOOKBACK_DAYS:-14}"
+MAX_ESCAPES="${MAX_ESCAPES:-999}"
 
 generated_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 lookback_start=$(date -u -d "-${LOOKBACK_DAYS} days" '+%Y-%m-%d' 2>/dev/null \
@@ -101,6 +102,12 @@ for i in $(seq 0 $((num_fixpoints - 1))); do
       "fix_commit_files_changed": $ff,
       "agent_analysis_notes": $notes
     }]')
+
+  current_count=$(echo "$bug_escapes" | jq 'length')
+  if [ "$current_count" -ge "$MAX_ESCAPES" ]; then
+    log_info "Reached MAX_ESCAPES=$MAX_ESCAPES — stopping classification early"
+    break
+  fi
 done
 
 # Write final output

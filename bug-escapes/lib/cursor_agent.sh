@@ -2,11 +2,8 @@
 #
 # cursor_agent.sh — Wrapper for headless Cursor CLI agent invocations.
 #
-# Provides a single function `cursor_agent_query` that:
-#   1. Substitutes template variables into a prompt
-#   2. Invokes `cursor agent -p --output-format text`
-#   3. Retries on transient failures (up to $CURSOR_AGENT_MAX_RETRIES)
-#   4. Writes the agent response to the specified output file
+# Provides functions for sending prompts to the agent, extracting JSON,
+# and substituting variables into prompt templates.
 #
 # The agent runs in read-only mode (-p without --force) — it never edits files.
 
@@ -17,6 +14,18 @@ _BUG_ESCAPES_CURSOR_AGENT_LOADED=1
 
 CURSOR_AGENT_MAX_RETRIES="${CURSOR_AGENT_MAX_RETRIES:-2}"
 CURSOR_AGENT_TIMEOUT="${CURSOR_AGENT_TIMEOUT:-300}"
+
+_AGENT_LOG_DIR="${BUG_ESCAPES_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/output/agent-logs"
+_AGENT_CALL_SEQ=0
+
+_save_agent_log() {
+  local label="$1" raw_file="$2"
+  mkdir -p "$_AGENT_LOG_DIR"
+  _AGENT_CALL_SEQ=$((_AGENT_CALL_SEQ + 1))
+  local safe_label
+  safe_label=$(echo "$label" | tr '/ ' '__' | head -c 80)
+  cp "$raw_file" "$_AGENT_LOG_DIR/${_AGENT_CALL_SEQ}_${safe_label}_raw.txt" 2>/dev/null || true
+}
 
 # cursor_agent_query <prompt_string> <output_file>
 #
@@ -37,7 +46,7 @@ cursor_agent_query() {
 
     local exit_code=0
     timeout "$CURSOR_AGENT_TIMEOUT" \
-      cursor agent -p --output-format text "$prompt" \
+      agent -p --output-format text "$prompt" \
       > "$output_file" 2>/dev/null || exit_code=$?
 
     if [ "$exit_code" -eq 0 ] && [ -s "$output_file" ]; then
@@ -57,23 +66,25 @@ cursor_agent_query() {
   return 1
 }
 
-# cursor_agent_json <prompt_string> <output_file>
+# cursor_agent_json <prompt_string> <output_file> [label]
 #
-# Like cursor_agent_query but asks the agent to respond in JSON and
-# extracts the first valid JSON object/array from the response.
-# Useful when the agent wraps JSON in markdown code fences.
+# Like cursor_agent_query but extracts the first valid JSON object/array
+# from the response. Saves raw response to agent-logs/.
 cursor_agent_json() {
   local prompt="$1"
   local output_file="$2"
+  local label="${3:-agent_call}"
   local raw_file
   raw_file="$(mktemp)"
 
   if ! cursor_agent_query "$prompt" "$raw_file"; then
+    _save_agent_log "${label}_FAILED" "$raw_file"
     rm -f "$raw_file"
     return 1
   fi
 
-  # Try to extract JSON: first attempt raw parse, then strip code fences
+  _save_agent_log "$label" "$raw_file"
+
   if jq '.' "$raw_file" > "$output_file" 2>/dev/null; then
     rm -f "$raw_file"
     return 0
@@ -110,7 +121,6 @@ cursor_agent_from_template() {
     return 1
   fi
 
-  # Build the prompt by exporting the provided variables and running envsubst
   local prompt
   local var
   for var in "$@"; do
@@ -125,5 +135,7 @@ cursor_agent_from_template() {
 
   prompt=$(envsubst "$var_names" < "$template_file")
 
-  cursor_agent_json "$prompt" "$output_file"
+  local label
+  label=$(basename "$template_file" .txt)
+  cursor_agent_json "$prompt" "$output_file" "$label"
 }
