@@ -150,9 +150,18 @@ for i in $(seq 0 $((num_workflows - 1))); do
 
     log_info "      Checking job '$job_name' (runs: $run_ids_str)"
 
-    # Download and concatenate logs from each failing run
+    # Download and concatenate logs from each failing run.
+    # MAX_LOG_BYTES is a TOTAL cap across all runs/files to stay under ARG_MAX.
     logs_content=""
+    logs_bytes=0
     for run_id in $(echo "$failing_run_ids" | jq -r '.[]'); do
+      if [ "$logs_bytes" -ge "$MAX_LOG_BYTES" ]; then
+        logs_content="${logs_content}
+[truncated — total log cap reached at ${MAX_LOG_BYTES} bytes]
+"
+        break
+      fi
+
       run_log_dir="$LOGS_DIR/run_${run_id}"
       if [ ! -d "$run_log_dir" ]; then
         download_run_logs "$run_id" "$run_log_dir" || {
@@ -161,15 +170,24 @@ for i in $(seq 0 $((num_workflows - 1))); do
         }
       fi
 
-      logs_content="${logs_content}
+      run_header="
 === RUN ${run_id} ===
 "
-      # Concatenate all log files, truncating each to avoid overwhelming the agent
+      logs_content="${logs_content}${run_header}"
+      logs_bytes=$((logs_bytes + ${#run_header}))
+
       for logfile in "$run_log_dir"/*.txt "$run_log_dir"/**/*.txt; do
         [ -f "$logfile" ] || continue
-        logs_content="${logs_content}--- $(basename "$logfile") ---
-$(tail -c "$MAX_LOG_BYTES" "$logfile")
+        remaining=$((MAX_LOG_BYTES - logs_bytes))
+        if [ "$remaining" -le 100 ]; then
+          break
+        fi
+        file_header="--- $(basename "$logfile") ---
 "
+        file_chunk="$(tail -c "$remaining" "$logfile")"
+        logs_content="${logs_content}${file_header}${file_chunk}
+"
+        logs_bytes=$((logs_bytes + ${#file_header} + ${#file_chunk} + 1))
       done
     done
 
@@ -177,6 +195,7 @@ $(tail -c "$MAX_LOG_BYTES" "$logfile")
       log_warn "        No logs available — skipping"
       continue
     fi
+    log_info "        Log content: ${logs_bytes} bytes (cap: ${MAX_LOG_BYTES})"
 
     # Invoke the Cursor agent to verify if this is a consistent failure
     num_runs_for_prompt=$(echo "$failing_run_ids" | jq 'length')
