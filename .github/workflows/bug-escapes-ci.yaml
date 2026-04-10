@@ -5,18 +5,6 @@ name: "(triage) Bug Escapes"
 on:
   workflow_call:
     inputs:
-      close-issues:
-        description: "Actually close resolved issues (false = dry-run)"
-        type: boolean
-        default: false
-      issue-repo:
-        description: "Repository containing the open auto-triage issues"
-        type: string
-        default: "ebanerjeeTT/issue_dump"
-      target-repo:
-        description: "Repository to check workflow run history against"
-        type: string
-        default: "tenstorrent/tt-metal"
       consecutive-runs:
         description: "Number of recent runs to evaluate per job"
         type: string
@@ -60,10 +48,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_READ_TOKEN }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-          TARGET_REPO: ${{ inputs.target-repo }}
-          ISSUE_REPO: ${{ inputs.issue-repo }}
           CONSECUTIVE_RUNS: ${{ inputs.consecutive-runs }}
-          CLOSE_ISSUES: ${{ inputs.close-issues }}
         run: |
           set -euo pipefail
           if [ -z "${CURSOR_API_KEY:-}" ]; then
@@ -79,8 +64,5 @@ jobs:
         run: |
           {
             echo "## Bug escapes (template)"
-            echo "- **target-repo**: ${{ inputs.target-repo }}"
-            echo "- **issue-repo**: ${{ inputs.issue-repo }}"
             echo "- **consecutive-runs**: ${{ inputs.consecutive-runs }}"
-            echo "- **close-issues**: ${{ inputs.close-issues }}"
           } >> "$GITHUB_STEP_SUMMARY"
