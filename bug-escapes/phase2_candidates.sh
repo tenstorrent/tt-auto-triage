@@ -176,7 +176,10 @@ for i in $(seq 0 $((num_workflows - 1))); do
       logs_content="${logs_content}${run_header}"
       logs_bytes=$((logs_bytes + ${#run_header}))
 
-      for logfile in "$run_log_dir"/*.txt "$run_log_dir"/**/*.txt; do
+      # Filter log files to the specific job being investigated.
+      # GitHub log zips use names like "N_workflow _ job_name.txt"
+      job_name_escaped=$(printf '%s' "$job_name" | sed 's/[.[\*^$()+?{|]/\\&/g')
+      for logfile in "$run_log_dir"/*"${job_name}"* "$run_log_dir"/**/*"${job_name}"*; do
         [ -f "$logfile" ] || continue
         remaining=$((MAX_LOG_BYTES - logs_bytes))
         if [ "$remaining" -le 100 ]; then
