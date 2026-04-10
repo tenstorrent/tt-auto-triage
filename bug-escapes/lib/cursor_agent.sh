@@ -45,11 +45,14 @@ cursor_agent_query() {
     fi
 
     local exit_code=0
+    local stderr_file
+    stderr_file="$(mktemp)"
     timeout "$CURSOR_AGENT_TIMEOUT" \
-      agent -p --output-format text "$prompt" \
-      > "$output_file" 2>/dev/null || exit_code=$?
+      agent -p "$prompt" \
+      > "$output_file" 2>"$stderr_file" || exit_code=$?
 
     if [ "$exit_code" -eq 0 ] && [ -s "$output_file" ]; then
+      rm -f "$stderr_file"
       return 0
     fi
 
@@ -57,7 +60,11 @@ cursor_agent_query() {
       log_warn "cursor_agent_query: timed out after ${CURSOR_AGENT_TIMEOUT}s"
     else
       log_warn "cursor_agent_query: failed with exit code $exit_code"
+      if [ -s "$stderr_file" ]; then
+        log_warn "cursor_agent_query stderr: $(head -c 500 "$stderr_file")"
+      fi
     fi
+    rm -f "$stderr_file"
 
     attempt=$((attempt + 1))
   done
