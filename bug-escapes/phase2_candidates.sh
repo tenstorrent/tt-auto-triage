@@ -217,10 +217,12 @@ for i in $(seq 0 $((num_workflows - 1))); do
          "RUN_IDS=$run_ids_str" \
          "LOGS_CONTENT=$logs_content"; then
 
-      is_consistent=$(jq -r '.is_consistent // false' "$agent_output" 2>/dev/null || echo "false")
-      is_infra_noise=$(jq -r '.is_infrastructure_noise // true' "$agent_output" 2>/dev/null || echo "true")
-      test_name=$(jq -r '.test_name // null' "$agent_output" 2>/dev/null || echo "null")
-      failure_sig=$(jq -r '.failure_signature // null' "$agent_output" 2>/dev/null || echo "null")
+      # jq's // (alternative) treats `false` as falsy, so `false // true` → true.
+      # Use explicit null checks instead.
+      is_consistent=$(jq -r 'if .is_consistent == null then false else .is_consistent end' "$agent_output" 2>/dev/null || echo "false")
+      is_infra_noise=$(jq -r 'if .is_infrastructure_noise == null then true else .is_infrastructure_noise end' "$agent_output" 2>/dev/null || echo "true")
+      test_name=$(jq -r '.test_name // "unknown"' "$agent_output" 2>/dev/null || echo "unknown")
+      failure_sig=$(jq -r '.failure_signature // "unknown"' "$agent_output" 2>/dev/null || echo "unknown")
       confidence=$(jq -r '.confidence // "low"' "$agent_output" 2>/dev/null || echo "low")
       reasoning=$(jq -r '.reasoning // ""' "$agent_output" 2>/dev/null || echo "")
 
