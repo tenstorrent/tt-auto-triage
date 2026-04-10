@@ -227,7 +227,6 @@ for i in $(seq 0 $((num_failures - 1))); do
   num_fixes=$(echo "$candidate_fixes" | jq 'length')
 
   if [ "$num_fixes" -eq 0 ]; then
-    # If agent didn't identify a specific fix, use the dominant layer of all commits
     log_info "    No specific fix commit identified by agent — using file-based heuristic"
 
     all_files="[]"
@@ -238,10 +237,20 @@ for i in $(seq 0 $((num_failures - 1))); do
       if ! echo "$commit_files" | jq empty 2>/dev/null; then
         commit_files="[]"
       fi
+      # Ensure commit_files is a JSON array (not an object or string)
+      if [ "$(echo "$commit_files" | jq 'type' 2>/dev/null)" != '"array"' ]; then
+        commit_files="[]"
+      fi
       all_files=$(echo "$all_files" "$commit_files" | jq -s '.[0] + .[1]')
     done
 
-    dominant_layer=$(be_dominant_layer "$all_files")
+    # Validate all_files is a flat array of strings before processing
+    if ! echo "$all_files" | jq 'if type == "array" and all(type == "string") then true else false end' 2>/dev/null | grep -q true; then
+      log_warn "    Heuristic: all_files is not a valid string array — defaulting to unknown layer"
+      all_files="[]"
+    fi
+
+    dominant_layer=$(be_dominant_layer "$all_files" 2>/dev/null || echo "unknown")
 
     candidate_fixes=$(jq -n \
       --arg sha "$(jq -r '.[-1].sha' "$commits_file")" \
