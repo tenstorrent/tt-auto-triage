@@ -48,7 +48,7 @@ cursor_agent_query() {
     local stderr_file
     stderr_file="$(mktemp)"
     timeout "$CURSOR_AGENT_TIMEOUT" \
-      agent -p "$prompt" \
+      agent --trust -p "$prompt" \
       > "$output_file" 2>"$stderr_file" || exit_code=$?
 
     if [ "$exit_code" -eq 0 ] && [ -s "$output_file" ]; then
