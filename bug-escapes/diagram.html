@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bug Escape Detection System — tt-metal</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --cyan: #79c0ff;
+    --pink: #f778ba;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 2rem;
+  }
+  h1 {
+    font-size: 1.75rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+  }
+  .subtitle {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    margin-bottom: 2.5rem;
+  }
+
+  /* ── Top-level architecture ─────────────────────────────── */
+  .arch-row {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 2.5rem;
+    flex-wrap: wrap;
+  }
+  .arch-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.25rem 1.5rem;
+    flex: 1;
+    min-width: 260px;
+  }
+  .arch-box h2 {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 0.75rem;
+  }
+  .arch-box .tag {
+    display: inline-block;
+    font-size: 0.78rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 20px;
+    margin: 0.2rem 0.25rem 0.2rem 0;
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+  }
+  .tag-blue   { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .tag-green  { background: rgba(63,185,80,0.15);  color: var(--green); }
+  .tag-orange { background: rgba(210,153,34,0.15); color: var(--orange); }
+  .tag-purple { background: rgba(188,140,255,0.15); color: var(--purple); }
+  .tag-pink   { background: rgba(247,120,186,0.15); color: var(--pink); }
+  .tag-red    { background: rgba(248,81,73,0.15);  color: var(--red); }
+
+  /* ── Connector arrow between sections ───────────────────── */
+  .arrow-down {
+    text-align: center;
+    font-size: 1.5rem;
+    color: var(--text-muted);
+    margin: 0.75rem 0;
+  }
+
+  /* ── Pipeline / phase swimlane ─────────────────────────── */
+  .pipeline {
+    position: relative;
+    display: flex;
+    gap: 0;
+    margin-bottom: 2.5rem;
+    overflow-x: auto;
+  }
+  .phase {
+    flex: 1;
+    min-width: 230px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 1.25rem 1rem;
+    position: relative;
+  }
+  .phase:first-child { border-radius: 10px 0 0 10px; }
+  .phase:last-child  { border-radius: 0 10px 10px 0; }
+  .phase:not(:last-child)::after {
+    content: '▶';
+    position: absolute;
+    right: -0.65rem;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--accent);
+    font-size: 1rem;
+    z-index: 2;
+  }
+  .phase-num {
+    display: inline-block;
+    width: 1.6rem;
+    height: 1.6rem;
+    line-height: 1.6rem;
+    text-align: center;
+    border-radius: 50%;
+    font-size: 0.8rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+  }
+  .pn-1 { background: rgba(88,166,255,0.2); color: var(--accent); }
+  .pn-2 { background: rgba(210,153,34,0.2); color: var(--orange); }
+  .pn-3 { background: rgba(63,185,80,0.2);  color: var(--green); }
+  .pn-4 { background: rgba(188,140,255,0.2); color: var(--purple); }
+  .phase h3 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin-bottom: 0.6rem;
+  }
+  .phase ul {
+    list-style: none;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+  }
+  .phase li { padding: 0.2rem 0; padding-left: 1rem; position: relative; }
+  .phase li::before {
+    content: '→';
+    position: absolute;
+    left: 0;
+    color: var(--border);
+  }
+  .phase .output {
+    margin-top: 0.75rem;
+    padding: 0.4rem 0.6rem;
+    background: rgba(88,166,255,0.08);
+    border-radius: 6px;
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    font-size: 0.75rem;
+    color: var(--cyan);
+  }
+
+  /* ── Layer stack ────────────────────────────────────────── */
+  .section-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+  }
+  .layers {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: 600px;
+    margin-bottom: 2.5rem;
+  }
+  .layer-row {
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    padding: 0.8rem 1.25rem;
+  }
+  .layer-row:first-child { border-radius: 10px 10px 0 0; }
+  .layer-row:last-child  { border-radius: 0 0 10px 10px; }
+  .layer-row:not(:last-child) { border-bottom: none; }
+  .layer-rank {
+    width: 2.2rem;
+    text-align: center;
+    font-weight: 700;
+    font-size: 0.85rem;
+    margin-right: 1rem;
+  }
+  .layer-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+    width: 7rem;
+  }
+  .layer-desc {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    flex: 1;
+  }
+
+  /* ── Escape classification ─────────────────────────────── */
+  .escape-cards {
+    display: flex;
+    gap: 1.5rem;
+    margin-bottom: 2.5rem;
+    flex-wrap: wrap;
+  }
+  .escape-card {
+    flex: 1;
+    min-width: 280px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+  }
+  .escape-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+  .escape-card.horizontal::before { background: var(--orange); }
+  .escape-card.vertical::before   { background: var(--red); }
+  .escape-card h3 { font-size: 1rem; margin-bottom: 0.5rem; }
+  .escape-card p  { font-size: 0.85rem; color: var(--text-muted); line-height: 1.5; }
+  .escape-card .example {
+    margin-top: 0.75rem;
+    padding: 0.6rem 0.8rem;
+    background: rgba(255,255,255,0.03);
+    border-radius: 6px;
+    font-size: 0.78rem;
+    font-family: 'SF Mono', SFMono-Regular, Consolas, monospace;
+    color: var(--text-muted);
+  }
+
+  /* ── CI flow ────────────────────────────────────────────── */
+  .ci-flow {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 2.5rem;
+  }
+  .ci-step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.6rem 1rem;
+    font-size: 0.8rem;
+    white-space: nowrap;
+  }
+  .ci-arrow { color: var(--text-muted); font-size: 1.1rem; }
+  .ci-step.repo-1 { border-color: var(--accent); }
+  .ci-step.repo-2 { border-color: var(--green); }
+
+  /* ── Tool stack ─────────────────────────────────────────── */
+  .tools-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+  }
+  .tool-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+  }
+  .tool-card h4 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 0.3rem;
+  }
+  .tool-card p {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+  .tool-icon {
+    font-size: 1.3rem;
+    margin-bottom: 0.4rem;
+  }
+
+  /* ── Footer ─────────────────────────────────────────────── */
+  footer {
+    margin-top: 3rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.78rem;
+    color: var(--text-muted);
+  }
+</style>
+</head>
+<body>
+
+<h1>Bug Escape Detection System</h1>
+<p class="subtitle">Automated detection of test coverage gaps in tt-metal CI pipelines</p>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 1 — CI Trigger Flow
+     ═══════════════════════════════════════════════════════ -->
+<p class="section-title">CI Trigger Flow</p>
+<div class="ci-flow">
+  <div class="ci-step repo-1">tt-metal<br><code>triage-ci.yaml</code><br><span class="tag tag-blue">workflow_dispatch</span></div>
+  <span class="ci-arrow">→</span>
+  <div class="ci-step repo-2">tt-auto-triage<br><code>bug-escapes-ci.yaml</code><br><span class="tag tag-green">workflow_call</span></div>
+  <span class="ci-arrow">→</span>
+  <div class="ci-step">Install Cursor CLI</div>
+  <span class="ci-arrow">→</span>
+  <div class="ci-step"><strong>bug-escapes/run.sh</strong></div>
+  <span class="ci-arrow">→</span>
+  <div class="ci-step">Upload artifact<br><span class="tag tag-purple">bug-escapes-output.json</span></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 2 — Four-Phase Pipeline
+     ═══════════════════════════════════════════════════════ -->
+<p class="section-title">Detection Pipeline — 4 Phases</p>
+<div class="pipeline">
+  <div class="phase">
+    <div class="phase-num pn-1">1</div>
+    <h3>Discovery &amp; Mapping</h3>
+    <ul>
+      <li>Hardcoded workflow list from aggregate-workflow-data.yaml</li>
+      <li>Classify each as pr-gate, merge-gate, or other</li>
+      <li>Fetch each "other" workflow YAML via <code>gh api</code></li>
+      <li><strong>Cursor Agent</strong> classifies which layer each workflow tests</li>
+    </ul>
+    <div class="output">→ pipeline-config.json</div>
+  </div>
+  <div class="phase">
+    <div class="phase-num pn-2">2</div>
+    <h3>Candidate Failures</h3>
+    <ul>
+      <li>Fetch runs from last ~2 weeks per workflow</li>
+      <li>Group jobs by name, find 3+ consecutive failures</li>
+      <li>Download failure logs for each candidate</li>
+      <li><strong>Cursor Agent</strong> verifies: deterministic bug vs. infra noise</li>
+    </ul>
+    <div class="output">→ consistent-failures.json</div>
+  </div>
+  <div class="phase">
+    <div class="phase-num pn-3">3</div>
+    <h3>Find Fix Points</h3>
+    <ul>
+      <li>Walk forward from each failure to find first passing run</li>
+      <li>Skip failures still active (no fix yet)</li>
+      <li>List commits between fail→pass transition</li>
+      <li><strong>Cursor Agent</strong> attributes fix to specific commit &amp; layer</li>
+    </ul>
+    <div class="output">→ fix-points.json</div>
+  </div>
+  <div class="phase">
+    <div class="phase-num pn-4">4</div>
+    <h3>Classify &amp; Output</h3>
+    <ul>
+      <li>Compare fix commit layer vs. test layer</li>
+      <li>Same layer → <strong>horizontal</strong> escape</li>
+      <li>Lower layer → <strong>vertical</strong> escape</li>
+      <li>Write GitHub Actions step summary</li>
+    </ul>
+    <div class="output">→ bug-escapes-output.json</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 3 — Architecture Layer Stack
+     ═══════════════════════════════════════════════════════ -->
+<p class="section-title">tt-metal Architecture Layers</p>
+<div class="layers">
+  <div class="layer-row">
+    <div class="layer-rank" style="color:var(--purple);">3</div>
+    <div class="layer-name" style="color:var(--purple);">models</div>
+    <div class="layer-desc">Model implementations — <code>models/</code>, <code>tt-train/</code></div>
+  </div>
+  <div class="layer-row">
+    <div class="layer-rank" style="color:var(--cyan);">2</div>
+    <div class="layer-name" style="color:var(--cyan);">ttnn</div>
+    <div class="layer-desc">High-level Python / C++ neural network API — <code>ttnn/</code></div>
+  </div>
+  <div class="layer-row">
+    <div class="layer-rank" style="color:var(--orange);">1</div>
+    <div class="layer-name" style="color:var(--orange);">tt-metalium</div>
+    <div class="layer-desc">Compilation &amp; dispatch runtime — <code>tt_metal/impl/</code>, <code>tt_metal/llrt/</code>, etc.</div>
+  </div>
+  <div class="layer-row">
+    <div class="layer-rank" style="color:var(--green);">0</div>
+    <div class="layer-name" style="color:var(--green);">tt-llk</div>
+    <div class="layer-desc">Hardware interface (lowest) — <code>tt_metal/tt-llk/</code>, <code>tt_metal/hw/</code></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 4 — Escape Type Definitions
+     ═══════════════════════════════════════════════════════ -->
+<p class="section-title">Bug Escape Types</p>
+<div class="escape-cards">
+  <div class="escape-card horizontal">
+    <h3 style="color:var(--orange);">Horizontal Escape</h3>
+    <p>A test in an <strong>"other"</strong> pipeline for layer L was failing consistently. The fix commit changed code in the <strong>same layer L</strong>.</p>
+    <p style="margin-top:0.5rem;">PR-gate or merge-gate for that layer <em>should have caught it</em>.</p>
+    <div class="example">
+      test layer: <strong>ttnn</strong> &nbsp;│&nbsp; fix layer: <strong>ttnn</strong><br>
+      → same layer = horizontal escape
+    </div>
+  </div>
+  <div class="escape-card vertical">
+    <h3 style="color:var(--red);">Vertical Escape</h3>
+    <p>A test for layer L was failing consistently. The fix commit changed code in a <strong>lower layer</strong> than L.</p>
+    <p style="margin-top:0.5rem;">The lower layer's own tests <em>should have caught it</em>.</p>
+    <div class="example">
+      test layer: <strong>ttnn</strong> &nbsp;│&nbsp; fix layer: <strong>tt-metalium</strong><br>
+      → fix in lower layer = vertical escape
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 5 — Tooling
+     ═══════════════════════════════════════════════════════ -->
+<p class="section-title">Tooling &amp; Key Constraints</p>
+<div class="tools-grid">
+  <div class="tool-card">
+    <div class="tool-icon">🔧</div>
+    <h4>gh CLI</h4>
+    <p>All GitHub API data fetching — workflow runs, jobs, logs, commits. Authenticated via GITHUB_READ_TOKEN.</p>
+  </div>
+  <div class="tool-card">
+    <div class="tool-icon">🤖</div>
+    <h4>Cursor CLI Agent</h4>
+    <p>All analytical judgment calls — failure determinism, fix attribution, layer classification. Headless <code>-p</code> mode, JSON output.</p>
+  </div>
+  <div class="tool-card">
+    <div class="tool-icon">📦</div>
+    <h4>Reused auto-triage libs</h4>
+    <p><code>github_api.sh</code>, <code>config.sh</code>, <code>common.sh</code>, <code>list_commits_between.sh</code>, <code>get_changed_files.sh</code></p>
+  </div>
+  <div class="tool-card">
+    <div class="tool-icon">⚖️</div>
+    <h4>Key Rule</h4>
+    <p>Scripts fetch data. <strong>Agents make decisions.</strong> No regex log parsing — every judgment is agent-driven.</p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 6 — Repo Boundary
+     ═══════════════════════════════════════════════════════ -->
+<p class="section-title">Repository Boundary</p>
+<div class="arch-row">
+  <div class="arch-box" style="border-color: var(--accent);">
+    <h2 style="color:var(--accent);">tt-metal</h2>
+    <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.5rem;">Thin dispatch wrapper only</p>
+    <span class="tag tag-blue">triage-ci.yaml</span>
+    <p style="font-size:0.8rem; color:var(--text-muted); margin-top:0.5rem;">Forwards secrets (GITHUB_TOKEN, CURSOR_API_KEY) to tt-auto-triage. No detection logic here.</p>
+  </div>
+  <div class="arch-box" style="border-color: var(--green);">
+    <h2 style="color:var(--green);">tt-auto-triage</h2>
+    <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.5rem;">All detection logic lives here</p>
+    <span class="tag tag-green">bug-escapes-ci.yaml</span>
+    <span class="tag tag-green">bug-escapes/run.sh</span>
+    <span class="tag tag-green">phase1–4 scripts</span>
+    <span class="tag tag-green">prompts/</span>
+    <span class="tag tag-green">config/</span>
+    <p style="font-size:0.8rem; color:var(--text-muted); margin-top:0.5rem;">Branch: <code>ebanerjee/bug-escapes</code></p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 7 — Data Flow
+     ═══════════════════════════════════════════════════════ -->
+<p class="section-title">Data Flow Summary</p>
+<div style="background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:1.5rem; max-width:800px; font-size:0.82rem; font-family:'SF Mono',SFMono-Regular,Consolas,monospace; color:var(--text-muted); line-height:2; overflow-x:auto;">
+  <span style="color:var(--accent);">aggregate-workflow-data.yaml</span> (workflow list)<br>
+  &nbsp;&nbsp;│<br>
+  &nbsp;&nbsp;▼<br>
+  <span style="color:var(--accent);">Phase 1</span> → <span style="color:var(--cyan);">pipeline-config.json</span> &nbsp;(35 workflows, each with layer + classification)<br>
+  &nbsp;&nbsp;│<br>
+  &nbsp;&nbsp;▼<br>
+  <span style="color:var(--orange);">Phase 2</span> → <span style="color:var(--cyan);">consistent-failures.json</span> &nbsp;(confirmed deterministic test failures)<br>
+  &nbsp;&nbsp;│<br>
+  &nbsp;&nbsp;▼<br>
+  <span style="color:var(--green);">Phase 3</span> → <span style="color:var(--cyan);">fix-points.json</span> &nbsp;(fail→pass transitions + attributed fix commits)<br>
+  &nbsp;&nbsp;│<br>
+  &nbsp;&nbsp;▼<br>
+  <span style="color:var(--purple);">Phase 4</span> → <span style="color:var(--pink);">bug-escapes-output.json</span> &nbsp;(final classified horizontal/vertical escapes)<br>
+  &nbsp;&nbsp;│<br>
+  &nbsp;&nbsp;▼<br>
+  <span style="color:var(--pink);">GitHub Actions Artifact</span> &nbsp;(retained 30 days)
+</div>
+
+<footer>
+  Bug Escape Detection System &middot; tenstorrent/tt-auto-triage &middot; branch ebanerjee/bug-escapes
+</footer>
+
+</body>
+</html>
