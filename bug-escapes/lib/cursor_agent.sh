@@ -115,9 +115,10 @@ cursor_agent_json() {
 
 # cursor_agent_from_template <template_file> <output_file> [VAR=VALUE ...]
 #
-# Reads a prompt template, substitutes variables, and sends it to the agent.
-# Variables are passed as KEY=VALUE pairs; in the template, they appear as
-# ${KEY} and are replaced via envsubst.
+# Reads a prompt template, substitutes ${KEY} placeholders with values.
+# Uses in-process bash string replacement instead of envsubst to avoid
+# polluting the environment (large values like LOGS_CONTENT would exceed
+# ARG_MAX if exported).
 cursor_agent_from_template() {
   local template_file="$1"
   local output_file="$2"
@@ -129,20 +130,17 @@ cursor_agent_from_template() {
   fi
 
   local prompt
-  local var
-  for var in "$@"; do
-    export "${var?}"
-  done
+  prompt=$(<"$template_file")
 
-  local var_names=""
+  local var key value
   for var in "$@"; do
-    local key="${var%%=*}"
-    var_names="${var_names}\${${key}} "
+    key="${var%%=*}"
+    value="${var#*=}"
+    prompt="${prompt//\$\{${key}\}/$value}"
   done
-
-  prompt=$(envsubst "$var_names" < "$template_file")
 
   local label
-  label=$(basename "$template_file" .txt)
+  label="${template_file##*/}"
+  label="${label%.txt}"
   cursor_agent_json "$prompt" "$output_file" "$label"
 }
