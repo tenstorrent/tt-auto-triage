@@ -23,6 +23,7 @@ CONSECUTIVE_RUNS="${CONSECUTIVE_RUNS:-3}"
 LOOKBACK_DAYS="${LOOKBACK_DAYS:-14}"
 MAX_CANDIDATES="${MAX_CANDIDATES:-999}"
 MAX_LOG_BYTES="${MAX_LOG_BYTES:-100000}"
+MAX_RUNS_PER_WORKFLOW="${MAX_RUNS_PER_WORKFLOW:-30}"
 
 mkdir -p "$LOGS_DIR"
 
@@ -53,10 +54,11 @@ for i in $(seq 0 $((num_workflows - 1))); do
     continue
   fi
 
-  # Fetch recent runs (pages until we pass the lookback window)
+  # Fetch recent runs — cap to MAX_RUNS_PER_WORKFLOW to avoid massive API call overhead
+  # when building per-job timelines (1 API call per run for job data).
   all_runs="[]"
   page=1
-  max_pages=5
+  max_pages=3
   while [ "$page" -le "$max_pages" ]; do
     page_json=$(get_workflow_runs "$wf_id" "$page")
     runs_on_page=$(echo "$page_json" | jq '.workflow_runs | length' 2>/dev/null || echo 0)
@@ -68,6 +70,12 @@ for i in $(seq 0 $((num_workflows - 1))); do
       .[0] + (.[1].workflow_runs // [])
     ')
 
+    current_count=$(echo "$all_runs" | jq 'length')
+    if [ "$current_count" -ge "$MAX_RUNS_PER_WORKFLOW" ]; then
+      all_runs=$(echo "$all_runs" | jq --argjson cap "$MAX_RUNS_PER_WORKFLOW" '.[:$cap]')
+      break
+    fi
+
     oldest_run_date=$(echo "$page_json" | jq -r '.workflow_runs[-1].created_at // empty' 2>/dev/null || echo "")
     if [ -n "$oldest_run_date" ] && [[ "$oldest_run_date" < "$cutoff_date" ]]; then
       break
@@ -76,7 +84,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
   done
 
   num_runs=$(echo "$all_runs" | jq 'length')
-  log_info "    Fetched $num_runs runs"
+  log_info "    Fetched $num_runs runs (cap: $MAX_RUNS_PER_WORKFLOW)"
 
   if [ "$num_runs" -lt "$CONSECUTIVE_RUNS" ]; then
     log_info "    Not enough runs — skipping"
