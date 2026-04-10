@@ -163,8 +163,16 @@ for i in $(seq 0 $((num_workflows - 1))); do
 
   log_info "    Found $num_candidates candidate job(s) with ${CONSECUTIVE_RUNS}+ consecutive failures"
 
-  # For each candidate, download logs and invoke the Cursor agent
+  # For each candidate, download logs and invoke the Cursor agent.
+  # Cap attempts per workflow to avoid burning agent calls on noisy workflows.
+  max_attempts_per_wf=10
+  wf_attempts=0
   for c in $(seq 0 $((num_candidates - 1))); do
+    if [ "$wf_attempts" -ge "$max_attempts_per_wf" ]; then
+      log_info "    Tried $max_attempts_per_wf candidates from this workflow without confirming — moving on"
+      break
+    fi
+    wf_attempts=$((wf_attempts + 1))
     candidate=$(echo "$candidate_jobs" | jq -c ".[$c]")
     job_name=$(echo "$candidate" | jq -r '.job')
     failing_run_ids=$(echo "$candidate" | jq -c '.failing_runs')
