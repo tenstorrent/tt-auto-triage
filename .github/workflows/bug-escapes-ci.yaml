@@ -24,7 +24,7 @@ permissions:
 jobs:
   bug-escapes:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout tt-auto-triage (bug-escapes branch)
         uses: actions/checkout@v4
@@ -44,25 +44,54 @@ jobs:
           rm -f "$install_script"
           echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
 
-      - name: Bug escapes (template)
+      - name: Validate secrets
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CURSOR_API_KEY:-}" ]; then
+            echo "::error::CURSOR_API_KEY is not set"
+            exit 1
+          fi
+          cursor agent --version 2>/dev/null || echo "::warning::cursor agent version check failed"
+
+      - name: Run bug escape detection
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_READ_TOKEN }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           CONSECUTIVE_RUNS: ${{ inputs.consecutive-runs }}
         run: |
           set -euo pipefail
-          if [ -z "${CURSOR_API_KEY:-}" ]; then
-            echo "CURSOR_API_KEY is not set"
-            exit 1
-          fi
-          echo "bug-escapes template: wired inputs and secrets (implement tools.ci or scripts next)."
-          command -v agent || true
-          agent --version 2>/dev/null || true
+          chmod +x bug-escapes/run.sh
+          ./bug-escapes/run.sh
+
+      - name: Upload bug escapes artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bug-escapes-output
+          path: bug-escapes/output/bug-escapes-output.json
+          retention-days: 30
+          if-no-files-found: warn
 
       - name: Summary
         if: always()
         run: |
-          {
-            echo "## Bug escapes (template)"
-            echo "- **consecutive-runs**: ${{ inputs.consecutive-runs }}"
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f bug-escapes/output/bug-escapes-output.json ]; then
+            total=$(jq '.bug_escapes | length' bug-escapes/output/bug-escapes-output.json)
+            horizontal=$(jq '[.bug_escapes[] | select(.type == "horizontal")] | length' bug-escapes/output/bug-escapes-output.json)
+            vertical=$(jq '[.bug_escapes[] | select(.type == "vertical")] | length' bug-escapes/output/bug-escapes-output.json)
+            {
+              echo "## Bug Escape Detection"
+              echo "- **consecutive-runs threshold**: ${{ inputs.consecutive-runs }}"
+              echo "- **Total bug escapes**: $total"
+              echo "  - Horizontal: $horizontal"
+              echo "  - Vertical: $vertical"
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "## Bug Escape Detection"
+              echo "- **Status**: No output produced"
+              echo "- **consecutive-runs threshold**: ${{ inputs.consecutive-runs }}"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
