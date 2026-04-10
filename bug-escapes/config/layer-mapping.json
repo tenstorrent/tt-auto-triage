@@ -29,6 +29,7 @@
     "tt-llk": 0,
     "tt-metalium": 1,
     "ttnn": 2,
-    "models": 3
+    "models": 3,
+    "multi-layer": 4
   }
 }

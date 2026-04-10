@@ -21,6 +21,8 @@ LOGS_DIR="$OUTPUT_DIR/logs"
 
 CONSECUTIVE_RUNS="${CONSECUTIVE_RUNS:-3}"
 LOOKBACK_DAYS="${LOOKBACK_DAYS:-14}"
+MAX_CANDIDATES="${MAX_CANDIDATES:-999}"
+MAX_LOG_BYTES="${MAX_LOG_BYTES:-50000}"
 
 mkdir -p "$LOGS_DIR"
 
@@ -166,7 +168,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
       for logfile in "$run_log_dir"/*.txt "$run_log_dir"/**/*.txt; do
         [ -f "$logfile" ] || continue
         logs_content="${logs_content}--- $(basename "$logfile") ---
-$(tail -c 50000 "$logfile")
+$(tail -c "$MAX_LOG_BYTES" "$logfile")
 "
       done
     done
@@ -207,6 +209,12 @@ $(tail -c 50000 "$logfile")
            --arg notes "$reasoning" \
            '. += [{"workflow": $wf, "job": $job, "test_name": $tn, "failure_signature": $fs, "failing_run_ids": $frid, "test_layer": $tl, "agent_confidence": $conf, "agent_notes": $notes}]' \
            "$FAILURES_OUTPUT" > "${FAILURES_OUTPUT}.tmp" && mv "${FAILURES_OUTPUT}.tmp" "$FAILURES_OUTPUT"
+        total_confirmed=$(jq 'length' "$FAILURES_OUTPUT")
+        if [ "$total_confirmed" -ge "$MAX_CANDIDATES" ]; then
+          log_info "        Reached MAX_CANDIDATES=$MAX_CANDIDATES — stopping Phase 2 early"
+          rm -f "$agent_output"
+          break 3
+        fi
       else
         log_info "        Not a consistent test failure (infra_noise=$is_infra_noise, consistent=$is_consistent)"
       fi
