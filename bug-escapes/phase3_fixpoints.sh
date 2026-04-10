@@ -183,6 +183,9 @@ for i in $(seq 0 $((num_failures - 1))); do
       files_json=$(gh api "repos/${AT_OWNER_REPO}/commits/${commit_sha}" \
         --jq '[.files[].filename]' 2>/dev/null || echo "[]")
     fi
+    if ! echo "$files_json" | jq empty 2>/dev/null; then
+      files_json="[]"
+    fi
 
     files_list=$(echo "$files_json" | jq -r '.[]' 2>/dev/null | head -50 || echo "")
 
@@ -197,7 +200,7 @@ for i in $(seq 0 $((num_failures - 1))); do
          "COMMIT_MESSAGE=$commit_subject" \
          "COMMIT_FILES=$files_list"; then
 
-      is_likely_fix=$(jq -r '.is_likely_fix // false' "$agent_output" 2>/dev/null || echo "false")
+      is_likely_fix=$(jq -r 'if .is_likely_fix == null then false else .is_likely_fix end' "$agent_output" 2>/dev/null || echo "false")
       fix_confidence=$(jq -r '.fix_confidence // "low"' "$agent_output" 2>/dev/null || echo "low")
       fix_layer=$(jq -r '.fix_layer // "unknown"' "$agent_output" 2>/dev/null || echo "unknown")
       fix_reasoning=$(jq -r '.reasoning // ""' "$agent_output" 2>/dev/null || echo "")
@@ -232,6 +235,9 @@ for i in $(seq 0 $((num_failures - 1))); do
       commit_sha=$(jq -r ".[$c].sha" "$commits_file")
       commit_files=$(gh api "repos/${AT_OWNER_REPO}/commits/${commit_sha}" \
         --jq '[.files[].filename]' 2>/dev/null || echo "[]")
+      if ! echo "$commit_files" | jq empty 2>/dev/null; then
+        commit_files="[]"
+      fi
       all_files=$(echo "$all_files" "$commit_files" | jq -s '.[0] + .[1]')
     done
 
