@@ -1,25 +1,17 @@
-You are analyzing failure logs from ${NUM_RUNS} consecutive runs of the same CI job to determine if this is a consistent, deterministic test failure or transient infrastructure noise.
+You are analyzing failure logs from a single CI job run to identify the failing test.
 
 Workflow: ${WORKFLOW_PATH}
 Job: ${JOB_NAME}
-Run IDs: ${RUN_IDS}
-
-Below are the failure logs from each run. Each section is delimited by "=== RUN <run_id> ===" markers.
+Run ID: ${RUN_ID}
 
 ${LOGS_CONTENT}
 
-Analyze these logs carefully and determine:
-
-1. Is there a SPECIFIC TEST that failed with the SAME or very similar error across all ${NUM_RUNS} runs?
-2. Is this a deterministic test failure (a real bug), or transient infrastructure noise (e.g. runner disconnected, OOM kill, network timeout, docker pull failure, setup failure)?
-3. What is the failure signature — the test name and core error message?
-
-Respond with ONLY a JSON object in this exact format (no markdown, no explanation):
+Respond with ONLY a JSON object:
 {
-  "is_consistent": true or false,
+  "is_test_failure": true or false,
   "is_infrastructure_noise": true or false,
-  "test_name": "<name of the failing test, or null if infrastructure noise>",
-  "failure_signature": "<core error message that repeats across runs, or null>",
-  "confidence": "<high, medium, or low>",
-  "reasoning": "<1-2 sentences explaining your judgment>"
+  "test_name": "<full test path or null>",
+  "failure_signature": "<core error message or null>",
+  "confidence": "high/medium/low",
+  "reasoning": "<1-2 sentences>"
 }
