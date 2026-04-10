@@ -178,8 +178,14 @@ for i in $(seq 0 $((num_workflows - 1))); do
 
       # Filter log files to the specific job being investigated.
       # GitHub log zips use names like "N_workflow _ job_name.txt"
-      job_name_escaped=$(printf '%s' "$job_name" | sed 's/[.[\*^$()+?{|]/\\&/g')
-      for logfile in "$run_log_dir"/*"${job_name}"* "$run_log_dir"/**/*"${job_name}"*; do
+      # where API name "workflow / job" becomes "workflow _ job" in filenames.
+      # Extract the last component after " / " for matching.
+      if [[ "$job_name" == *" / "* ]]; then
+        job_filter="${job_name##* / }"
+      else
+        job_filter="$job_name"
+      fi
+      for logfile in "$run_log_dir"/*"${job_filter}"* "$run_log_dir"/**/*"${job_filter}"*; do
         [ -f "$logfile" ] || continue
         remaining=$((MAX_LOG_BYTES - logs_bytes))
         if [ "$remaining" -le 100 ]; then
