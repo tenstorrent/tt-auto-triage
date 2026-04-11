@@ -204,7 +204,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
     for logfile in "$run_log_dir"/*"${job_filter}"* "$run_log_dir"/**/*"${job_filter}"*; do
       [ -f "$logfile" ] || continue
       # Try to find error-relevant lines using common CI failure markers
-      error_line=$(grep -n -m1 -iE 'FAILED|TT_FATAL|AssertionError|RuntimeError|Error:|CRASHED|fatal error|test.*failed' "$logfile" 2>/dev/null | head -1 | cut -d: -f1)
+      error_line=$(grep -n -m1 -iE 'FAILED|TT_FATAL|AssertionError|RuntimeError|Error:|CRASHED|fatal error|test.*failed' "$logfile" 2>/dev/null | head -1 | cut -d: -f1 || true)
       if [ -n "$error_line" ]; then
         # Extract a window: 5 lines before through ~60 lines after the error
         start_line=$((error_line > 5 ? error_line - 5 : 1))
