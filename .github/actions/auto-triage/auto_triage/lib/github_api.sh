@@ -234,8 +234,8 @@ download_run_logs() {
         rm -f "$tmp_zip"
         return 1
     }
-    unzip -oq "$tmp_zip" -d "$dest" 2>/dev/null
-    local unzip_status=$?
+    local unzip_status=0
+    unzip -oq "$tmp_zip" -d "$dest" 2>/dev/null || unzip_status=$?
     rm -f "$tmp_zip"
     return "$unzip_status"
 }
