@@ -195,21 +195,22 @@ poll_run_completion() {
   local deadline=$((SECONDS + max_wait * 60))
   local status conclusion
 
-  verify_info "Polling run $run_id (interval=${interval}s, max_wait=${max_wait}m)"
+  # Progress messages go to stderr so they don't get captured by $(...)
+  printf '[verify] Polling run %s (interval=%ss, max_wait=%sm)\n' "$run_id" "$interval" "$max_wait" >&2
 
   while [ "$SECONDS" -lt "$deadline" ]; do
     status=$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || echo "unknown")
     if [ "$status" = "completed" ]; then
       conclusion=$(gh run view "$run_id" --json conclusion --jq '.conclusion' 2>/dev/null || echo "unknown")
-      verify_info "Run $run_id completed: $conclusion"
+      printf '[verify] Run %s completed: %s\n' "$run_id" "$conclusion" >&2
       echo "$conclusion"
       return 0
     fi
-    verify_info "  Run $run_id: status=$status ($(( (deadline - SECONDS) / 60 ))m remaining)"
+    printf '[verify]   Run %s: status=%s (%dm remaining)\n' "$run_id" "$status" "$(( (deadline - SECONDS) / 60 ))" >&2
     sleep "$interval"
   done
 
-  verify_warn "Run $run_id timed out after ${max_wait}m"
+  printf '[verify][WARN] Run %s timed out after %sm\n' "$run_id" "$max_wait" >&2
   echo "timed_out"
   return 1
 }
@@ -254,9 +255,10 @@ wait_for_run_to_appear() {
       echo "$run_id"
       return 0
     fi
+    printf '[verify]   Waiting for run to appear on %s (attempt %d/%d)\n' "$branch" "$attempt" "$max_attempts" >&2
     sleep 5
   done
 
-  verify_warn "Could not find run for $wf_basename on $branch after $max_attempts attempts"
+  printf '[verify][WARN] Could not find run for %s on %s after %d attempts\n' "$wf_basename" "$branch" "$max_attempts" >&2
   return 1
 }
