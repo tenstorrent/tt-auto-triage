@@ -87,6 +87,23 @@ be_dominant_layer() {
   '
 }
 
+# Compute a stable failure fingerprint from a log excerpt or error line.
+# Strips timestamps, line numbers, memory addresses, PIDs, and UUIDs to
+# produce a signature that stays the same across runs for the same root cause.
+#   fp=$(compute_failure_fingerprint "AssertionError: Device has 2 program cache entries")
+compute_failure_fingerprint() {
+  local raw="$1"
+  echo "$raw" \
+    | sed -E 's/0x[0-9a-fA-F]+/0xADDR/g' \
+    | sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}:[0-9]{2}[.0-9Z]*/TIMESTAMP/g' \
+    | sed -E 's/pid: [0-9]+/pid: PID/g' \
+    | sed -E 's/tid: [0-9]+/tid: TID/g' \
+    | sed -E 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/UUID/g' \
+    | sed -E 's/:[0-9]+\)/:\)/g' \
+    | tr -s ' ' \
+    | head -1
+}
+
 # Compare two layers and return the escape type.
 #   escape_type=$(be_classify_escape "ttnn" "tt-metalium")
 #   -> "vertical" (fix in lower layer than test)

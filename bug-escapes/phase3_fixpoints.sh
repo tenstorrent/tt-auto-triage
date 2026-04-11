@@ -113,11 +113,16 @@ for i in $(seq 0 $((num_failures - 1))); do
     run_id=$(echo "$subsequent_runs" | jq -r ".[$r].id")
     run_sha=$(echo "$subsequent_runs" | jq -r ".[$r].head_sha")
 
-    # Check this specific job's conclusion in this run
+    # Check this specific job's conclusion in this run (fuzzy match on job name)
     jobs_json=$(get_jobs_for_run "$run_id")
     job_conclusion=$(echo "$jobs_json" | jq -r --arg jn "$job_name" '
-      .jobs[] | select(.name == $jn) | .conclusion // "unknown"
+      .jobs[] | select(.name == $jn or (.name | endswith(" / " + $jn)) or (.name | contains($jn))) | .conclusion // "unknown"
     ' 2>/dev/null | head -1)
+
+    if [ -z "$job_conclusion" ]; then
+      log_info "      Run $run_id: job '$job_name' not present — skipping (gap)"
+      continue
+    fi
 
     if [ "$job_conclusion" = "success" ]; then
       first_passing_run_id="$run_id"
@@ -189,6 +194,20 @@ for i in $(seq 0 $((num_failures - 1))); do
 
     files_list=$(echo "$files_json" | jq -r '.[]' 2>/dev/null | head -50 || echo "")
 
+    # Fetch PR context for this commit
+    pr_number=""
+    pr_title=""
+    pr_body=""
+    pr_json=$(gh api "repos/${AT_OWNER_REPO}/commits/${commit_sha}/pulls" \
+      --jq '.[0] // empty' 2>/dev/null || echo "")
+    if [ -n "$pr_json" ]; then
+      pr_number=$(echo "$pr_json" | jq -r '.number // ""' 2>/dev/null || echo "")
+      pr_title=$(echo "$pr_json" | jq -r '.title // ""' 2>/dev/null || echo "")
+      pr_body=$(echo "$pr_json" | jq -r '.body // ""' 2>/dev/null || echo "")
+      # Truncate PR body to avoid prompt size issues
+      pr_body="${pr_body:0:2000}"
+    fi
+
     # Ask the Cursor agent to analyze this commit
     agent_output="$(mktemp)"
     if cursor_agent_from_template "$PROMPT_TEMPLATE" "$agent_output" \
@@ -198,7 +217,10 @@ for i in $(seq 0 $((num_failures - 1))); do
          "TEST_LAYER=$test_layer" \
          "COMMIT_SHA=$commit_sha" \
          "COMMIT_MESSAGE=$commit_subject" \
-         "COMMIT_FILES=$files_list"; then
+         "COMMIT_FILES=$files_list" \
+         "PR_NUMBER=$pr_number" \
+         "PR_TITLE=$pr_title" \
+         "PR_BODY=$pr_body"; then
 
       is_likely_fix=$(jq -r 'if .is_likely_fix == null then false else .is_likely_fix end' "$agent_output" 2>/dev/null || echo "false")
       fix_confidence=$(jq -r '.fix_confidence // "low"' "$agent_output" 2>/dev/null || echo "low")

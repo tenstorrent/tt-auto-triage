@@ -34,11 +34,11 @@ The test YAML file is discovered from the impl workflow
 (`*-impl.yaml` → `TESTS_YAML_PATH` env var → the YAML file).
 
 Replace its contents with only the relevant test group, narrowing
-the pytest command to the specific test function:
+the pytest command to the specific parametrized test:
 
 ```yaml
 - name: <test_job name>
-  cmd: pytest <test_file>::<test_function> -k "<parametrization filter>"
+  cmd: pytest "<test_file>::<test_function>[<parametrization>]"
   skus:
     <matching_sku>:
       timeout: 40
@@ -46,9 +46,13 @@ the pytest command to the specific test function:
   team: <original team>
 ```
 
-The parametrization filter is extracted from `test_name` by taking
-the bracket contents and replacing characters that pytest -k can't
-handle (brackets → removed, commas → `-`, spaces → `-`).
+**IMPORTANT**: Use the full bracket node ID in the pytest path, NOT `-k`.
+The `-k` flag interprets `=` signs and `-` as Python expression operators,
+which silently deselects parametrized tests whose IDs contain those
+characters (e.g. `num_devices=4-num_links=1-...`). This causes `collected
+1 item / no tests ran` with no obvious error. The bracket syntax
+(`::test_func[param=val-param2=val2]`) works correctly and must be quoted
+to protect the brackets from shell expansion.
 
 Commit this change on both branches and push.
 
@@ -112,8 +116,8 @@ This could become a Phase 5 in the pipeline:
    - Matching test group to job name: the `name:` field in the YAML
      matches the job display name in GitHub Actions
    - SKU detection: parse the `skus:` keys from the matching test group
-   - Parametrization extraction: split `test_name` at `[`, use contents
-     for `-k` filter (may need character escaping)
+   - Parametrization: use the full bracket node ID in the pytest path
+     (NOT `-k`, which breaks on `=` and `-` in parametrized IDs)
    - Branch naming: use a unique prefix to avoid collisions
      (e.g. `verify-${escape_hash}-before/after`)
    - Timeout: set a maximum wait time for verification runs
