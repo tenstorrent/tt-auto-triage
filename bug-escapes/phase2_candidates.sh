@@ -274,10 +274,15 @@ ${excerpt}
       fi
 
       agent_job=$(echo "$result" | jq -r '.job // ""' 2>/dev/null || echo "")
-      test_name=$(echo "$result" | jq -r '.test_name // "unknown"' 2>/dev/null || echo "unknown")
+      test_name=$(echo "$result" | jq -r '.test_name // "null"' 2>/dev/null || echo "null")
       failure_sig=$(echo "$result" | jq -r '.failure_signature // "unknown"' 2>/dev/null || echo "unknown")
       confidence=$(echo "$result" | jq -r '.confidence // "low"' 2>/dev/null || echo "low")
       reasoning=$(echo "$result" | jq -r '.reasoning // ""' 2>/dev/null || echo "")
+
+      if [ "$test_name" = "null" ] || [ "$test_name" = "unknown" ] || [ -z "$test_name" ]; then
+        log_info "      Skipping '$agent_job': agent confirmed failure but couldn't identify the test name"
+        continue
+      fi
 
       # Match back to candidate metadata to get failing_run_ids
       matched_meta=""
