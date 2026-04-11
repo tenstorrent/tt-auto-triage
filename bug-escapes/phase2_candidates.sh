@@ -197,11 +197,28 @@ for i in $(seq 0 $((num_workflows - 1))); do
       }
     fi
 
-    # Extract a short error excerpt from the job-specific log
+    # Extract an error-focused excerpt from the job-specific log.
+    # Search for common error markers and grab context around them;
+    # fall back to a section before the final cleanup if no markers found.
     excerpt=""
     for logfile in "$run_log_dir"/*"${job_filter}"* "$run_log_dir"/**/*"${job_filter}"*; do
       [ -f "$logfile" ] || continue
-      excerpt="$(tail -c "$excerpt_bytes" "$logfile")"
+      # Try to find error-relevant lines using common CI failure markers
+      error_line=$(grep -n -m1 -iE 'FAILED|TT_FATAL|AssertionError|RuntimeError|Error:|CRASHED|fatal error|test.*failed' "$logfile" 2>/dev/null | head -1 | cut -d: -f1)
+      if [ -n "$error_line" ]; then
+        # Extract a window: 5 lines before through ~60 lines after the error
+        start_line=$((error_line > 5 ? error_line - 5 : 1))
+        excerpt="$(sed -n "${start_line},$((start_line + 65))p" "$logfile" | head -c "$excerpt_bytes")"
+      else
+        # No error marker found — take from 3/4 through the file (skip cleanup at end)
+        file_size=$(wc -c < "$logfile")
+        skip_to=$(( file_size * 3 / 4 ))
+        if [ "$skip_to" -gt "$excerpt_bytes" ]; then
+          excerpt="$(tail -c +"$skip_to" "$logfile" | head -c "$excerpt_bytes")"
+        else
+          excerpt="$(tail -c "$excerpt_bytes" "$logfile")"
+        fi
+      fi
       break
     done
 
