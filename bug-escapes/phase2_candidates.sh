@@ -208,15 +208,10 @@ for i in $(seq 0 $((num_workflows - 1))); do
       if [ -n "$error_line" ]; then
         start_line=$((error_line > 5 ? error_line - 5 : 1))
         end_line=$((start_line + 65))
-        excerpt="$(sed -n "${start_line},${end_line}p" "$logfile" 2>/dev/null | dd bs="$excerpt_bytes" count=1 2>/dev/null)"
+        excerpt="$(awk "NR>=${start_line} && NR<=${end_line}" "$logfile" 2>/dev/null)" || true
+        excerpt="${excerpt:0:$excerpt_bytes}"
       else
-        file_size=$(wc -c < "$logfile")
-        skip_to=$(( file_size * 3 / 4 ))
-        if [ "$skip_to" -gt "$excerpt_bytes" ]; then
-          excerpt="$(dd if="$logfile" bs=1 skip="$skip_to" count="$excerpt_bytes" 2>/dev/null)"
-        else
-          excerpt="$(tail -c "$excerpt_bytes" "$logfile" 2>/dev/null)"
-        fi
+        excerpt="$(tail -c "$excerpt_bytes" "$logfile" 2>/dev/null)" || true
       fi
       break
     done
