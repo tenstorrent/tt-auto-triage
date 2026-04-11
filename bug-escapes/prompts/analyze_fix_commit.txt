@@ -18,10 +18,18 @@ The candidate commit:
 - Files changed:
 ${COMMIT_FILES}
 
+Pull request context (if available):
+- PR #${PR_NUMBER}: ${PR_TITLE}
+- PR description excerpt:
+${PR_BODY}
+
 Analyze whether this commit plausibly fixes the failing test. Consider:
-1. Does the commit message mention fixing, resolving, or addressing the failing test or its error?
+1. Does the commit message or PR description mention fixing, resolving, or addressing the failing test or its error?
 2. Do the changed files touch code that could affect the failing test?
-3. Which architectural layer do the changed files belong to?
+3. Does the PR description describe changes to behavior that could have caused or resolved the failure signature?
+4. Which architectural layer do the changed files belong to?
+
+IMPORTANT: Even if the commit message doesn't explicitly mention the test, the code changes may still fix it indirectly. Pay close attention to whether the changed files modify the same subsystem (e.g. tensor creation, program cache, from_torch, CCL ops) that the failure signature points to.
 
 Respond with ONLY a JSON object in this exact format (no markdown, no explanation):
 {

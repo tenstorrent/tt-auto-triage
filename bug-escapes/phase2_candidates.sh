@@ -111,10 +111,18 @@ for i in $(seq 0 $((num_workflows - 1))); do
   done
   wait
 
-  # Merge all per-run job arrays into a single timeline object
+  # Merge all per-run job arrays into a single timeline object.
+  # Normalize job names: strip "workflow-name / " prefix so that
+  # "galaxy-e2e-tests / BH Galaxy CCL tests" groups with "BH Galaxy CCL tests".
   job_timeline_file="$(mktemp)"
   cat "$jobs_tmp_dir"/run_*.json 2>/dev/null | jq -s '
-    [.[][] | {job, run_id: (.run_id // 0), conclusion, created_at}] |
+    [.[][] | {
+      job: (if (.job | contains(" / ")) then (.job | split(" / ") | .[-1]) else .job end),
+      raw_job: .job,
+      run_id: (.run_id // 0),
+      conclusion,
+      created_at
+    }] |
     group_by(.job) |
     map({key: .[0].job, value: .}) |
     from_entries
@@ -204,6 +212,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
     # their logs lack error markers.
     excerpt=""
     used_run_id=""
+    failure_fingerprint=""
     for try_run_id in $(echo "$failing_run_ids" | jq -r '.[]'); do
       run_log_dir="$LOGS_DIR/run_${try_run_id}"
       if [ ! -d "$run_log_dir" ]; then
@@ -222,6 +231,9 @@ for i in $(seq 0 $((num_workflows - 1))); do
           excerpt="$(awk "NR>=${start_line} && NR<=${end_line}" "$logfile" 2>/dev/null)" || true
           excerpt="${excerpt:0:$excerpt_bytes}"
           used_run_id="$try_run_id"
+          # Compute a stable fingerprint from the primary error line
+          raw_error_line=$(awk "NR==${error_line}" "$logfile" 2>/dev/null || true)
+          failure_fingerprint=$(compute_failure_fingerprint "$raw_error_line")
         fi
         break
       done
@@ -231,6 +243,10 @@ for i in $(seq 0 $((num_workflows - 1))); do
     if [ -z "$excerpt" ]; then
       log_info "      No error content found for '$job_name' across all runs — skipping"
       continue
+    fi
+
+    if [ -n "$failure_fingerprint" ]; then
+      log_info "      Fingerprint: ${failure_fingerprint:0:80}"
     fi
 
     candidates_summary="${candidates_summary}
