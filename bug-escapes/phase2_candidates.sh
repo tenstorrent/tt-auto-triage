@@ -153,15 +153,27 @@ for i in $(seq 0 $((num_workflows - 1))); do
     ) | map(select(. != null))
   ' "$job_timeline_file")
 
+  # Filter out infrastructure/build jobs that are never bug escapes
+  candidate_jobs=$(echo "$candidate_jobs" | jq -c '[.[] | select(
+    (.job | startswith("build-artifact")) |
+    (. or (.job | startswith("resolve-artifacts"))) |
+    (. or (.job == "tests-to-run")) |
+    (. or (.job | endswith("load-test-matrix"))) |
+    (. or (.job | endswith("define-ops-tests"))) |
+    (. or (.job | contains("define-demo-tests"))) |
+    (. or (.job | contains("define-ttsim"))) |
+    not
+  )]')
+
   num_candidates=$(echo "$candidate_jobs" | jq 'length')
   rm -f "$job_timeline_file"
 
   if [ "$num_candidates" -eq 0 ]; then
-    log_info "    No consecutive failures found"
+    log_info "    No consecutive failures found (after filtering infrastructure jobs)"
     continue
   fi
 
-  log_info "    Found $num_candidates candidate job(s) with ${CONSECUTIVE_RUNS}+ consecutive failures"
+  log_info "    Found $num_candidates candidate job(s) with ${CONSECUTIVE_RUNS}+ consecutive failures (infrastructure filtered)"
 
   # Collect error excerpts from up to 20 candidates, then batch-classify
   # with a single agent call.
