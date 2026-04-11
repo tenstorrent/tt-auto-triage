@@ -23,7 +23,7 @@ CONSECUTIVE_RUNS="${CONSECUTIVE_RUNS:-3}"
 LOOKBACK_DAYS="${LOOKBACK_DAYS:-14}"
 MAX_CANDIDATES="${MAX_CANDIDATES:-999}"
 MAX_LOG_BYTES="${MAX_LOG_BYTES:-100000}"
-MAX_RUNS_PER_WORKFLOW="${MAX_RUNS_PER_WORKFLOW:-30}"
+MAX_RUNS_PER_WORKFLOW="${MAX_RUNS_PER_WORKFLOW:-15}"
 
 mkdir -p "$LOGS_DIR"
 
@@ -155,14 +155,14 @@ for i in $(seq 0 $((num_workflows - 1))); do
 
   # Filter out infrastructure/build jobs that are never bug escapes
   candidate_jobs=$(echo "$candidate_jobs" | jq -c '[.[] | select(
-    (.job | startswith("build-artifact")) |
-    (. or (.job | startswith("resolve-artifacts"))) |
-    (. or (.job == "tests-to-run")) |
-    (. or (.job | endswith("load-test-matrix"))) |
-    (. or (.job | endswith("define-ops-tests"))) |
-    (. or (.job | contains("define-demo-tests"))) |
-    (. or (.job | contains("define-ttsim"))) |
-    not
+    ((.job | startswith("build-artifact")) or
+     (.job | startswith("resolve-artifacts")) or
+     (.job == "tests-to-run") or
+     (.job | endswith("load-test-matrix")) or
+     (.job | contains("define-ops-tests")) or
+     (.job | contains("define-demo-tests")) or
+     (.job | contains("define-ttsim")))
+    | not
   )]')
 
   num_candidates=$(echo "$candidate_jobs" | jq 'length')
