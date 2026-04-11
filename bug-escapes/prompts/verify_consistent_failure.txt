@@ -9,7 +9,9 @@ ${CANDIDATES_SUMMARY}
 
 For each candidate, determine:
 - Is this a real test failure (a bug), or infrastructure noise (runner disconnected, OOM kill, network timeout, docker pull failure, setup failure)?
-- If a real test failure, what is the test name and failure signature?
+- If a real test failure, what is the specific failing test? The test_name MUST be a concrete pytest path (e.g. "tests/foo/test_bar.py::test_something[param]"). If you cannot identify the exact test path from the excerpt, set is_test_failure to false.
+
+IMPORTANT: Only set is_test_failure to true if you can extract the full pytest test path from the excerpt. A failure without an identifiable test name is not actionable.
 
 Respond with ONLY a JSON array (one object per candidate, same order):
 [
@@ -17,7 +19,7 @@ Respond with ONLY a JSON array (one object per candidate, same order):
     "job": "<job name exactly as shown above>",
     "is_test_failure": true or false,
     "is_infrastructure_noise": true or false,
-    "test_name": "<full test path or null>",
+    "test_name": "<full pytest path e.g. tests/foo/test_bar.py::test_func[params] or null>",
     "failure_signature": "<core error message or null>",
     "confidence": "high/medium/low",
     "reasoning": "<1-2 sentences>"
