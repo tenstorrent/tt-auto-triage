@@ -163,157 +163,140 @@ for i in $(seq 0 $((num_workflows - 1))); do
 
   log_info "    Found $num_candidates candidate job(s) with ${CONSECUTIVE_RUNS}+ consecutive failures"
 
-  # For each candidate, download logs and invoke the Cursor agent.
-  # Cap attempts per workflow to avoid burning agent calls on noisy workflows.
-  max_attempts_per_wf=10
-  wf_attempts=0
+  # Collect error excerpts from up to 20 candidates, then batch-classify
+  # with a single agent call.
+  max_candidates_per_prompt=20
+  candidates_summary=""
+  candidates_meta=()  # parallel arrays for metadata
+  excerpt_bytes=2000
+  included=0
+
   for c in $(seq 0 $((num_candidates - 1))); do
-    if [ "$wf_attempts" -ge "$max_attempts_per_wf" ]; then
-      log_info "    Tried $max_attempts_per_wf candidates from this workflow without confirming — moving on"
+    if [ "$included" -ge "$max_candidates_per_prompt" ]; then
       break
     fi
-    wf_attempts=$((wf_attempts + 1))
+
     candidate=$(echo "$candidate_jobs" | jq -c ".[$c]")
     job_name=$(echo "$candidate" | jq -r '.job')
     failing_run_ids=$(echo "$candidate" | jq -c '.failing_runs')
-    run_ids_str=$(echo "$failing_run_ids" | jq -r 'join(", ")')
+    first_run_id=$(echo "$failing_run_ids" | jq -r '.[0]')
 
-    log_info "      Checking job '$job_name' (runs: $run_ids_str)"
-
-    # Per-run agent analysis: call the agent once per run with the full
-    # MAX_LOG_BYTES budget, then programmatically check consistency.
+    # Extract the job name suffix for log file matching
     if [[ "$job_name" == *" / "* ]]; then
       job_filter="${job_name##* / }"
     else
       job_filter="$job_name"
     fi
 
-    run_results=()
-    all_runs_analyzed=true
+    # Download logs for the first failing run (cached if already downloaded)
+    run_log_dir="$LOGS_DIR/run_${first_run_id}"
+    if [ ! -d "$run_log_dir" ]; then
+      download_run_logs "$first_run_id" "$run_log_dir" || {
+        log_warn "      Could not download logs for run $first_run_id — skipping $job_name"
+        continue
+      }
+    fi
 
-    for run_id in $(echo "$failing_run_ids" | jq -r '.[]'); do
-      run_log_dir="$LOGS_DIR/run_${run_id}"
-      if [ ! -d "$run_log_dir" ]; then
-        download_run_logs "$run_id" "$run_log_dir" || {
-          log_warn "        Could not download logs for run $run_id"
-          all_runs_analyzed=false
-          continue
-        }
-      fi
+    # Extract a short error excerpt from the job-specific log
+    excerpt=""
+    for logfile in "$run_log_dir"/*"${job_filter}"* "$run_log_dir"/**/*"${job_filter}"*; do
+      [ -f "$logfile" ] || continue
+      excerpt="$(tail -c "$excerpt_bytes" "$logfile")"
+      break
+    done
 
-      logs_content=""
-      logs_bytes=0
-      for logfile in "$run_log_dir"/*"${job_filter}"* "$run_log_dir"/**/*"${job_filter}"*; do
-        [ -f "$logfile" ] || continue
-        remaining=$((MAX_LOG_BYTES - logs_bytes))
-        if [ "$remaining" -le 100 ]; then
-          break
-        fi
-        file_header="--- $(basename "$logfile") ---
+    if [ -z "$excerpt" ]; then
+      log_info "      No matching log for '$job_name' in run $first_run_id — skipping"
+      continue
+    fi
+
+    candidates_summary="${candidates_summary}
+=== CANDIDATE $((included + 1)): ${job_name} ===
+Failing run IDs: $(echo "$failing_run_ids" | jq -r 'join(", ")')
+Error excerpt (last ${excerpt_bytes} bytes of run ${first_run_id}):
+${excerpt}
+
 "
-        file_chunk="$(tail -c "$remaining" "$logfile")"
-        logs_content="${logs_content}${file_header}${file_chunk}
-"
-        logs_bytes=$((logs_bytes + ${#file_header} + ${#file_chunk} + 1))
-      done
+    candidates_meta+=("$(echo "$candidate" | jq -c --arg jn "$job_name" '.')")
+    included=$((included + 1))
+  done
 
-      if [ -z "$logs_content" ]; then
-        log_warn "        No logs for run $run_id — skipping"
-        all_runs_analyzed=false
+  if [ "$included" -eq 0 ]; then
+    log_info "    No log excerpts collected — skipping workflow"
+    continue
+  fi
+
+  log_info "    Sending $included candidates to agent for batch classification"
+
+  # Single agent call for this workflow
+  agent_output="$(mktemp)"
+  if cursor_agent_from_template "$PROMPT_TEMPLATE" "$agent_output" \
+       "WORKFLOW_PATH=$wf_path" \
+       "TEST_LAYER=$test_layer" \
+       "CONSECUTIVE_RUNS=$CONSECUTIVE_RUNS" \
+       "CANDIDATES_SUMMARY=$candidates_summary"; then
+
+    # The agent returns a JSON array. Iterate and match back by job name.
+    num_results=$(jq 'if type == "array" then length else 0 end' "$agent_output" 2>/dev/null || echo 0)
+    log_info "    Agent returned $num_results classifications"
+
+    for idx in $(seq 0 $((num_results - 1))); do
+      result=$(jq -c ".[$idx]" "$agent_output" 2>/dev/null || echo "{}")
+
+      is_test_fail=$(echo "$result" | jq -r 'if .is_test_failure == null then false else .is_test_failure end' 2>/dev/null || echo "false")
+      is_infra=$(echo "$result" | jq -r 'if .is_infrastructure_noise == null then true else .is_infrastructure_noise end' 2>/dev/null || echo "true")
+
+      if [ "$is_test_fail" != "true" ] || [ "$is_infra" = "true" ]; then
         continue
       fi
-      log_info "        Run $run_id: ${logs_bytes} bytes of logs (cap: ${MAX_LOG_BYTES})"
 
-      agent_output="$(mktemp)"
-      if cursor_agent_from_template "$PROMPT_TEMPLATE" "$agent_output" \
-           "WORKFLOW_PATH=$wf_path" \
-           "JOB_NAME=$job_name" \
-           "RUN_ID=$run_id" \
-           "LOGS_CONTENT=$logs_content"; then
+      agent_job=$(echo "$result" | jq -r '.job // ""' 2>/dev/null || echo "")
+      test_name=$(echo "$result" | jq -r '.test_name // "unknown"' 2>/dev/null || echo "unknown")
+      failure_sig=$(echo "$result" | jq -r '.failure_signature // "unknown"' 2>/dev/null || echo "unknown")
+      confidence=$(echo "$result" | jq -r '.confidence // "low"' 2>/dev/null || echo "low")
+      reasoning=$(echo "$result" | jq -r '.reasoning // ""' 2>/dev/null || echo "")
 
-        is_infra=$(jq -r 'if .is_infrastructure_noise == null then true else .is_infrastructure_noise end' "$agent_output" 2>/dev/null || echo "true")
-        is_test_fail=$(jq -r 'if .is_test_failure == null then false else .is_test_failure end' "$agent_output" 2>/dev/null || echo "false")
-        tn=$(jq -r '.test_name // "null"' "$agent_output" 2>/dev/null || echo "null")
-        fs=$(jq -r '.failure_signature // "null"' "$agent_output" 2>/dev/null || echo "null")
-        conf=$(jq -r '.confidence // "low"' "$agent_output" 2>/dev/null || echo "low")
-        reason=$(jq -r '.reasoning // ""' "$agent_output" 2>/dev/null || echo "")
-
-        if [ "$is_infra" = "true" ] || [ "$is_test_fail" != "true" ]; then
-          log_info "        Run $run_id: infrastructure noise or not a test failure — skipping candidate"
-          rm -f "$agent_output"
-          all_runs_analyzed=false
+      # Match back to candidate metadata to get failing_run_ids
+      matched_meta=""
+      for m in "${candidates_meta[@]}"; do
+        meta_job=$(echo "$m" | jq -r '.job')
+        if [ "$meta_job" = "$agent_job" ]; then
+          matched_meta="$m"
           break
         fi
+      done
 
-        log_info "        Run $run_id: test_name='$tn' signature='${fs:0:80}' (confidence=$conf)"
-        run_results+=("$(jq -c '.' "$agent_output")")
-      else
-        log_warn "        Agent call failed for run $run_id — skipping candidate"
-        all_runs_analyzed=false
+      if [ -z "$matched_meta" ]; then
+        log_warn "      Agent returned job '$agent_job' not found in candidates — skipping"
+        continue
+      fi
+
+      failing_run_ids=$(echo "$matched_meta" | jq -c '.failing_runs')
+      log_info "      CONFIRMED: $test_name ($agent_job, confidence=$confidence)"
+
+      jq --arg wf "$wf_path" \
+         --arg job "$agent_job" \
+         --arg tn "$test_name" \
+         --arg fs "$failure_sig" \
+         --argjson frid "$failing_run_ids" \
+         --arg tl "$test_layer" \
+         --arg conf "$confidence" \
+         --arg notes "$reasoning" \
+         '. += [{"workflow": $wf, "job": $job, "test_name": $tn, "failure_signature": $fs, "failing_run_ids": $frid, "test_layer": $tl, "agent_confidence": $conf, "agent_notes": $notes}]' \
+         "$FAILURES_OUTPUT" > "${FAILURES_OUTPUT}.tmp" && mv "${FAILURES_OUTPUT}.tmp" "$FAILURES_OUTPUT"
+
+      total_confirmed=$(jq 'length' "$FAILURES_OUTPUT")
+      if [ "$total_confirmed" -ge "$MAX_CANDIDATES" ]; then
+        log_info "      Reached MAX_CANDIDATES=$MAX_CANDIDATES — stopping Phase 2 early"
         rm -f "$agent_output"
-        break
-      fi
-      rm -f "$agent_output"
-    done
-
-    num_results=${#run_results[@]}
-    num_expected=$(echo "$failing_run_ids" | jq 'length')
-
-    if [ "$num_results" -lt "$num_expected" ]; then
-      log_info "        Only $num_results/$num_expected runs analyzed — skipping candidate"
-      continue
-    fi
-
-    # Programmatic consistency check: compare test_name across all runs.
-    # Use the first run's test_name as the reference; check if all others
-    # contain it as a substring or vice versa (fuzzy match).
-    first_test_name=$(echo "${run_results[0]}" | jq -r '.test_name // "null"')
-    is_consistent=true
-    for idx in $(seq 1 $((num_results - 1))); do
-      other_test_name=$(echo "${run_results[$idx]}" | jq -r '.test_name // "null"')
-      if [ "$first_test_name" = "null" ] || [ "$other_test_name" = "null" ]; then
-        is_consistent=false
-        break
-      fi
-      if [ "$first_test_name" != "$other_test_name" ]; then
-        # Fuzzy: check substring containment in either direction
-        if [[ "$first_test_name" == *"$other_test_name"* ]] || [[ "$other_test_name" == *"$first_test_name"* ]]; then
-          :
-        else
-          is_consistent=false
-          break
-        fi
+        break 2
       fi
     done
+  else
+    log_warn "    Agent call failed for workflow $wf_path — skipping"
+  fi
 
-    if [ "$is_consistent" != "true" ]; then
-      log_info "        Test names differ across runs — not a consistent failure"
-      continue
-    fi
-
-    test_name="$first_test_name"
-    failure_sig=$(echo "${run_results[0]}" | jq -r '.failure_signature // "unknown"')
-    confidence=$(echo "${run_results[0]}" | jq -r '.confidence // "low"')
-    reasoning=$(echo "${run_results[0]}" | jq -r '.reasoning // ""')
-
-    log_info "        CONFIRMED consistent failure: $test_name (confidence=$confidence)"
-
-    jq --arg wf "$wf_path" \
-       --arg job "$job_name" \
-       --arg tn "$test_name" \
-       --arg fs "$failure_sig" \
-       --argjson frid "$failing_run_ids" \
-       --arg tl "$test_layer" \
-       --arg conf "$confidence" \
-       --arg notes "$reasoning" \
-       '. += [{"workflow": $wf, "job": $job, "test_name": $tn, "failure_signature": $fs, "failing_run_ids": $frid, "test_layer": $tl, "agent_confidence": $conf, "agent_notes": $notes}]' \
-       "$FAILURES_OUTPUT" > "${FAILURES_OUTPUT}.tmp" && mv "${FAILURES_OUTPUT}.tmp" "$FAILURES_OUTPUT"
-    total_confirmed=$(jq 'length' "$FAILURES_OUTPUT")
-    if [ "$total_confirmed" -ge "$MAX_CANDIDATES" ]; then
-      log_info "        Reached MAX_CANDIDATES=$MAX_CANDIDATES — stopping Phase 2 early"
-      break 3
-    fi
-  done
+  rm -f "$agent_output"
 done
 
 total_failures=$(jq 'length' "$FAILURES_OUTPUT")
