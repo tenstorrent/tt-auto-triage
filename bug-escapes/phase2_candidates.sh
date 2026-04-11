@@ -179,52 +179,51 @@ for i in $(seq 0 $((num_workflows - 1))); do
     candidate=$(echo "$candidate_jobs" | jq -c ".[$c]")
     job_name=$(echo "$candidate" | jq -r '.job')
     failing_run_ids=$(echo "$candidate" | jq -c '.failing_runs')
-    first_run_id=$(echo "$failing_run_ids" | jq -r '.[0]')
 
-    # Extract the job name suffix for log file matching
     if [[ "$job_name" == *" / "* ]]; then
       job_filter="${job_name##* / }"
     else
       job_filter="$job_name"
     fi
 
-    # Download logs for the first failing run (cached if already downloaded)
-    run_log_dir="$LOGS_DIR/run_${first_run_id}"
-    if [ ! -d "$run_log_dir" ]; then
-      download_run_logs "$first_run_id" "$run_log_dir" || {
-        log_warn "      Could not download logs for run $first_run_id — skipping $job_name"
-        continue
-      }
-    fi
-
-    # Extract an error-focused excerpt from the job-specific log.
-    # Search for common error markers and grab context around them;
-    # fall back to a section before the final cleanup if no markers found.
+    # Try each run in the window until we find one with real error content.
+    # Many "failures" are cascading (upstream failed, job never ran), so
+    # their logs lack error markers.
     excerpt=""
-    for logfile in "$run_log_dir"/*"${job_filter}"* "$run_log_dir"/**/*"${job_filter}"*; do
-      [ -f "$logfile" ] || continue
-      # Try to find error-relevant lines using common CI failure markers
-      error_line=$(grep -n -E 'FAILED|##\[error\]|AssertionError|TT_FATAL|TT_THROW|RuntimeError:' "$logfile" 2>/dev/null | tail -1 | cut -d: -f1 || true)
-      if [ -n "$error_line" ]; then
-        start_line=$((error_line > 20 ? error_line - 20 : 1))
-        end_line=$((error_line + 30))
-        excerpt="$(awk "NR>=${start_line} && NR<=${end_line}" "$logfile" 2>/dev/null)" || true
-        excerpt="${excerpt:0:$excerpt_bytes}"
-      else
-        excerpt="$(tail -c "$excerpt_bytes" "$logfile" 2>/dev/null)" || true
+    used_run_id=""
+    for try_run_id in $(echo "$failing_run_ids" | jq -r '.[]'); do
+      run_log_dir="$LOGS_DIR/run_${try_run_id}"
+      if [ ! -d "$run_log_dir" ]; then
+        download_run_logs "$try_run_id" "$run_log_dir" || {
+          log_warn "      Could not download logs for run $try_run_id"
+          continue
+        }
       fi
-      break
+
+      for logfile in "$run_log_dir"/*"${job_filter}"* "$run_log_dir"/**/*"${job_filter}"*; do
+        [ -f "$logfile" ] || continue
+        error_line=$(grep -n -E 'FAILED|##\[error\]|AssertionError|TT_FATAL|TT_THROW|RuntimeError:' "$logfile" 2>/dev/null | tail -1 | cut -d: -f1 || true)
+        if [ -n "$error_line" ]; then
+          start_line=$((error_line > 20 ? error_line - 20 : 1))
+          end_line=$((error_line + 30))
+          excerpt="$(awk "NR>=${start_line} && NR<=${end_line}" "$logfile" 2>/dev/null)" || true
+          excerpt="${excerpt:0:$excerpt_bytes}"
+          used_run_id="$try_run_id"
+        fi
+        break
+      done
+      [ -n "$excerpt" ] && break
     done
 
     if [ -z "$excerpt" ]; then
-      log_info "      No matching log for '$job_name' in run $first_run_id — skipping"
+      log_info "      No error content found for '$job_name' across all runs — skipping"
       continue
     fi
 
     candidates_summary="${candidates_summary}
 === CANDIDATE $((included + 1)): ${job_name} ===
 Failing run IDs: $(echo "$failing_run_ids" | jq -r 'join(", ")')
-Error excerpt (last ${excerpt_bytes} bytes of run ${first_run_id}):
+Error excerpt (from run ${used_run_id}):
 ${excerpt}
 
 "
