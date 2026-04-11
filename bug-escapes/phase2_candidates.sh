@@ -91,34 +91,35 @@ for i in $(seq 0 $((num_workflows - 1))); do
     continue
   fi
 
-  # For each run, get jobs and build a per-job timeline
-  # Structure: { "job_name": [ {run_id, conclusion, run_created_at}, ... ] }
-  job_timeline_file="$(mktemp)"
-  echo '{}' > "$job_timeline_file"
+  # Fetch jobs for all runs in parallel (up to 8 concurrent), then merge
+  # into a per-job timeline: { "job_name": [ {run_id, conclusion, created_at}, ... ] }
+  jobs_tmp_dir="$(mktemp -d)"
 
   for r in $(seq 0 $((num_runs - 1))); do
     run_id=$(echo "$all_runs" | jq -r ".[$r].id")
     run_date=$(echo "$all_runs" | jq -r ".[$r].created_at")
-
-    jobs_json=$(get_jobs_for_run "$run_id")
-    num_jobs=$(echo "$jobs_json" | jq '.jobs | length' 2>/dev/null || echo 0)
-
-    for j in $(seq 0 $((num_jobs - 1))); do
-      job_name=$(echo "$jobs_json" | jq -r ".jobs[$j].name")
-      conclusion=$(echo "$jobs_json" | jq -r ".jobs[$j].conclusion // \"unknown\"")
-
-      jq --arg jn "$job_name" \
-         --arg rid "$run_id" \
-         --arg conc "$conclusion" \
-         --arg rdate "$run_date" \
-         'if .[$jn] then
-            .[$jn] += [{"run_id": ($rid | tonumber), "conclusion": $conc, "created_at": $rdate}]
-          else
-            .[$jn] = [{"run_id": ($rid | tonumber), "conclusion": $conc, "created_at": $rdate}]
-          end' \
-         "$job_timeline_file" > "${job_timeline_file}.tmp" && mv "${job_timeline_file}.tmp" "$job_timeline_file"
-    done
+    (
+      jobs_json=$(get_jobs_for_run "$run_id" 2>/dev/null || echo '{"jobs":[]}')
+      echo "$jobs_json" | jq -c --arg rdate "$run_date" --argjson rid "$run_id" '
+        [.jobs[]? | {job: .name, run_id: $rid, conclusion: (.conclusion // "unknown"), created_at: $rdate}]
+      ' > "$jobs_tmp_dir/run_${run_id}.json" 2>/dev/null || echo '[]' > "$jobs_tmp_dir/run_${run_id}.json"
+    ) &
+    # Limit to 8 parallel fetches
+    if (( (r + 1) % 8 == 0 )); then
+      wait
+    fi
   done
+  wait
+
+  # Merge all per-run job arrays into a single timeline object
+  job_timeline_file="$(mktemp)"
+  cat "$jobs_tmp_dir"/run_*.json 2>/dev/null | jq -s '
+    [.[][] | {job, run_id: (.run_id // 0), conclusion, created_at}] |
+    group_by(.job) |
+    map({key: .[0].job, value: .}) |
+    from_entries
+  ' > "$job_timeline_file" 2>/dev/null || echo '{}' > "$job_timeline_file"
+  rm -rf "$jobs_tmp_dir"
 
   # Find jobs with N+ consecutive failures
   # Runs are ordered newest-first from the API, so we scan for consecutive "failure" conclusions
