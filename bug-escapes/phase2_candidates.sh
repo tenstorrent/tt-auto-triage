@@ -206,17 +206,16 @@ for i in $(seq 0 $((num_workflows - 1))); do
       # Try to find error-relevant lines using common CI failure markers
       error_line=$(grep -n -m1 -iE 'FAILED|TT_FATAL|AssertionError|RuntimeError|Error:|CRASHED|fatal error|test.*failed' "$logfile" 2>/dev/null | head -1 | cut -d: -f1 || true)
       if [ -n "$error_line" ]; then
-        # Extract a window: 5 lines before through ~60 lines after the error
         start_line=$((error_line > 5 ? error_line - 5 : 1))
-        excerpt="$(sed -n "${start_line},$((start_line + 65))p" "$logfile" | head -c "$excerpt_bytes")"
+        end_line=$((start_line + 65))
+        excerpt="$(sed -n "${start_line},${end_line}p" "$logfile" 2>/dev/null | dd bs="$excerpt_bytes" count=1 2>/dev/null)"
       else
-        # No error marker found — take from 3/4 through the file (skip cleanup at end)
         file_size=$(wc -c < "$logfile")
         skip_to=$(( file_size * 3 / 4 ))
         if [ "$skip_to" -gt "$excerpt_bytes" ]; then
-          excerpt="$(tail -c +"$skip_to" "$logfile" | head -c "$excerpt_bytes")"
+          excerpt="$(dd if="$logfile" bs=1 skip="$skip_to" count="$excerpt_bytes" 2>/dev/null)"
         else
-          excerpt="$(tail -c "$excerpt_bytes" "$logfile")"
+          excerpt="$(tail -c "$excerpt_bytes" "$logfile" 2>/dev/null)"
         fi
       fi
       break
