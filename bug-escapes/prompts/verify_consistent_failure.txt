@@ -1,17 +1,25 @@
-You are analyzing failure logs from a single CI job run to identify the failing test.
+You are analyzing candidate CI failures from a single workflow to identify real, deterministic test failures vs infrastructure noise.
 
 Workflow: ${WORKFLOW_PATH}
-Job: ${JOB_NAME}
-Run ID: ${RUN_ID}
+Layer: ${TEST_LAYER}
 
-${LOGS_CONTENT}
+Each candidate below had ${CONSECUTIVE_RUNS}+ consecutive failing runs in this workflow. An error excerpt from one representative failing run is included for each.
 
-Respond with ONLY a JSON object:
-{
-  "is_test_failure": true or false,
-  "is_infrastructure_noise": true or false,
-  "test_name": "<full test path or null>",
-  "failure_signature": "<core error message or null>",
-  "confidence": "high/medium/low",
-  "reasoning": "<1-2 sentences>"
-}
+${CANDIDATES_SUMMARY}
+
+For each candidate, determine:
+- Is this a real test failure (a bug), or infrastructure noise (runner disconnected, OOM kill, network timeout, docker pull failure, setup failure)?
+- If a real test failure, what is the test name and failure signature?
+
+Respond with ONLY a JSON array (one object per candidate, same order):
+[
+  {
+    "job": "<job name exactly as shown above>",
+    "is_test_failure": true or false,
+    "is_infrastructure_noise": true or false,
+    "test_name": "<full test path or null>",
+    "failure_signature": "<core error message or null>",
+    "confidence": "high/medium/low",
+    "reasoning": "<1-2 sentences>"
+  }
+]
