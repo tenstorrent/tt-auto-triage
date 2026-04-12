@@ -35,6 +35,14 @@ bug_escapes="[]"
 for i in $(seq 0 $((num_fixpoints - 1))); do
   fp=$(jq -c ".[$i]" "$FIX_POINTS_INPUT")
 
+  # Skip entries that were filtered out (e.g. flaky)
+  skipped_reason=$(echo "$fp" | jq -r '.skipped_reason // empty' 2>/dev/null || echo "")
+  if [ -n "$skipped_reason" ]; then
+    skip_test=$(echo "$fp" | jq -r '.failure.test_name // "unknown"')
+    log_info "  [$((i+1))] Skipping $skip_test (reason: $skipped_reason)"
+    continue
+  fi
+
   # Extract failure info
   test_name=$(echo "$fp" | jq -r '.failure.test_name')
   test_pipeline=$(echo "$fp" | jq -r '.failure.workflow')
