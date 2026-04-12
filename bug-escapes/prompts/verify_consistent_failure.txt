@@ -3,15 +3,19 @@ You are analyzing candidate CI failures from a single workflow to identify real,
 Workflow: ${WORKFLOW_PATH}
 Layer: ${TEST_LAYER}
 
-Each candidate below had ${CONSECUTIVE_RUNS}+ consecutive failing runs in this workflow. An error excerpt from one representative failing run is included for each.
+Each candidate below had ${CONSECUTIVE_RUNS}+ consecutive failing runs. Log files for each run are on disk — you MUST search them yourself.
 
 ${CANDIDATES_SUMMARY}
 
-For each candidate, determine:
-- Is this a real test failure (a bug), or infrastructure noise (runner disconnected, OOM kill, network timeout, docker pull failure, setup failure)?
-- If a real test failure, what is the specific failing test? The test_name MUST be a concrete pytest path (e.g. "tests/foo/test_bar.py::test_something[param]"). If you cannot identify the exact test path from the excerpt, set is_test_failure to false.
+Instructions:
+1. For each candidate, use grep/search to find error indicators in the listed log directories (look for FAILED, AssertionError, TT_FATAL, TT_THROW, RuntimeError, "exit code").
+2. The log directory contains files named after jobs. The exact filenames may not match the job name perfectly — list the directory contents and pick the closest match.
+3. Once you find the relevant log file, search for the actual test failure.
+4. Determine: is this a real test failure (a bug), or infrastructure noise (runner disconnected, OOM kill, network timeout, docker pull failure, setup failure)?
+5. If a real test failure, extract the specific failing test. The test_name MUST be a concrete pytest path (e.g. "tests/foo/test_bar.py::test_something[param]").
 
-IMPORTANT: Only set is_test_failure to true if you can extract the full pytest test path from the excerpt. A failure without an identifiable test name is not actionable.
+IMPORTANT: Only set is_test_failure to true if you can extract the full pytest test path. A failure without an identifiable test name is not actionable.
+Be efficient: grep first, then read only the relevant section around the error.
 
 Respond with ONLY a JSON array (one object per candidate, same order):
 [
