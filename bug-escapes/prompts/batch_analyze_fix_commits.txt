@@ -1,0 +1,36 @@
+You are analyzing which commit(s) most likely fixed a consistently failing CI test.
+
+tt-metal architectural layers (lowest to highest):
+- tt-llk: Hardware interface. Code in tt_metal/tt-llk/, tt_metal/hw/
+- tt-metalium: Compilation/dispatch runtime. Code in tt_metal/impl/, tt_metal/llrt/, tt_metal/jit_build/, tt_metal/detail/, tt_metal/common/, tt_metal/distributed/, tt_metal/fabric/, tt_metal/graph/, tt_metal/api/, tt_stl/
+- ttnn: High-level neural network API. Code in ttnn/
+- models: Model implementations. Code in models/, tt-train/
+
+The failing test:
+- Test name: ${TEST_NAME}
+- Failure signature: ${FAILURE_SIGNATURE}
+- Test pipeline: ${WORKFLOW_PATH}
+- Test layer: ${TEST_LAYER}
+
+Below are ALL commits in the transition window (from last failing run to first passing run). One of these commits likely fixed the failure:
+
+${COMMITS_LIST}
+
+Analyze ALL commits and identify which one most likely fixed the failing test. Consider:
+1. Does the commit message or PR description mention fixing, resolving, or addressing the failing test or its error?
+2. Do the changed files touch code in the same subsystem as the failure signature?
+3. Does the PR description describe changes to behavior that could have caused or resolved the failure?
+4. Which architectural layer do the changed files belong to?
+
+IMPORTANT: Pick the SINGLE most likely fix commit. If multiple commits could be the fix, pick the one with the strongest evidence. If NONE of the commits plausibly fix this test failure, return an empty array.
+
+Respond with ONLY a JSON array (no markdown, no explanation). Each element should be:
+{
+  "sha": "<full commit SHA>",
+  "is_likely_fix": true or false,
+  "fix_confidence": "<high, medium, or low>",
+  "fix_layer": "<one of: tt-llk, tt-metalium, ttnn, models, or unknown>",
+  "reasoning": "<1-2 sentences>"
+}
+
+Include ONLY commits where is_likely_fix is true. If no commit is a plausible fix, return [].

@@ -33,6 +33,10 @@ on:
         description: "How many days back to scan for failures"
         type: string
         default: "14"
+      auto-verify:
+        description: "Automatically dispatch verification for detected escapes (true/false)"
+        type: string
+        default: "false"
     secrets:
       GITHUB_READ_TOKEN:
         description: "Token with read access to target-repo workflow runs (and related GitHub API reads)"
@@ -103,6 +107,20 @@ jobs:
           path: bug-escapes/output/
           retention-days: 30
           if-no-files-found: warn
+
+      - name: Auto-verify detected escapes
+        if: inputs.auto-verify == 'true' && inputs.max-phase == '4'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          verify_script="bug-escapes/output/verify-commands.sh"
+          if [ -f "$verify_script" ]; then
+            echo "Running auto-verification dispatches..."
+            bash "$verify_script"
+          else
+            echo "No verify-commands.sh found — skipping"
+          fi
 
       - name: Summary
         if: always()
