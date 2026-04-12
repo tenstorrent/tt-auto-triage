@@ -218,12 +218,11 @@ for i in $(seq 0 $((num_workflows - 1))); do
 
   log_info "    Found $num_candidates candidate job(s) with ${CONSECUTIVE_RUNS}+ consecutive failures (infrastructure filtered)"
 
-  # Collect error excerpts from up to 20 candidates, then batch-classify
-  # with a single agent call.
+  # Download logs and build candidate list for the agent.
+  # The agent will search the log files itself — no excerpt extraction needed.
   max_candidates_per_prompt=20
   candidates_summary=""
-  candidates_meta=()  # parallel arrays for metadata
-  excerpt_bytes=2000
+  candidates_meta=()
   included=0
 
   for c in $(seq 0 $((num_candidates - 1))); do
@@ -235,18 +234,8 @@ for i in $(seq 0 $((num_workflows - 1))); do
     job_name=$(echo "$candidate" | jq -r '.job')
     failing_run_ids=$(echo "$candidate" | jq -c '.failing_runs')
 
-    if [[ "$job_name" == *" / "* ]]; then
-      job_filter="${job_name##* / }"
-    else
-      job_filter="$job_name"
-    fi
-
-    # Try each run in the window until we find one with real error content.
-    # Many "failures" are cascading (upstream failed, job never ran), so
-    # their logs lack error markers.
-    excerpt=""
-    used_run_id=""
-    failure_fingerprint=""
+    # Download logs for at least one failing run
+    log_dir_found=""
     for try_run_id in $(echo "$failing_run_ids" | jq -r '.[]'); do
       run_log_dir="$LOGS_DIR/run_${try_run_id}"
       if [ ! -d "$run_log_dir" ]; then
@@ -255,47 +244,29 @@ for i in $(seq 0 $((num_workflows - 1))); do
           continue
         }
       fi
-
-      for logfile in "$run_log_dir"/*"${job_filter}"* "$run_log_dir"/**/*"${job_filter}"*; do
-        [ -f "$logfile" ] || continue
-        error_line=$(grep -n -E 'FAILED|##\[error\]|AssertionError|TT_FATAL|TT_THROW|RuntimeError:' "$logfile" 2>/dev/null | tail -1 | cut -d: -f1 || true)
-        if [ -n "$error_line" ]; then
-          start_line=$((error_line > 20 ? error_line - 20 : 1))
-          end_line=$((error_line + 30))
-          excerpt="$(awk "NR>=${start_line} && NR<=${end_line}" "$logfile" 2>/dev/null)" || true
-          excerpt="${excerpt:0:$excerpt_bytes}"
-          used_run_id="$try_run_id"
-          # Compute a stable fingerprint from the primary error line
-          raw_error_line=$(awk "NR==${error_line}" "$logfile" 2>/dev/null || true)
-          failure_fingerprint=$(compute_failure_fingerprint "$raw_error_line")
-        fi
+      if [ -d "$run_log_dir" ]; then
+        log_dir_found="$run_log_dir"
         break
-      done
-      [ -n "$excerpt" ] && break
+      fi
     done
 
-    if [ -z "$excerpt" ]; then
-      log_info "      No error content found for '$job_name' across all runs — skipping"
+    if [ -z "$log_dir_found" ]; then
+      log_info "      Could not download logs for '$job_name' — skipping"
       continue
-    fi
-
-    if [ -n "$failure_fingerprint" ]; then
-      log_info "      Fingerprint: ${failure_fingerprint:0:80}"
     fi
 
     candidates_summary="${candidates_summary}
 === CANDIDATE $((included + 1)): ${job_name} ===
 Failing run IDs: $(echo "$failing_run_ids" | jq -r 'join(", ")')
-Error excerpt (from run ${used_run_id}):
-${excerpt}
+Log directory: ${log_dir_found}
 
 "
-    candidates_meta+=("$(echo "$candidate" | jq -c --arg jn "$job_name" '.')")
+    candidates_meta+=("$(echo "$candidate" | jq -c '.')")
     included=$((included + 1))
   done
 
   if [ "$included" -eq 0 ]; then
-    log_info "    No log excerpts collected — skipping workflow"
+    log_info "    No logs downloaded — skipping workflow"
     continue
   fi
 
