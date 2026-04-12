@@ -48,7 +48,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
   log_info "  [$((i+1))/$num_workflows] $wf_path (layer=$test_layer)"
 
   # Resolve workflow to numeric ID
-  wf_id=$(get_workflow_id "$wf_basename" 2>/dev/null || echo "")
+  wf_id=$(cached_get_workflow_id "$wf_basename")
   if [ -z "$wf_id" ]; then
     log_warn "    Could not resolve workflow ID for $wf_basename — skipping"
     continue
@@ -175,12 +175,46 @@ for i in $(seq 0 $((num_workflows - 1))); do
   )]')
 
   num_candidates=$(echo "$candidate_jobs" | jq 'length')
-  rm -f "$job_timeline_file"
 
   if [ "$num_candidates" -eq 0 ]; then
+    rm -f "$job_timeline_file"
     log_info "    No consecutive failures found (after filtering infrastructure jobs)"
     continue
   fi
+
+  # Flakiness pre-filter: score each candidate using its full timeline
+  # A job is likely_flaky if its failure rate is between 0.2 and 0.8 AND
+  # it shows pass-fail-pass alternation (not a clean streak).
+  candidate_jobs=$(echo "$candidate_jobs" | jq -c --slurpfile tl "$job_timeline_file" '
+    [.[] | . as $cand |
+      ($tl[0][$cand.job] // []) as $runs |
+      ($runs | sort_by(.created_at)) as $sorted |
+      ($sorted | length) as $total |
+      if $total < 3 then . + {"likely_flaky": false, "flake_score": 0}
+      else
+        ([$sorted[].conclusion | select(. == "failure")] | length) as $fails |
+        ($fails / $total) as $ratio |
+        # Count alternations: how many times conclusion differs from the previous run
+        ([range(1; $total)] | map(
+          if $sorted[.].conclusion != $sorted[. - 1].conclusion then 1 else 0 end
+        ) | add // 0) as $alternations |
+        ($alternations / ($total - 1)) as $alt_rate |
+        # Flaky: moderate failure rate + frequent alternation
+        if ($ratio > 0.2 and $ratio < 0.8 and $alt_rate > 0.3) then
+          . + {"likely_flaky": true, "flake_score": $alt_rate}
+        else
+          . + {"likely_flaky": false, "flake_score": $alt_rate}
+        end
+      end
+    ]
+  ')
+
+  flaky_count=$(echo "$candidate_jobs" | jq '[.[] | select(.likely_flaky == true)] | length')
+  if [ "$flaky_count" -gt 0 ]; then
+    log_info "    Flakiness filter: $flaky_count of $num_candidates candidates marked as likely_flaky"
+  fi
+
+  rm -f "$job_timeline_file"
 
   log_info "    Found $num_candidates candidate job(s) with ${CONSECUTIVE_RUNS}+ consecutive failures (infrastructure filtered)"
 
@@ -316,7 +350,9 @@ ${excerpt}
       fi
 
       failing_run_ids=$(echo "$matched_meta" | jq -c '.failing_runs')
-      log_info "      CONFIRMED: $test_name ($agent_job, confidence=$confidence)"
+      is_flaky=$(echo "$matched_meta" | jq -r '.likely_flaky // false')
+      flake_score=$(echo "$matched_meta" | jq -r '.flake_score // 0')
+      log_info "      CONFIRMED: $test_name ($agent_job, confidence=$confidence, flaky=$is_flaky)"
 
       jq --arg wf "$wf_path" \
          --arg job "$agent_job" \
@@ -326,7 +362,9 @@ ${excerpt}
          --arg tl "$test_layer" \
          --arg conf "$confidence" \
          --arg notes "$reasoning" \
-         '. += [{"workflow": $wf, "job": $job, "test_name": $tn, "failure_signature": $fs, "failing_run_ids": $frid, "test_layer": $tl, "agent_confidence": $conf, "agent_notes": $notes}]' \
+         --argjson flaky "$is_flaky" \
+         --argjson fscore "$flake_score" \
+         '. += [{"workflow": $wf, "job": $job, "test_name": $tn, "failure_signature": $fs, "failing_run_ids": $frid, "test_layer": $tl, "agent_confidence": $conf, "agent_notes": $notes, "likely_flaky": $flaky, "flake_score": $fscore}]' \
          "$FAILURES_OUTPUT" > "${FAILURES_OUTPUT}.tmp" && mv "${FAILURES_OUTPUT}.tmp" "$FAILURES_OUTPUT"
 
       total_confirmed=$(jq 'length' "$FAILURES_OUTPUT")

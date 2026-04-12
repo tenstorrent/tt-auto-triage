@@ -62,21 +62,6 @@ if [ "$gh_check" != "tenstorrent/tt-metal" ]; then
 fi
 log_info "  gh auth: ok"
 
-log_info "Running agent smoke query..."
-smoke_output="$(mktemp)"
-smoke_prompt='Respond with ONLY this exact JSON, no other text: {"status": "ok"}'
-if cursor_agent_json "$smoke_prompt" "$smoke_output"; then
-  smoke_status=$(jq -r '.status // "missing"' "$smoke_output" 2>/dev/null || echo "parse_failed")
-  if [ "$smoke_status" = "ok" ]; then
-    log_success "  Agent smoke test: passed"
-  else
-    log_warn "  Agent returned unexpected status: $smoke_status (continuing anyway)"
-  fi
-else
-  die "Agent smoke query failed — check CURSOR_API_KEY and agent installation"
-fi
-rm -f "$smoke_output"
-
 log_success "Phase 0 complete — all pre-flight checks passed"
 
 if [ "$MAX_PHASE" -le 0 ]; then

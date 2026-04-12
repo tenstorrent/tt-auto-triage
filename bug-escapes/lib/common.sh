@@ -104,6 +104,27 @@ compute_failure_fingerprint() {
     | head -1
 }
 
+# Cached workflow ID lookup — avoids repeat API calls for the same workflow
+# across Phase 2 and Phase 3.
+_WF_ID_CACHE_DIR=""
+cached_get_workflow_id() {
+  local wf_basename="$1"
+  if [ -z "$_WF_ID_CACHE_DIR" ]; then
+    _WF_ID_CACHE_DIR="$(mktemp -d)"
+  fi
+  local cache_file="$_WF_ID_CACHE_DIR/${wf_basename}.id"
+  if [ -f "$cache_file" ]; then
+    cat "$cache_file"
+    return 0
+  fi
+  local wf_id
+  wf_id=$(get_workflow_id "$wf_basename" 2>/dev/null || echo "")
+  if [ -n "$wf_id" ]; then
+    echo "$wf_id" > "$cache_file"
+  fi
+  echo "$wf_id"
+}
+
 # Compare two layers and return the escape type.
 #   escape_type=$(be_classify_escape "ttnn" "tt-metalium")
 #   -> "vertical" (fix in lower layer than test)

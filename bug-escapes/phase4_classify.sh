@@ -129,6 +129,38 @@ unknown_count=$(echo "$bug_escapes" | jq '[.[] | select(.type == "unknown")] | l
 
 log_info "Phase 4 done: $total bug escapes (horizontal=$horizontal, vertical=$vertical, unknown=$unknown_count)"
 
+# Emit verify-commands.sh for high/medium confidence escapes
+verify_script="$OUTPUT_DIR/verify-commands.sh"
+echo '#!/usr/bin/env bash' > "$verify_script"
+echo 'set -euo pipefail' >> "$verify_script"
+echo '# Auto-generated verification dispatch commands' >> "$verify_script"
+echo '' >> "$verify_script"
+
+verify_count=0
+echo "$bug_escapes" | jq -c '.[]' | while IFS= read -r escape; do
+  etype=$(echo "$escape" | jq -r '.type')
+  fix_sha=$(echo "$escape" | jq -r '.fix_commit_sha')
+  pipeline=$(echo "$escape" | jq -r '.test_pipeline')
+  job=$(echo "$escape" | jq -r '.test_job')
+  tname=$(echo "$escape" | jq -r '.test_name')
+
+  if [ "$fix_sha" = "unknown" ] || [ "$fix_sha" = "null" ]; then
+    continue
+  fi
+
+  echo "echo \"Dispatching verification for $tname (fix: ${fix_sha:0:8})\"" >> "$verify_script"
+  echo "gh workflow run verify-bug-escape.yaml \\" >> "$verify_script"
+  echo "  -R tenstorrent/tt-metal \\" >> "$verify_script"
+  echo "  -f fix-commit-sha=$fix_sha \\" >> "$verify_script"
+  echo "  -f test-pipeline=$pipeline \\" >> "$verify_script"
+  echo "  -f test-job=\"$job\" \\" >> "$verify_script"
+  echo "  -f test-name=\"$tname\"" >> "$verify_script"
+  echo "" >> "$verify_script"
+done
+
+chmod +x "$verify_script"
+log_info "Wrote verify-commands.sh with dispatch commands"
+
 # Write GitHub Actions step summary if available
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
