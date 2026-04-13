@@ -78,7 +78,7 @@ def fetch_all_usergroups(token: str) -> List[Dict]:
     response = requests.get(
         f"{SLACK_API_BASE}/usergroups.list",
         headers={"Authorization": f"Bearer {token}"},
-        params={"include_users": "false"},
+        params={"include_users": "true"},
         timeout=30,
     )
     data = response.json()
@@ -116,6 +116,7 @@ def serialize_usergroups(raw_groups: List[Dict]) -> List[Dict]:
                 "handle": group.get("handle"),
                 "name": group.get("name"),
                 "description": group.get("description"),
+                "users": group.get("users", []),
             }
         )
     return serialized

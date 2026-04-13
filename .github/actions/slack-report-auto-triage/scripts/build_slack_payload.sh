@@ -123,6 +123,21 @@ fi
 AUTO_FIX_NOTE=""
 [ -n "${AUTO_FIX_META:-}" ] && [ -f "$AUTO_FIX_META" ] && AUTO_FIX_NOTE=$(jq -r '.auto_fix_pr_url // ""' "$AUTO_FIX_META" 2>/dev/null || echo "")
 
+# Resolve group pings (S-prefixed IDs) to a random individual member
+RESOLVE_SCRIPT="$SCRIPT_DIR/resolve_group_pings.py"
+SLACK_DATA_DIR=".auto_triage/auto_triage/data"
+if [ -f "$RESOLVE_SCRIPT" ] && [ -d "$SLACK_DATA_DIR" ]; then
+  RESOLVE_FILES=""
+  [ -f "$MESSAGE_PATH" ] && RESOLVE_FILES="$MESSAGE_PATH"
+  [ -f "$JOB_OWNER_FILE" ] && RESOLVE_FILES="$RESOLVE_FILES $JOB_OWNER_FILE"
+  if [ -n "$RESOLVE_FILES" ]; then
+    python3 "$RESOLVE_SCRIPT" \
+      --slack-groups "$SLACK_DATA_DIR/slack_groups.json" \
+      --slack-directory "$SLACK_DATA_DIR/slack_directory.json" \
+      --files $RESOLVE_FILES 2>&1 || echo "Warning: group ping resolution failed (non-fatal)"
+  fi
+fi
+
 JOB_OWNER_PING=""
 if [ -f "$JOB_OWNER_FILE" ]; then
   # Groups/subteams (S-prefixed IDs) are never pinged to avoid spamming entire teams

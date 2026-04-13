@@ -103,7 +103,8 @@
             }
         ],
         "relevant_developers": [
-            {"name": "Harper Singh", "slack_id": "U07G7EXAMPLE"}
+            {"name": "Harper Singh", "slack_id": "U07G7EXAMPLE"},
+            {"name": "graph-runtime-owners", "slack_id": "S06F6EXAMPLE"}
         ],
         "relevant_files": [
             "ttnn/graph/src/partitioner.cpp",
@@ -149,7 +150,7 @@
         ],
         "relevant_developers": [
             {"name": "Wei Zhang", "slack_id": "U13Q3EXAMPLE"},
-            {"name": "Layla Torres", "slack_id": "U15S5EXAMPLE"}
+            {"name": "ttnn-kernels-owners", "slack_id": "S13Q3EXAMPLE"}
         ],
         "relevant_files": [
             "ttnn/ops/src/fused_matmul.cpp",

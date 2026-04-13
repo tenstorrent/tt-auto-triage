@@ -56,11 +56,11 @@ Slack Message Output
 - **CRITICAL: `relevant_developers` rules - READ CAREFULLY:**
   - **`author` and `approvers`** (within commit objects): These are people who were directly involved in making the commit (the commit author and those who approved the PR).
   - **`relevant_developers`** (within commit objects or at top level): 
-    - **MUST be individual developers**, not teams or Slack usergroups. The Slack reporter will never ping groups (S-prefixed Slack IDs are displayed as plain text, not mentions). Always resolve to specific people.
-    - **MUST be codeowners** of files that need to be changed to fix the issue. When `.github/CODEOWNERS` only lists a team (e.g. `@tenstorrent/ttnn-core`), use `git log` and `git blame` on the implicated files to find individual developers who recently modified them instead of using the team.
+    - **SHOULD be individual developers** whenever possible. When `.github/CODEOWNERS` only lists a team (e.g. `@tenstorrent/ttnn-core`), prefer using `git log` and `git blame` on the implicated files to find individual developers who recently modified them. However, if you cannot identify a specific individual, you MAY use the team's Slack group ID (S-prefixed) — the Slack reporter will automatically resolve it to one random representative member of that group.
+    - **MUST be codeowners** of files that need to be changed to fix the issue.
     - **MUST NOT include** the commit author or any approvers from the same commit.
     - **MUST NOT include** any person who is already listed as `author` or `approvers` in any commit in the same `slack_message.json`.
-    - **CAN be empty** if you cannot find appropriate individual codeowners or recent file modifiers. It's better to leave it empty than to list a team/group.
+    - **CAN be empty** if you cannot find appropriate codeowners or recent file modifiers.
     - Use `git log`, `git blame`, or `.github/CODEOWNERS` to identify who owns the files that need modification. When CODEOWNERS points to a team, drill down to individuals via `git log`/`git blame`.
     - Only include people who would need to review/approve the fix, not those who already reviewed the problematic commit.
     - **No duplicates:** Each person should appear at most once across all `relevant_developers` lists in the entire JSON.
@@ -73,7 +73,7 @@ Slack Message Output
 - **Security:** **NEVER** write Slack IDs to `explanation.md`. Only include names and GitHub handles/URLs in the markdown report. Slack IDs should only exist in `slack_message.json`.
 - Resolve Slack IDs as follows:
   - Use `./get_slack_ids.py` (see Toolbox) to look up Slack IDs for individual developers. The script searches `./auto_triage/data/slack_directory.json` for users only.
-  - **Do NOT use Slack group/subteam IDs** (S-prefixed IDs from `slack_groups.json`) in `relevant_developers`. Group pings are disabled to avoid spamming entire teams. Always resolve to individual developers instead.
+  - Slack group/subteam IDs (S-prefixed, from `slack_groups.json`) are allowed in `relevant_developers` when you cannot identify a specific individual. The Slack reporter will automatically pick one random member of the group to ping instead of spamming the entire team. Individual U-prefixed IDs are still preferred when available.
   - If lookup fails or the person cannot be found, leave `slack_id` as an empty string `""` and document the attempt in your reasoning rather than fabricating data.
   - Always represent people as objects: `{"name":"Full Name","slack_id":""}`. Never paste raw CLI output (like `[[],[]]`) or bare strings into `relevant_developers`, commit `author`, or `approvers`.
 - Limit `relevant_files` to the most critical paths (at most five per commit or case). Prioritize files that directly illustrate the suspected failure mechanism; do not copy the entire diff file list.
@@ -172,9 +172,9 @@ Toolbox Reference
      --json           Emit machine-readable JSON instead of a table.
    """
    ```
-8. **Slack group IDs are NOT used for pinging**
-   - Group/subteam Slack IDs (S-prefixed) are **never pinged** in Slack messages to avoid spamming entire teams.
-   - When CODEOWNERS points to a team (e.g. `@tenstorrent/ttnn-core`), use `git log` and `git blame` on the failing files to identify individual developers who recently modified them, then look up their Slack IDs with `./get_slack_ids.py`.
+8. **Slack group IDs are auto-resolved to one representative**
+   - Group/subteam Slack IDs (S-prefixed) are **never used to ping the entire group**. Instead, the Slack reporter automatically picks one random active member and pings them as a representative.
+   - You MAY include S-prefixed group IDs in `relevant_developers` when you cannot identify a specific individual from `git log`/`git blame`. Prefer individual U-prefixed IDs when available.
 9. **Refresh Slack directory cache (only if needed)**
    ```
    ./download_slack_directory.py [--output auto_triage/data/slack_directory.json] [--groups-output auto_triage/data/slack_groups.json] [--pretty]

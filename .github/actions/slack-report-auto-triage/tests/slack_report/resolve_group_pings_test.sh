@@ -1,0 +1,219 @@
+#!/bin/bash
+#
+# Tests for scripts/resolve_group_pings.py
+#
+# Run: cd .github/actions/slack-report-auto-triage && bash tests/slack_report/resolve_group_pings_test.sh
+#
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+AT_ROOT="$REPO_ROOT/.github/actions/slack-report-auto-triage"
+SCRIPTS_DIR="$AT_ROOT/scripts"
+source "$REPO_ROOT/testing_lib_files/test_harness.sh"
+
+RESOLVE_SCRIPT="$SCRIPTS_DIR/resolve_group_pings.py"
+
+echo "=== resolve_group_pings ==="
+
+assert "resolve_group_pings.py exists" [ -f "$RESOLVE_SCRIPT" ]
+
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+# Helper: check if a string matches a regex
+matches_regex() { [[ "$1" =~ $2 ]]; }
+
+# -- Fixture: slack_groups.json with member lists ------------------------------
+cat > "$tmpdir/slack_groups.json" <<'EOF'
+{
+  "generated_at": "2025-01-01T00:00:00Z",
+  "usergroups": [
+    {"id": "S111GROUP", "handle": "metalinfra", "name": "Metal Infra", "description": "", "users": ["U_ALICE", "U_BOB", "U_CAROL"]},
+    {"id": "S222EMPTY", "handle": "empty-team", "name": "Empty Team", "description": "", "users": []},
+    {"id": "S333BOTS",  "handle": "bot-team",   "name": "Bot Team",   "description": "", "users": ["U_BOTONLY"]}
+  ]
+}
+EOF
+
+# -- Fixture: slack_directory.json with user data ------------------------------
+cat > "$tmpdir/slack_directory.json" <<'EOF'
+{
+  "generated_at": "2025-01-01T00:00:00Z",
+  "users": [
+    {"id": "U_ALICE", "display_name": "Alice Smith", "real_name": "Alice Smith", "username": "alice", "email": "alice@tt.com", "is_bot": false, "deleted": false},
+    {"id": "U_BOB",   "display_name": "Bob Jones",   "real_name": "Bob Jones",   "username": "bob",   "email": "bob@tt.com",   "is_bot": false, "deleted": false},
+    {"id": "U_CAROL", "display_name": "Carol Wu",    "real_name": "Carol Wu",    "username": "carol", "email": "carol@tt.com", "is_bot": false, "deleted": true},
+    {"id": "U_BOTONLY","display_name": "CI Bot",      "real_name": "CI Bot",      "username": "cibot", "email": "",             "is_bot": true,  "deleted": false}
+  ]
+}
+EOF
+
+# -- Test 1: S-prefixed ID in relevant_developers is resolved -----------------
+cat > "$tmpdir/msg1.json" <<'EOF'
+{
+  "case": "4",
+  "relevant_developers": [
+    {"name": "Metal Infra", "slack_id": "S111GROUP"},
+    {"name": "Dave Human", "slack_id": "U_DAVE"}
+  ]
+}
+EOF
+
+python3 "$RESOLVE_SCRIPT" \
+  --slack-groups "$tmpdir/slack_groups.json" \
+  --slack-directory "$tmpdir/slack_directory.json" \
+  --files "$tmpdir/msg1.json"
+
+resolved_id=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg1.json")
+resolved_name=$(jq -r '.relevant_developers[0].name' "$tmpdir/msg1.json")
+untouched_id=$(jq -r '.relevant_developers[1].slack_id' "$tmpdir/msg1.json")
+
+assert "Group S-ID replaced with U-ID" matches_regex "$resolved_id" "^U_"
+assert "Resolved name contains 'representing'" matches_regex "$resolved_name" "representing Metal Infra"
+assert_eq "Non-group entry unchanged" "$untouched_id" "U_DAVE"
+assert "Resolved to Alice or Bob (not deleted Carol)" matches_regex "$resolved_id" "^U_(ALICE|BOB)$"
+
+# -- Test 2: Empty group falls back to plain name (no resolution) -------------
+cat > "$tmpdir/msg2.json" <<'EOF'
+{
+  "case": "2",
+  "relevant_developers": [
+    {"name": "Empty Team", "slack_id": "S222EMPTY"}
+  ]
+}
+EOF
+
+python3 "$RESOLVE_SCRIPT" \
+  --slack-groups "$tmpdir/slack_groups.json" \
+  --slack-directory "$tmpdir/slack_directory.json" \
+  --files "$tmpdir/msg2.json"
+
+empty_id=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg2.json")
+assert_eq "Empty group keeps S-prefixed ID" "$empty_id" "S222EMPTY"
+
+# -- Test 3: All-bots group falls back to plain name --------------------------
+cat > "$tmpdir/msg3.json" <<'EOF'
+{
+  "case": "2",
+  "relevant_developers": [
+    {"name": "Bot Team", "slack_id": "S333BOTS"}
+  ]
+}
+EOF
+
+python3 "$RESOLVE_SCRIPT" \
+  --slack-groups "$tmpdir/slack_groups.json" \
+  --slack-directory "$tmpdir/slack_directory.json" \
+  --files "$tmpdir/msg3.json"
+
+bots_id=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg3.json")
+assert_eq "All-bots group keeps S-prefixed ID" "$bots_id" "S333BOTS"
+
+# -- Test 4: Nested person objects in commits are resolved --------------------
+cat > "$tmpdir/msg4.json" <<'EOF'
+{
+  "case": "4",
+  "commits": [
+    {
+      "hash": "abc123",
+      "author": {"name": "Ethan", "slack_id": "U_ETHAN"},
+      "approvers": [{"name": "Metal Infra", "slack_id": "S111GROUP"}],
+      "relevant_developers": [{"name": "Metal Infra", "slack_id": "S111GROUP"}]
+    }
+  ],
+  "relevant_developers": []
+}
+EOF
+
+python3 "$RESOLVE_SCRIPT" \
+  --slack-groups "$tmpdir/slack_groups.json" \
+  --slack-directory "$tmpdir/slack_directory.json" \
+  --files "$tmpdir/msg4.json"
+
+approver_id=$(jq -r '.commits[0].approvers[0].slack_id' "$tmpdir/msg4.json")
+commit_dev_id=$(jq -r '.commits[0].relevant_developers[0].slack_id' "$tmpdir/msg4.json")
+author_id=$(jq -r '.commits[0].author.slack_id' "$tmpdir/msg4.json")
+
+assert "Commit approver group resolved" matches_regex "$approver_id" "^U_(ALICE|BOB)$"
+assert "Commit relevant_dev group resolved" matches_regex "$commit_dev_id" "^U_(ALICE|BOB)$"
+assert_eq "Commit author U-ID untouched" "$author_id" "U_ETHAN"
+
+# -- Test 5: job_owner.json flat array is resolved ----------------------------
+cat > "$tmpdir/job_owner.json" <<'EOF'
+[
+  {"name": "Metal Infra", "slack_id": "S111GROUP"},
+  {"name": "Human Dev", "slack_id": "U_HUMAN"}
+]
+EOF
+
+python3 "$RESOLVE_SCRIPT" \
+  --slack-groups "$tmpdir/slack_groups.json" \
+  --slack-directory "$tmpdir/slack_directory.json" \
+  --files "$tmpdir/job_owner.json"
+
+owner_id=$(jq -r '.[0].slack_id' "$tmpdir/job_owner.json")
+human_id=$(jq -r '.[1].slack_id' "$tmpdir/job_owner.json")
+
+assert "Job owner group resolved" matches_regex "$owner_id" "^U_(ALICE|BOB)$"
+assert_eq "Job owner human unchanged" "$human_id" "U_HUMAN"
+
+# -- Test 6: Missing groups file is non-fatal ---------------------------------
+cat > "$tmpdir/msg6.json" <<'EOF'
+{"relevant_developers": [{"name": "Team", "slack_id": "S111GROUP"}]}
+EOF
+
+python3 "$RESOLVE_SCRIPT" \
+  --slack-groups "$tmpdir/nonexistent_groups.json" \
+  --slack-directory "$tmpdir/slack_directory.json" \
+  --files "$tmpdir/msg6.json"
+
+still_s=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg6.json")
+assert_eq "Missing groups file: ID unchanged" "$still_s" "S111GROUP"
+
+# -- Test 7: Missing directory file is non-fatal ------------------------------
+cat > "$tmpdir/msg7.json" <<'EOF'
+{"relevant_developers": [{"name": "Team", "slack_id": "S111GROUP"}]}
+EOF
+
+python3 "$RESOLVE_SCRIPT" \
+  --slack-groups "$tmpdir/slack_groups.json" \
+  --slack-directory "$tmpdir/nonexistent_directory.json" \
+  --files "$tmpdir/msg7.json"
+
+still_s7=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg7.json")
+assert_eq "Missing directory file: ID unchanged" "$still_s7" "S111GROUP"
+
+# -- Test 8: Unknown group ID is non-fatal ------------------------------------
+cat > "$tmpdir/msg8.json" <<'EOF'
+{"relevant_developers": [{"name": "Mystery", "slack_id": "S999UNKNOWN"}]}
+EOF
+
+python3 "$RESOLVE_SCRIPT" \
+  --slack-groups "$tmpdir/slack_groups.json" \
+  --slack-directory "$tmpdir/slack_directory.json" \
+  --files "$tmpdir/msg8.json"
+
+unknown_id=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg8.json")
+assert_eq "Unknown group: ID unchanged" "$unknown_id" "S999UNKNOWN"
+
+# -- Test 9: Multiple files processed in one call ----------------------------
+cat > "$tmpdir/multi_a.json" <<'EOF'
+{"relevant_developers": [{"name": "Metal Infra", "slack_id": "S111GROUP"}]}
+EOF
+cat > "$tmpdir/multi_b.json" <<'EOF'
+[{"name": "Metal Infra", "slack_id": "S111GROUP"}]
+EOF
+
+python3 "$RESOLVE_SCRIPT" \
+  --slack-groups "$tmpdir/slack_groups.json" \
+  --slack-directory "$tmpdir/slack_directory.json" \
+  --files "$tmpdir/multi_a.json" "$tmpdir/multi_b.json"
+
+multi_a_id=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/multi_a.json")
+multi_b_id=$(jq -r '.[0].slack_id' "$tmpdir/multi_b.json")
+
+assert "Multi-file: first file resolved" matches_regex "$multi_a_id" "^U_(ALICE|BOB)$"
+assert "Multi-file: second file resolved" matches_regex "$multi_b_id" "^U_(ALICE|BOB)$"
+
+test_summary
