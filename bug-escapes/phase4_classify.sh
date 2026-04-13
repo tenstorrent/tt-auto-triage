@@ -49,9 +49,13 @@ for i in $(seq 0 $((num_fixpoints - 1))); do
   test_job=$(echo "$fp" | jq -r '.failure.job')
   test_layer=$(echo "$fp" | jq -r '.failure.test_layer')
   failure_sig=$(echo "$fp" | jq -r '.failure.failure_signature')
-  failing_run_ids=$(echo "$fp" | jq -c '.failure.failing_run_ids')
+  failing_run_ids_raw=$(echo "$fp" | jq -c '.failure.failing_run_ids')
   last_failing_run_id=$(echo "$fp" | jq '.last_failing_run_id')
   first_passing_run_id=$(echo "$fp" | jq '.first_passing_run_id')
+  first_passing_job_id=$(echo "$fp" | jq '.first_passing_job_id // null')
+
+  # Extract flat arrays for backward compat in output
+  failing_run_ids=$(echo "$failing_run_ids_raw" | jq -c '[.[] | if type == "object" then .run_id else . end]')
 
   # Use the highest-confidence fix commit
   fix_commit=$(echo "$fp" | jq -c '
@@ -75,17 +79,38 @@ for i in $(seq 0 $((num_fixpoints - 1))); do
   pr_url=$(echo "$fix_commit" | jq -r '.pr_url // empty' 2>/dev/null || echo "")
   pr_title=$(echo "$fix_commit" | jq -r '.pr_title // empty' 2>/dev/null || echo "")
 
-  # Build URLs
+  # Build URLs — use job-level deep links when job_id is available
   commit_url="${AT_BASE_URL}/commit/${fix_sha}"
 
-  # Failing run URLs
   failing_run_urls="[]"
-  for rid in $(echo "$failing_run_ids" | jq -r '.[]'); do
-    failing_run_urls=$(echo "$failing_run_urls" | jq --arg url "${AT_BASE_URL}/actions/runs/${rid}" '. += [$url]')
+  for entry_json in $(echo "$failing_run_ids_raw" | jq -c '.[]'); do
+    if echo "$entry_json" | jq -e 'type == "object"' >/dev/null 2>&1; then
+      rid=$(echo "$entry_json" | jq -r '.run_id')
+      jid=$(echo "$entry_json" | jq -r '.job_id // empty')
+      if [ -n "$jid" ] && [ "$jid" != "0" ]; then
+        failing_run_urls=$(echo "$failing_run_urls" | jq --arg url "${AT_BASE_URL}/actions/runs/${rid}/job/${jid}" '. += [$url]')
+      else
+        failing_run_urls=$(echo "$failing_run_urls" | jq --arg url "${AT_BASE_URL}/actions/runs/${rid}" '. += [$url]')
+      fi
+    else
+      rid=$(echo "$entry_json" | jq -r '.')
+      failing_run_urls=$(echo "$failing_run_urls" | jq --arg url "${AT_BASE_URL}/actions/runs/${rid}" '. += [$url]')
+    fi
   done
 
-  last_failing_run_url="${AT_BASE_URL}/actions/runs/${last_failing_run_id}"
-  first_passing_run_url="${AT_BASE_URL}/actions/runs/${first_passing_run_id}"
+  # Last failing run — get job_id from the raw data
+  last_failing_job_id=$(echo "$failing_run_ids_raw" | jq -r '[.[] | if type == "object" then .job_id else null end] | .[-1] // empty' 2>/dev/null || echo "")
+  if [ -n "$last_failing_job_id" ] && [ "$last_failing_job_id" != "0" ] && [ "$last_failing_job_id" != "null" ]; then
+    last_failing_run_url="${AT_BASE_URL}/actions/runs/${last_failing_run_id}/job/${last_failing_job_id}"
+  else
+    last_failing_run_url="${AT_BASE_URL}/actions/runs/${last_failing_run_id}"
+  fi
+
+  if [ "$first_passing_job_id" != "null" ] && [ -n "$first_passing_job_id" ] && [ "$first_passing_job_id" != "0" ]; then
+    first_passing_run_url="${AT_BASE_URL}/actions/runs/${first_passing_run_id}/job/${first_passing_job_id}"
+  else
+    first_passing_run_url="${AT_BASE_URL}/actions/runs/${first_passing_run_id}"
+  fi
 
   # Classify the escape
   escape_type=$(be_classify_escape "$test_layer" "$fix_layer")

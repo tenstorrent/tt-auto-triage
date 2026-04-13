@@ -101,7 +101,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
     (
       jobs_json=$(get_jobs_for_run "$run_id" 2>/dev/null || echo '{"jobs":[]}')
       echo "$jobs_json" | jq -c --arg rdate "$run_date" --argjson rid "$run_id" '
-        [.jobs[]? | {job: .name, run_id: $rid, conclusion: (.conclusion // "unknown"), created_at: $rdate}]
+        [.jobs[]? | {job: .name, job_id: .id, run_id: $rid, conclusion: (.conclusion // "unknown"), created_at: $rdate}]
       ' > "$jobs_tmp_dir/run_${run_id}.json" 2>/dev/null || echo '[]' > "$jobs_tmp_dir/run_${run_id}.json"
     ) &
     # Limit to 8 parallel fetches
@@ -119,6 +119,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
     [.[][] | {
       job: (if (.job | contains(" / ")) then (.job | split(" / ") | .[-1]) else .job end),
       raw_job: .job,
+      job_id: (.job_id // 0),
       run_id: (.run_id // 0),
       conclusion,
       created_at
@@ -149,7 +150,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
         . as $start |
         if ($start + $n) < ($sorted | length) then
           if $sorted[$start + $n].conclusion == "success" then
-            {"job": $name, "failing_runs": [$sorted[$start:$start + $n][].run_id]}
+            {"job": $name, "failing_runs": [$sorted[$start:$start + $n][] | {run_id, job_id}]}
           else null end
         else null end
       ) | map(select(. != null)) | reverse) as $with_fix |
@@ -157,7 +158,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
       else
         # No window has a subsequent success — pick the newest window anyway
         (. | reverse | .[0]) as $last_start |
-        {"job": $name, "failing_runs": [$sorted[$last_start:$last_start + $n][].run_id]}
+        {"job": $name, "failing_runs": [$sorted[$last_start:$last_start + $n][] | {run_id, job_id}]}
       end
     ) | map(select(. != null))
   ' "$job_timeline_file")
@@ -228,11 +229,11 @@ for i in $(seq 0 $((num_workflows - 1))); do
 
     candidate=$(echo "$candidate_jobs" | jq -c ".[$c]")
     job_name=$(echo "$candidate" | jq -r '.job')
-    failing_run_ids=$(echo "$candidate" | jq -c '.failing_runs')
+    failing_runs_arr=$(echo "$candidate" | jq -c '.failing_runs')
 
     # Download logs for at least one failing run
     log_dir_found=""
-    for try_run_id in $(echo "$failing_run_ids" | jq -r '.[]'); do
+    for try_run_id in $(echo "$failing_runs_arr" | jq -r '.[].run_id'); do
       run_log_dir="$LOGS_DIR/run_${try_run_id}"
       if [ ! -d "$run_log_dir" ]; then
         download_run_logs "$try_run_id" "$run_log_dir" || {
@@ -253,7 +254,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
 
     candidates_summary="${candidates_summary}
 === CANDIDATE $((included + 1)): ${job_name} ===
-Failing run IDs: $(echo "$failing_run_ids" | jq -r 'join(", ")')
+Failing run IDs: $(echo "$failing_runs_arr" | jq -r '[.[].run_id | tostring] | join(", ")')
 Log directory: ${log_dir_found}
 
 "
