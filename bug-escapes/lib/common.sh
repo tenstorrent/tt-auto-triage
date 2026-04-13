@@ -87,19 +87,6 @@ be_dominant_layer() {
   '
 }
 
-# Check if all changed files are test-only (tests/, golden files, configs).
-# Returns "true" if every file path starts with tests/ or contains /golden/.
-#   be_is_test_only_change '["tests/tt_metal/foo.csv","tests/nightly/bar.py"]'
-be_is_test_only_change() {
-  local files_json="$1"
-  echo "$files_json" | jq -r '
-    if length == 0 then "false"
-    elif all(startswith("tests/") or contains("/golden/") or contains("/goldens/")) then "true"
-    else "false"
-    end
-  '
-}
-
 # Compute a stable failure fingerprint from a log excerpt or error line.
 # Strips timestamps, line numbers, memory addresses, PIDs, and UUIDs to
 # produce a signature that stays the same across runs for the same root cause.
