@@ -20,4 +20,6 @@ temp.json
 issue_dump.json
 
 # Test artifacts - nested auto_triage directories created during tests
-.github/actions/auto-triage/auto_triage/auto_triage/
+.github/actions/auto-triage/auto_triage/data/data
+.github/actions/auto-triage/auto_triage/logs
+.github/actions/auto-triage/auto_triage/output
