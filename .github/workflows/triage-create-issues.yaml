@@ -41,7 +41,6 @@ jobs:
           persist-credentials: false
 
       - name: Install Cursor CLI
-        if: ${{ secrets.CURSOR_API_KEY != '' }}
         run: |
           set -euo pipefail
           install_script="$(mktemp)"
