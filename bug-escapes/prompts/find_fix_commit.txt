@@ -6,23 +6,20 @@ The failing test:
 - Test pipeline: ${WORKFLOW_PATH}
 - Test layer: ${TEST_LAYER}
 
-The failure stopped between these two commits:
-- Last failing run SHA: ${LAST_FAILING_SHA}
-- First passing run SHA: ${FIRST_PASSING_SHA}
-
 tt-metal architectural layers (lowest to highest):
 - tt-llk: Hardware interface. Code in tt_metal/tt-llk/, tt_metal/hw/
 - tt-metalium: Compilation/dispatch runtime. Code in tt_metal/impl/, tt_metal/llrt/, tt_metal/jit_build/, tt_metal/detail/, tt_metal/common/, tt_metal/distributed/, tt_metal/fabric/, tt_metal/graph/, tt_metal/api/, tt_stl/
 - ttnn: High-level neural network API. Code in ttnn/
 - models: Model implementations. Code in models/, tt-train/
 
-Instructions:
-1. Run: gh api repos/tenstorrent/tt-metal/compare/${LAST_FAILING_SHA}...${FIRST_PASSING_SHA} --jq '.commits[] | {sha: .sha, msg: .commit.message | split("\n")[0]}'
-2. Scan the commit messages for anything related to the failure signature or test name (e.g. fixes to fabric, CCL, memory, the specific error).
-3. For the 2-3 most promising commits, check their PR details: gh api repos/tenstorrent/tt-metal/commits/<SHA>/pulls --jq '.[0] | {number, title, body}'
-4. Pick the SINGLE most likely fix commit. If none are plausible, say so.
+Here are all ${NUM_COMMITS} commits between the last failing and first passing runs:
 
-Be efficient: scan messages first, only drill into PRs for promising candidates.
+${COMMITS_LIST}
+
+Pick the SINGLE most likely fix commit based on the commit message relevance to the test failure. Consider:
+- Does the commit message mention the failing test, the error, or the subsystem?
+- Does the commit touch code in a layer relevant to the test?
+- Ignore CI/infra commits (.github/, scripts/) unless they directly affect test execution.
 
 Respond with ONLY a JSON object (no markdown, no explanation):
 {

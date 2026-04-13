@@ -7,8 +7,9 @@ set -euo pipefail
 #   1. Skip if marked likely_flaky by Phase 2
 #   2. Walk forward through subsequent runs of the same workflow/job
 #   3. Find the first run where the job passed
-#   4. Give the agent the SHA range and let it investigate commits via gh api
-#   5. Write fix-points.json
+#   4. Use gh api compare to get commits between SHAs (bash, fast)
+#   5. Pass compact commit list to agent for analysis (no tool calls needed)
+#   6. Write fix-points.json
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
@@ -19,6 +20,12 @@ FIX_POINTS_OUTPUT="$OUTPUT_DIR/fix-points.json"
 PROMPT_TEMPLATE="$SCRIPT_DIR/prompts/find_fix_commit.txt"
 
 MAX_FORWARD_RUNS=50
+MAX_COMMITS_PER_WINDOW=50
+
+SAVED_RETRIES="${CURSOR_AGENT_MAX_RETRIES:-2}"
+SAVED_TIMEOUT="${CURSOR_AGENT_TIMEOUT:-300}"
+export CURSOR_AGENT_MAX_RETRIES=1
+export CURSOR_AGENT_TIMEOUT=120
 
 echo '[]' > "$FIX_POINTS_OUTPUT"
 
@@ -38,7 +45,6 @@ for i in $(seq 0 $((num_failures - 1))); do
 
   log_info "  [$((i+1))/$num_failures] $job_name — looking for fix after run $last_failing_run_id"
 
-  # Skip flaky failures to save agent calls
   if [ "$likely_flaky" = "true" ]; then
     log_warn "    Marked as likely_flaky — skipping (no agent call)"
     jq --argjson failure "$entry" \
@@ -47,7 +53,6 @@ for i in $(seq 0 $((num_failures - 1))); do
     continue
   fi
 
-  # Get the workflow ID
   wf_basename=$(basename "$wf_path")
   wf_id=$(cached_get_workflow_id "$wf_basename")
   if [ -z "$wf_id" ]; then
@@ -55,7 +60,6 @@ for i in $(seq 0 $((num_failures - 1))); do
     continue
   fi
 
-  # Fetch runs newer than the last failing run
   last_fail_date=$(get_run_info "$last_failing_run_id" | jq -r '.created_at // empty' 2>/dev/null || echo "")
   if [ -z "$last_fail_date" ]; then
     log_warn "    Could not get date for run $last_failing_run_id — skipping"
@@ -94,7 +98,6 @@ for i in $(seq 0 $((num_failures - 1))); do
 
   log_info "    Found $num_subsequent subsequent runs to check"
 
-  # Walk forward to find the first passing run (fuzzy job matching)
   first_passing_run_id=""
   first_passing_run_sha=""
   last_failing_run_sha=$(get_run_info "$last_failing_run_id" | jq -r '.head_sha // empty' 2>/dev/null || echo "")
@@ -138,7 +141,33 @@ for i in $(seq 0 $((num_failures - 1))); do
 
   log_info "    Transition: $last_failing_run_sha -> $first_passing_run_sha"
 
-  # ---- Let the agent investigate the commit range via gh api ----
+  # ---- Get commits via gh api compare (bash, fast) ----
+  commits_json=$(gh api "repos/${AT_OWNER_REPO}/compare/${last_failing_run_sha}...${first_passing_run_sha}" \
+    --jq '[.commits[] | {sha: .sha, msg: (.commit.message | split("\n")[0])}]' 2>/dev/null || echo "[]")
+
+  num_commits=$(echo "$commits_json" | jq 'length' 2>/dev/null || echo 0)
+  log_info "    $num_commits commits between transition pair"
+
+  if [ "$num_commits" -eq 0 ]; then
+    log_warn "    No commits found between SHAs — skipping"
+    continue
+  fi
+
+  if [ "$num_commits" -gt "$MAX_COMMITS_PER_WINDOW" ]; then
+    log_warn "    Transition window too wide ($num_commits commits > $MAX_COMMITS_PER_WINDOW) — skipping"
+    continue
+  fi
+
+  # Build compact list for agent prompt
+  commits_list=""
+  for c in $(seq 0 $((num_commits - 1))); do
+    sha=$(echo "$commits_json" | jq -r ".[$c].sha")
+    msg=$(echo "$commits_json" | jq -r ".[$c].msg")
+    commits_list="${commits_list}${sha} ${msg}
+"
+  done
+
+  # ---- Agent call: pure analysis, no tool calls needed ----
   candidate_fixes="[]"
 
   agent_output="$(mktemp)"
@@ -147,8 +176,8 @@ for i in $(seq 0 $((num_failures - 1))); do
        "FAILURE_SIGNATURE=$failure_sig" \
        "WORKFLOW_PATH=$wf_path" \
        "TEST_LAYER=$test_layer" \
-       "LAST_FAILING_SHA=$last_failing_run_sha" \
-       "FIRST_PASSING_SHA=$first_passing_run_sha"; then
+       "NUM_COMMITS=$num_commits" \
+       "COMMITS_LIST=$commits_list"; then
 
     sha=$(jq -r '.sha // "null"' "$agent_output" 2>/dev/null || echo "null")
     is_fix=$(jq -r '.is_likely_fix // false' "$agent_output" 2>/dev/null || echo "false")
@@ -157,16 +186,19 @@ for i in $(seq 0 $((num_failures - 1))); do
     reasoning=$(jq -r '.reasoning // ""' "$agent_output" 2>/dev/null || echo "")
 
     if [ "$is_fix" = "true" ] && [ "$sha" != "null" ] && [ -n "$sha" ]; then
-      log_info "      Agent identified fix: $sha (layer=$layer, confidence=$confidence)"
+      commit_msg=$(echo "$commits_json" | jq -r --arg s "$sha" '.[] | select(.sha == $s) | .msg // ""')
+      log_info "      Agent identified fix: ${sha:0:12} (layer=$layer, confidence=$confidence)"
+      log_info "      Message: ${commit_msg:0:120}"
       candidate_fixes=$(jq -n \
         --arg sha "$sha" \
+        --arg msg "$commit_msg" \
         --arg layer "$layer" \
         --arg conf "$confidence" \
         --arg reason "$reasoning" \
-        '[{"sha": $sha, "message": "", "files_changed": [], "fix_layer": $layer, "confidence": $conf, "reasoning": $reason}]')
+        '[{"sha": $sha, "message": $msg, "files_changed": [], "fix_layer": $layer, "confidence": $conf, "reasoning": $reason}]')
     else
       log_info "    Agent could not identify a specific fix commit"
-      if [ -n "$reasoning" ] && [ "$reasoning" != "" ]; then
+      if [ -n "$reasoning" ] && [ "$reasoning" != "" ] && [ "$reasoning" != "null" ]; then
         log_info "      Reasoning: ${reasoning:0:200}"
       fi
     fi
@@ -175,15 +207,13 @@ for i in $(seq 0 $((num_failures - 1))); do
   fi
   rm -f "$agent_output"
 
-  # Fallback if agent found nothing: record the transition but with low confidence
   num_fixes=$(echo "$candidate_fixes" | jq 'length')
   if [ "$num_fixes" -eq 0 ]; then
     candidate_fixes=$(jq -n \
       --arg sha "$first_passing_run_sha" \
-      '[{"sha": $sha, "message": "", "files_changed": [], "fix_layer": "unknown", "confidence": "low", "reasoning": "Agent could not identify specific fix; using first passing run SHA as placeholder"}]')
+      '[{"sha": $sha, "message": "", "files_changed": [], "fix_layer": "unknown", "confidence": "low", "reasoning": "Agent could not identify specific fix; using first passing run SHA"}]')
   fi
 
-  # Add to fix-points output
   jq --argjson failure "$entry" \
      --arg last_fail_id "$last_failing_run_id" \
      --arg first_pass_id "$first_passing_run_id" \
@@ -200,6 +230,9 @@ for i in $(seq 0 $((num_failures - 1))); do
      }]' \
      "$FIX_POINTS_OUTPUT" > "${FIX_POINTS_OUTPUT}.tmp" && mv "${FIX_POINTS_OUTPUT}.tmp" "$FIX_POINTS_OUTPUT"
 done
+
+export CURSOR_AGENT_MAX_RETRIES="$SAVED_RETRIES"
+export CURSOR_AGENT_TIMEOUT="$SAVED_TIMEOUT"
 
 total_fixpoints=$(jq 'length' "$FIX_POINTS_OUTPUT")
 log_info "Phase 3 done: $total_fixpoints fix points identified"
