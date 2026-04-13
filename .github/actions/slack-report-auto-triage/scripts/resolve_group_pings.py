@@ -21,10 +21,19 @@ import sys
 from typing import Any, Dict, List, Optional
 
 
+def _sanitize_path(path: str) -> str:
+    """Resolve to a real absolute path; reject path-traversal components."""
+    resolved = os.path.realpath(path)
+    if ".." in os.path.normpath(path).split(os.sep):
+        raise ValueError(f"Path traversal rejected: {path}")
+    return resolved
+
+
 def load_json(path: str) -> Any:
-    if not os.path.isfile(path):
+    safe = _sanitize_path(path)
+    if not os.path.isfile(safe):
         return None
-    with open(path) as f:
+    with open(safe) as f:
         return json.load(f)
 
 
@@ -108,21 +117,22 @@ def process_file(
     path: str, group_index: Dict, user_index: Dict
 ) -> int:
     """Load a JSON file, resolve group pings, and write it back."""
-    if not os.path.isfile(path):
+    safe = _sanitize_path(path)
+    if not os.path.isfile(safe):
         return 0
 
-    print(f"Processing {path}")
-    with open(path) as f:
+    print(f"Processing {safe}")
+    with open(safe) as f:
         try:
             data = json.load(f)
         except (json.JSONDecodeError, ValueError) as e:
-            print(f"  Skipping {path}: invalid JSON ({e})")
+            print(f"  Skipping {safe}: invalid JSON ({e})")
             return 0
 
     resolved = walk_person_fields(data, group_index, user_index)
 
     if resolved > 0:
-        with open(path, "w") as f:
+        with open(safe, "w") as f:
             json.dump(data, f, indent=2)
         print(f"  Resolved {resolved} group ping(s)")
     else:
