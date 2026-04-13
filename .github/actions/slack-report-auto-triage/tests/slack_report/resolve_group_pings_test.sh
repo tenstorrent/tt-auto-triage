@@ -24,6 +24,23 @@ trap 'rm -rf "$tmpdir"' EXIT
 # Helper: check if a string matches a regex
 matches_regex() { [[ "$1" =~ $2 ]]; }
 
+# Helper: invoke resolver via stdin JSON (matches production interface)
+run_resolver() {
+  local groups_file="$1"
+  local directory_file="$2"
+  shift 2
+  local files_json="[]"
+  for f in "$@"; do
+    files_json=$(echo "$files_json" | jq --arg f "$f" '. + [$f]')
+  done
+  jq -n \
+    --arg groups "$groups_file" \
+    --arg directory "$directory_file" \
+    --argjson files "$files_json" \
+    '{slack_groups: $groups, slack_directory: $directory, files: $files}' \
+  | python3 "$RESOLVE_SCRIPT"
+}
+
 # -- Fixture: slack_groups.json with member lists ------------------------------
 cat > "$tmpdir/slack_groups.json" <<'EOF'
 {
@@ -60,10 +77,7 @@ cat > "$tmpdir/msg1.json" <<'EOF'
 }
 EOF
 
-python3 "$RESOLVE_SCRIPT" \
-  --slack-groups "$tmpdir/slack_groups.json" \
-  --slack-directory "$tmpdir/slack_directory.json" \
-  --files "$tmpdir/msg1.json"
+run_resolver "$tmpdir/slack_groups.json" "$tmpdir/slack_directory.json" "$tmpdir/msg1.json"
 
 resolved_id=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg1.json")
 resolved_name=$(jq -r '.relevant_developers[0].name' "$tmpdir/msg1.json")
@@ -84,10 +98,7 @@ cat > "$tmpdir/msg2.json" <<'EOF'
 }
 EOF
 
-python3 "$RESOLVE_SCRIPT" \
-  --slack-groups "$tmpdir/slack_groups.json" \
-  --slack-directory "$tmpdir/slack_directory.json" \
-  --files "$tmpdir/msg2.json"
+run_resolver "$tmpdir/slack_groups.json" "$tmpdir/slack_directory.json" "$tmpdir/msg2.json"
 
 empty_id=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg2.json")
 assert_eq "Empty group keeps S-prefixed ID" "$empty_id" "S222EMPTY"
@@ -102,10 +113,7 @@ cat > "$tmpdir/msg3.json" <<'EOF'
 }
 EOF
 
-python3 "$RESOLVE_SCRIPT" \
-  --slack-groups "$tmpdir/slack_groups.json" \
-  --slack-directory "$tmpdir/slack_directory.json" \
-  --files "$tmpdir/msg3.json"
+run_resolver "$tmpdir/slack_groups.json" "$tmpdir/slack_directory.json" "$tmpdir/msg3.json"
 
 bots_id=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg3.json")
 assert_eq "All-bots group keeps S-prefixed ID" "$bots_id" "S333BOTS"
@@ -126,10 +134,7 @@ cat > "$tmpdir/msg4.json" <<'EOF'
 }
 EOF
 
-python3 "$RESOLVE_SCRIPT" \
-  --slack-groups "$tmpdir/slack_groups.json" \
-  --slack-directory "$tmpdir/slack_directory.json" \
-  --files "$tmpdir/msg4.json"
+run_resolver "$tmpdir/slack_groups.json" "$tmpdir/slack_directory.json" "$tmpdir/msg4.json"
 
 approver_id=$(jq -r '.commits[0].approvers[0].slack_id' "$tmpdir/msg4.json")
 commit_dev_id=$(jq -r '.commits[0].relevant_developers[0].slack_id' "$tmpdir/msg4.json")
@@ -147,10 +152,7 @@ cat > "$tmpdir/job_owner.json" <<'EOF'
 ]
 EOF
 
-python3 "$RESOLVE_SCRIPT" \
-  --slack-groups "$tmpdir/slack_groups.json" \
-  --slack-directory "$tmpdir/slack_directory.json" \
-  --files "$tmpdir/job_owner.json"
+run_resolver "$tmpdir/slack_groups.json" "$tmpdir/slack_directory.json" "$tmpdir/job_owner.json"
 
 owner_id=$(jq -r '.[0].slack_id' "$tmpdir/job_owner.json")
 human_id=$(jq -r '.[1].slack_id' "$tmpdir/job_owner.json")
@@ -163,10 +165,7 @@ cat > "$tmpdir/msg6.json" <<'EOF'
 {"relevant_developers": [{"name": "Team", "slack_id": "S111GROUP"}]}
 EOF
 
-python3 "$RESOLVE_SCRIPT" \
-  --slack-groups "$tmpdir/nonexistent_groups.json" \
-  --slack-directory "$tmpdir/slack_directory.json" \
-  --files "$tmpdir/msg6.json"
+run_resolver "$tmpdir/nonexistent_groups.json" "$tmpdir/slack_directory.json" "$tmpdir/msg6.json"
 
 still_s=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg6.json")
 assert_eq "Missing groups file: ID unchanged" "$still_s" "S111GROUP"
@@ -176,10 +175,7 @@ cat > "$tmpdir/msg7.json" <<'EOF'
 {"relevant_developers": [{"name": "Team", "slack_id": "S111GROUP"}]}
 EOF
 
-python3 "$RESOLVE_SCRIPT" \
-  --slack-groups "$tmpdir/slack_groups.json" \
-  --slack-directory "$tmpdir/nonexistent_directory.json" \
-  --files "$tmpdir/msg7.json"
+run_resolver "$tmpdir/slack_groups.json" "$tmpdir/nonexistent_directory.json" "$tmpdir/msg7.json"
 
 still_s7=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg7.json")
 assert_eq "Missing directory file: ID unchanged" "$still_s7" "S111GROUP"
@@ -189,10 +185,7 @@ cat > "$tmpdir/msg8.json" <<'EOF'
 {"relevant_developers": [{"name": "Mystery", "slack_id": "S999UNKNOWN"}]}
 EOF
 
-python3 "$RESOLVE_SCRIPT" \
-  --slack-groups "$tmpdir/slack_groups.json" \
-  --slack-directory "$tmpdir/slack_directory.json" \
-  --files "$tmpdir/msg8.json"
+run_resolver "$tmpdir/slack_groups.json" "$tmpdir/slack_directory.json" "$tmpdir/msg8.json"
 
 unknown_id=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg8.json")
 assert_eq "Unknown group: ID unchanged" "$unknown_id" "S999UNKNOWN"
@@ -205,10 +198,7 @@ cat > "$tmpdir/multi_b.json" <<'EOF'
 [{"name": "Metal Infra", "slack_id": "S111GROUP"}]
 EOF
 
-python3 "$RESOLVE_SCRIPT" \
-  --slack-groups "$tmpdir/slack_groups.json" \
-  --slack-directory "$tmpdir/slack_directory.json" \
-  --files "$tmpdir/multi_a.json" "$tmpdir/multi_b.json"
+run_resolver "$tmpdir/slack_groups.json" "$tmpdir/slack_directory.json" "$tmpdir/multi_a.json" "$tmpdir/multi_b.json"
 
 multi_a_id=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/multi_a.json")
 multi_b_id=$(jq -r '.[0].slack_id' "$tmpdir/multi_b.json")

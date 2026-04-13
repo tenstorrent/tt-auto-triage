@@ -127,14 +127,16 @@ AUTO_FIX_NOTE=""
 RESOLVE_SCRIPT="$SCRIPT_DIR/resolve_group_pings.py"
 SLACK_DATA_DIR=".auto_triage/auto_triage/data"
 if [ -f "$RESOLVE_SCRIPT" ] && [ -d "$SLACK_DATA_DIR" ]; then
-  RESOLVE_FILES=""
-  [ -f "$MESSAGE_PATH" ] && RESOLVE_FILES="$MESSAGE_PATH"
-  [ -f "$JOB_OWNER_FILE" ] && RESOLVE_FILES="$RESOLVE_FILES $JOB_OWNER_FILE"
-  if [ -n "$RESOLVE_FILES" ]; then
-    python3 "$RESOLVE_SCRIPT" \
-      --slack-groups "$SLACK_DATA_DIR/slack_groups.json" \
-      --slack-directory "$SLACK_DATA_DIR/slack_directory.json" \
-      --files $RESOLVE_FILES 2>&1 || echo "Warning: group ping resolution failed (non-fatal)"
+  RESOLVE_FILES_JSON="[]"
+  [ -f "$MESSAGE_PATH" ] && RESOLVE_FILES_JSON=$(echo "$RESOLVE_FILES_JSON" | jq --arg f "$MESSAGE_PATH" '. + [$f]')
+  [ -f "$JOB_OWNER_FILE" ] && RESOLVE_FILES_JSON=$(echo "$RESOLVE_FILES_JSON" | jq --arg f "$JOB_OWNER_FILE" '. + [$f]')
+  if [ "$RESOLVE_FILES_JSON" != "[]" ]; then
+    jq -n \
+      --arg groups "$SLACK_DATA_DIR/slack_groups.json" \
+      --arg directory "$SLACK_DATA_DIR/slack_directory.json" \
+      --argjson files "$RESOLVE_FILES_JSON" \
+      '{slack_groups: $groups, slack_directory: $directory, files: $files}' \
+    | python3 "$RESOLVE_SCRIPT" 2>&1 || echo "Warning: group ping resolution failed (non-fatal)"
   fi
 fi
 

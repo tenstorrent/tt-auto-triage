@@ -3,18 +3,18 @@
 Replace Slack usergroup IDs (S-prefixed) with a randomly chosen individual
 member from that group, so one person gets pinged instead of the whole team.
 
-Usage:
-  python3 resolve_group_pings.py \
-    --slack-groups path/to/slack_groups.json \
-    --slack-directory path/to/slack_directory.json \
-    --files slack_message.json [job_owner.json ...]
+Reads configuration from stdin as JSON:
+  {
+    "slack_groups": "path/to/slack_groups.json",
+    "slack_directory": "path/to/slack_directory.json",
+    "files": ["slack_message.json", "job_owner.json"]
+  }
 
 Each input file is modified in place. Person objects whose slack_id starts
 with "S" are resolved to a random active member of that group.
 """
 
 import json
-import os
 import secrets
 import sys
 from pathlib import Path
@@ -128,40 +128,20 @@ def process_file(filepath: Path, group_index: Dict, user_index: Dict) -> int:
     return resolved
 
 
-def _resolve_path(raw: str) -> Path:
-    """Resolve a CLI path argument to an absolute real path."""
-    return Path(os.path.realpath(raw))
-
-
 def main() -> int:
-    if len(sys.argv) < 7:
-        print("Usage: resolve_group_pings.py --slack-groups FILE --slack-directory FILE --files FILE [FILE ...]",
-              file=sys.stderr)
+    try:
+        config = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"Error: invalid JSON on stdin: {e}", file=sys.stderr)
         return 1
 
-    groups_path = None
-    directory_path = None
-    file_paths = []
+    groups_path = Path(config.get("slack_groups", ""))
+    directory_path = Path(config.get("slack_directory", ""))
+    file_paths = [Path(f) for f in config.get("files", [])]
 
-    args = sys.argv[1:]
-    i = 0
-    while i < len(args):
-        if args[i] == "--slack-groups" and i + 1 < len(args):
-            groups_path = _resolve_path(args[i + 1])
-            i += 2
-        elif args[i] == "--slack-directory" and i + 1 < len(args):
-            directory_path = _resolve_path(args[i + 1])
-            i += 2
-        elif args[i] == "--files":
-            i += 1
-            while i < len(args) and not args[i].startswith("--"):
-                file_paths.append(_resolve_path(args[i]))
-                i += 1
-        else:
-            i += 1
-
-    if not groups_path or not directory_path or not file_paths:
-        print("Missing required arguments", file=sys.stderr)
+    if not groups_path.name or not directory_path.name or not file_paths:
+        print("Error: stdin JSON must contain slack_groups, slack_directory, and files",
+              file=sys.stderr)
         return 1
 
     groups_data = load_json_file(groups_path)
