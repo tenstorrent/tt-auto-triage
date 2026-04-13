@@ -38,6 +38,8 @@ jobs:
       - name: Checkout tt-auto-triage
         uses: actions/checkout@v4
         with:
+          repository: tenstorrent/tt-auto-triage
+          ref: ebanerjee/triage-create-issues
           persist-credentials: false
 
       - name: Install Cursor CLI
