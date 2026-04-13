@@ -219,7 +219,7 @@ def render_prompt(template_path: Path, replacements: dict[str, str]) -> str:
 
 
 def run_agent(prompt: str, model: str, cwd: str | Path) -> subprocess.CompletedProcess[str]:
-    cmd = ["cursor", "--trust", "-p", prompt]
+    cmd = ["agent", "--trust", "-p", prompt]
     if model and model != "auto":
         cmd[1:1] = ["--model", model]
     log(f"Running Cursor agent (model={model}) in {cwd}")
