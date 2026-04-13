@@ -17,6 +17,7 @@ BUILD_SCRIPT="$SCRIPTS_DIR/build_slack_payload.sh"
 SLACK_MESSAGE_JQ="$SCRIPTS_DIR/slack_message.jq"
 SAMPLE_MSG="$TEST_DIR/sample_slack_message.json"
 SAMPLE_CASE4_MSG="$TEST_DIR/sample_case4_slack_message.json"
+SAMPLE_CASE5_MSG="$TEST_DIR/sample_case5_slack_message.json"
 
 echo "=== payload_builder ==="
 
@@ -25,6 +26,7 @@ assert "build_slack_payload.sh exists" [ -f "$BUILD_SCRIPT" ]
 assert "slack_message.jq exists" [ -f "$SLACK_MESSAGE_JQ" ]
 assert "sample_slack_message.json exists" [ -f "$SAMPLE_MSG" ]
 assert "sample_case4_slack_message.json exists" [ -f "$SAMPLE_CASE4_MSG" ]
+assert "sample_case5_slack_message.json exists" [ -f "$SAMPLE_CASE5_MSG" ]
 
 # -- Cancellation: with thread_ts, failing_run, error_msg ----------------------
 tmpdir=$(mktemp -d)
@@ -120,6 +122,30 @@ assert "Case 4 does not ping approver subteam" [ -z "$(echo "$text4" | grep -F '
 assert "Case 4 S-prefixed top-level developer renders as plain text name" [ -n "$(echo "$text4" | grep -F 'Graph Runtime Owners' || true)" ]
 assert "Case 4 S-prefixed top-level developer not rendered as subteam ping" [ -z "$(echo "$text4" | grep -F '<!subteam^S10K0EXAMPLE' || true)" ]
 assert "Case 4 has no thread_ts" [ "$(echo "$payload4" | jq -r '.thread_ts // empty')" = "" ]
+
+# -- Case 5 report: commit truncation (only top commit shown) -----------------
+rm -rf "$tmpdir/.auto_triage"
+mkdir -p "$tmpdir/.auto_triage/output" "$tmpdir/.auto_triage/data"
+cp "$SAMPLE_CASE5_MSG" "$tmpdir/.auto_triage/output/slack_message.json"
+export MESSAGE_PATH="$tmpdir/.auto_triage/output/slack_message.json"
+export SLACK_TS=""
+export ALLOW_PINGS="true"
+rm -f "$tmpdir/github_output"
+
+cd "$tmpdir"
+bash "$BUILD_SCRIPT"
+cd - >/dev/null
+
+payload5=$(cat "$tmpdir/.auto_triage/slack_payload.json")
+text5=$(echo "$payload5" | jq -r '.text // empty')
+assert "Case 5 report has text" [ -n "$text5" ]
+assert "Case 5 contains COMMITS section" [ -n "$(echo "$text5" | grep -F '*COMMITS:*' || true)" ]
+assert "Case 5 shows top commit hash" [ -n "$(echo "$text5" | grep -F '25eb02e7' || true)" ]
+assert "Case 5 does NOT show second commit hash" [ -z "$(echo "$text5" | grep -F 'b79cfdc4' || true)" ]
+assert "Case 5 does NOT show third commit hash" [ -z "$(echo "$text5" | grep -F '71649328' || true)" ]
+assert "Case 5 shows truncation note" [ -n "$(echo "$text5" | grep -F 'more commit(s) in full report' || true)" ]
+assert "Case 5 truncation note says 2 more" [ -n "$(echo "$text5" | grep -F '2 more commit(s)' || true)" ]
+assert "Case 5 pings top-level relevant developers" [ -n "$(echo "$text5" | grep -F 'RELEVANT DEVELOPERS' || true)" ]
 
 # -- Empty/missing message path: has_payload=false ------------------------------
 export MESSAGE_PATH="$tmpdir/nonexistent.json"

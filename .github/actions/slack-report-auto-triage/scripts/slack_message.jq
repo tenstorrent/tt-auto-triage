@@ -74,7 +74,10 @@ def commit_entry(c):
 
 def commits_section(arr):
   if (arr | type) == "array" and (arr | length) > 0 then
-    "*COMMITS:*\n" + (arr | map(commit_entry(.)) | join("\n")) + "\n"
+    "*COMMITS:*\n" + commit_entry(arr[0]) + "\n"
+    + (if (arr | length) > 1 then
+        "_" + ((arr | length) - 1 | tostring) + " more commit(s) in full report_\n"
+       else "" end)
   else "" end;
 
 # Main expression: build text from slack_message.json
