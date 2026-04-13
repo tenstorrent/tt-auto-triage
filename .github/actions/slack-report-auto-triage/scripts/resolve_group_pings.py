@@ -16,7 +16,7 @@ with "S" are resolved to a random active member of that group.
 import argparse
 import json
 import os
-import random
+import secrets
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -58,7 +58,7 @@ def pick_active_member(
             active.append(user)
     if not active:
         return None
-    return random.choice(active)
+    return secrets.choice(active)
 
 
 def user_display_name(user: Dict) -> str:
