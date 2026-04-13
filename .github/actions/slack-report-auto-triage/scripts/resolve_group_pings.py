@@ -13,28 +13,18 @@ Each input file is modified in place. Person objects whose slack_id starts
 with "S" are resolved to a random active member of that group.
 """
 
-import argparse
 import json
 import os
 import secrets
 import sys
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 
-def _sanitize_path(path: str) -> str:
-    """Resolve to a real absolute path; reject path-traversal components."""
-    resolved = os.path.realpath(path)
-    if ".." in os.path.normpath(path).split(os.sep):
-        raise ValueError(f"Path traversal rejected: {path}")
-    return resolved
-
-
-def load_json(path: str) -> Any:
-    safe = _sanitize_path(path)
-    if not os.path.isfile(safe):
+def load_json_file(filepath: Path) -> Any:
+    if not filepath.is_file():
         return None
-    with open(safe) as f:
-        return json.load(f)
+    return json.loads(filepath.read_text(encoding="utf-8"))
 
 
 def build_group_index(groups_data: Any) -> Dict[str, Dict]:
@@ -60,11 +50,13 @@ def pick_active_member(
     member_ids = group.get("users", [])
     if not member_ids:
         return None
-    active = []
-    for uid in member_ids:
-        user = user_index.get(uid)
-        if user and not user.get("is_bot") and not user.get("deleted"):
-            active.append(user)
+    active = [
+        user_index[uid]
+        for uid in member_ids
+        if uid in user_index
+        and not user_index[uid].get("is_bot")
+        and not user_index[uid].get("deleted")
+    ]
     if not active:
         return None
     return secrets.choice(active)
@@ -113,27 +105,22 @@ def walk_person_fields(obj: Any, group_index: Dict, user_index: Dict) -> int:
     return resolved
 
 
-def process_file(
-    path: str, group_index: Dict, user_index: Dict
-) -> int:
+def process_file(filepath: Path, group_index: Dict, user_index: Dict) -> int:
     """Load a JSON file, resolve group pings, and write it back."""
-    safe = _sanitize_path(path)
-    if not os.path.isfile(safe):
+    if not filepath.is_file():
         return 0
 
-    print(f"Processing {safe}")
-    with open(safe) as f:
-        try:
-            data = json.load(f)
-        except (json.JSONDecodeError, ValueError) as e:
-            print(f"  Skipping {safe}: invalid JSON ({e})")
-            return 0
+    print(f"Processing {filepath}")
+    try:
+        data = json.loads(filepath.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"  Skipping {filepath}: invalid JSON ({e})")
+        return 0
 
     resolved = walk_person_fields(data, group_index, user_index)
 
     if resolved > 0:
-        with open(safe, "w") as f:
-            json.dump(data, f, indent=2)
+        filepath.write_text(json.dumps(data, indent=2), encoding="utf-8")
         print(f"  Resolved {resolved} group ping(s)")
     else:
         print(f"  No group pings found")
@@ -141,36 +128,50 @@ def process_file(
     return resolved
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Replace Slack group IDs with a random individual member."
-    )
-    parser.add_argument(
-        "--slack-groups",
-        required=True,
-        help="Path to slack_groups.json (with member lists).",
-    )
-    parser.add_argument(
-        "--slack-directory",
-        required=True,
-        help="Path to slack_directory.json (user data).",
-    )
-    parser.add_argument(
-        "--files",
-        nargs="+",
-        required=True,
-        help="JSON files to process (modified in place).",
-    )
-    args = parser.parse_args()
+def _resolve_path(raw: str) -> Path:
+    """Resolve a CLI path argument to an absolute real path."""
+    return Path(os.path.realpath(raw))
 
-    groups_data = load_json(args.slack_groups)
+
+def main() -> int:
+    if len(sys.argv) < 7:
+        print("Usage: resolve_group_pings.py --slack-groups FILE --slack-directory FILE --files FILE [FILE ...]",
+              file=sys.stderr)
+        return 1
+
+    groups_path = None
+    directory_path = None
+    file_paths = []
+
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] == "--slack-groups" and i + 1 < len(args):
+            groups_path = _resolve_path(args[i + 1])
+            i += 2
+        elif args[i] == "--slack-directory" and i + 1 < len(args):
+            directory_path = _resolve_path(args[i + 1])
+            i += 2
+        elif args[i] == "--files":
+            i += 1
+            while i < len(args) and not args[i].startswith("--"):
+                file_paths.append(_resolve_path(args[i]))
+                i += 1
+        else:
+            i += 1
+
+    if not groups_path or not directory_path or not file_paths:
+        print("Missing required arguments", file=sys.stderr)
+        return 1
+
+    groups_data = load_json_file(groups_path)
     if groups_data is None:
-        print(f"Warning: {args.slack_groups} not found, skipping resolution", file=sys.stderr)
+        print(f"Warning: {groups_path} not found, skipping resolution", file=sys.stderr)
         return 0
 
-    users_data = load_json(args.slack_directory)
+    users_data = load_json_file(directory_path)
     if users_data is None:
-        print(f"Warning: {args.slack_directory} not found, skipping resolution", file=sys.stderr)
+        print(f"Warning: {directory_path} not found, skipping resolution", file=sys.stderr)
         return 0
 
     group_index = build_group_index(groups_data)
@@ -178,8 +179,8 @@ def main() -> int:
     print(f"Loaded {len(group_index)} groups, {len(user_index)} users")
 
     total = 0
-    for path in args.files:
-        total += process_file(path, group_index, user_index)
+    for fp in file_paths:
+        total += process_file(fp, group_index, user_index)
 
     print(f"Total: {total} group ping(s) resolved")
     return 0
