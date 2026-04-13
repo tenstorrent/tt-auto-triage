@@ -61,7 +61,7 @@ be_file_to_layer() {
   layer=$(echo "$mapping" | jq -r --arg fp "$filepath" '
     .directory_prefixes
     | to_entries
-    | map(select($fp | startswith(.key)))
+    | map(. as $e | select($fp | startswith($e.key)))
     | sort_by(-(.key | length))
     | .[0].value // "unknown"
   ')
@@ -79,7 +79,7 @@ be_dominant_layer() {
   echo "$files_json" | jq -r --argjson m "$mapping" '
     [.[] | strings | . as $fp |
       ($m.directory_prefixes | to_entries
-       | map(select($fp | startswith(.key)))
+       | map(. as $e | select($fp | startswith($e.key)))
        | sort_by(-(.key | length))
        | .[0].value // "unknown")
     ]
