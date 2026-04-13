@@ -125,12 +125,11 @@ AUTO_FIX_NOTE=""
 
 JOB_OWNER_PING=""
 if [ -f "$JOB_OWNER_FILE" ]; then
+  # Groups/subteams (S-prefixed IDs) are never pinged to avoid spamming entire teams
   JOB_OWNER_PING=$(jq -r --arg allow "${ALLOW_PINGS:-false}" '
     [.[] | select(.name != "") |
-      if ($allow == "true") and ((.slack_id // "") != "") then
-        if (.slack_id | startswith("S")) then "<!subteam^" + .slack_id + "|@" + .name + ">"
-        else "<@" + .slack_id + ">"
-        end
+      if ($allow == "true") and ((.slack_id // "") != "") and ((.slack_id | startswith("S")) | not) then
+        "<@" + .slack_id + ">"
       else .name
       end
     ] | join(", ")
