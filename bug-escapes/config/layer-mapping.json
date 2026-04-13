@@ -21,6 +21,9 @@
     "tt_metal/tt_metal.cpp": "tt-metalium",
     "tt_metal/hal.cpp": "tt-metalium",
     "tt_stl/": "tt-metalium",
+    "tests/tt_metal/": "tt-metalium",
+    "tests/ttnn/": "ttnn",
+    "tests/nightly/": "models",
     "ttnn/": "ttnn",
     "models/": "models",
     "tt-train/": "models"
