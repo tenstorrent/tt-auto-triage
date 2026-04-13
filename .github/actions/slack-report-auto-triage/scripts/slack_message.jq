@@ -18,13 +18,9 @@ def person(p; use_slack_id):
     "Unknown"
   else
     # Only ping if allow_pings is true AND use_slack_id is true AND slack_id exists
-    (if ($allow_pings == "true") and use_slack_id and (p.slack_id // "") != "" then
-      # Groups/subteams start with "S" and use <!subteam^ID|@handle> format
-      (if (p.slack_id | startswith("S")) then
-        "<!subteam^" + p.slack_id + "|@" + (p.name // p.login // "group") + ">"
-      else
-        "<@" + p.slack_id + ">"
-      end)
+    # Groups/subteams (S-prefixed IDs) are never pinged to avoid spamming entire teams
+    (if ($allow_pings == "true") and use_slack_id and (p.slack_id // "") != "" and ((p.slack_id | startswith("S")) | not) then
+      "<@" + p.slack_id + ">"
     else
       (p.name // p.login // "Unknown")
     end)
