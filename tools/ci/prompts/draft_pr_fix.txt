@@ -14,33 +14,39 @@ __ISSUE_BODY__
 ## Your Task
 
 1. Read the issue details above carefully to identify:
-   - The failing workflow and job name
-   - The failing test file(s) and test function(s)
+   - The failing test file(s) and test function(s) — look at "Failing test path(s)", error tracebacks, and log excerpts
+   - The specific test parameters or configurations that fail (if parametrized)
    - The error message and stack trace
    - Any relevant log snippets
 
-2. Find the failing test and related source code in the codebase.
+2. Trace the failure to the ACTUAL TEST CODE, not the CI job configuration. The issue mentions a workflow and job name, but those are CI orchestration — find the Python test file, C++ test file, or specific test function that is producing the error.
 
 3. Analyze the root cause of the failure by examining:
    - The test code itself
    - The source code being tested
    - Recent changes that may have introduced the failure
    - Any configuration or environment issues
+   - For performance regressions: the baseline/expected values vs actual values
 
 4. Implement a fix:
    - Fix the root cause if you can identify it with reasonable confidence
+   - For performance regressions: update the expected baseline values to match current performance, or widen the tolerance margin for the specific failing configs
    - Keep changes minimal and focused on the failing test
    - Ensure the fix does not break other tests
 
-5. **Fallback:** If you cannot determine the root cause with confidence, disable the test instead:
-   - **Python/pytest:** `@pytest.mark.skip(reason="Root cause unclear, disabled by auto-triage. See __ISSUE_URL__")`
+5. **Fallback:** If you cannot determine the root cause with confidence, disable ONLY the specific failing test(s):
+   - **Python/pytest test function:** `@pytest.mark.skip(reason="Root cause unclear, disabled by auto-triage. See __ISSUE_URL__")`
+   - **Python/pytest parametrized test:** Use `pytest.param(..., marks=pytest.mark.skip(reason="..."))` on only the failing parameter sets
    - **C++/gtest:** `GTEST_SKIP() << "Root cause unclear, disabled by auto-triage. See __ISSUE_URL__";`
-   - **Other:** Use the framework's standard skip/disable mechanism
+   - **Other:** Use the framework's standard skip/disable mechanism on the narrowest possible scope
 
-## Rules
+## CRITICAL Rules
 
 - Keep changes minimal and focused.
+- TARGET THE NARROWEST SCOPE POSSIBLE for any disable/skip. If one test out of 50 fails, skip only that one. If one parametrized variant out of 10 fails, skip only that variant.
+- NEVER disable an entire CI job in a YAML pipeline config (e.g. commenting out a job entry in tests/pipeline_reorg/*.yaml). Those jobs run many tests — disabling the whole job kills all of them.
+- NEVER comment out workflow steps, job definitions, or entire test files when only specific test cases fail.
 - Do NOT refactor or clean up unrelated code.
 - Do NOT modify tests that are not related to this failure.
 - Prefer a targeted fix over a broad refactor.
-- If unsure, fall back to disabling the test rather than making a potentially incorrect fix.
+- If unsure, fall back to disabling ONLY the specific failing test rather than making a potentially incorrect fix.
