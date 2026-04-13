@@ -220,15 +220,11 @@ for i in $(seq 0 $((num_workflows - 1))); do
 
   # Download logs and build candidate list for the agent.
   # The agent will search the log files itself — no excerpt extraction needed.
-  max_candidates_per_prompt=20
   candidates_summary=""
   candidates_meta=()
   included=0
 
   for c in $(seq 0 $((num_candidates - 1))); do
-    if [ "$included" -ge "$max_candidates_per_prompt" ]; then
-      break
-    fi
 
     candidate=$(echo "$candidate_jobs" | jq -c ".[$c]")
     job_name=$(echo "$candidate" | jq -r '.job')
