@@ -40,7 +40,8 @@ for i in $(seq 0 $((num_failures - 1))); do
   failure_sig=$(echo "$entry" | jq -r '.failure_signature')
   test_layer=$(echo "$entry" | jq -r '.test_layer')
   failing_run_ids=$(echo "$entry" | jq -c '.failing_run_ids')
-  last_failing_run_id=$(echo "$failing_run_ids" | jq '.[-1]')
+  # failing_run_ids is [{run_id, job_id}, ...] — extract last run_id
+  last_failing_run_id=$(echo "$failing_run_ids" | jq '.[-1].run_id // .[-1]')
   likely_flaky=$(echo "$entry" | jq -r '.likely_flaky // false')
 
   log_info "  [$((i+1))/$num_failures] $job_name — looking for fix after run $last_failing_run_id"
@@ -100,6 +101,7 @@ for i in $(seq 0 $((num_failures - 1))); do
 
   first_passing_run_id=""
   first_passing_run_sha=""
+  first_passing_job_id=""
   last_failing_run_sha=$(get_run_info "$last_failing_run_id" | jq -r '.head_sha // empty' 2>/dev/null || echo "")
 
   consecutive_gaps=0
@@ -133,6 +135,9 @@ for i in $(seq 0 $((num_failures - 1))); do
     if [ "$job_conclusion" = "success" ]; then
       first_passing_run_id="$run_id"
       first_passing_run_sha="$run_sha"
+      first_passing_job_id=$(echo "$jobs_json" | jq -r --arg jn "$job_name" '
+        .jobs[] | select(.name == $jn or (.name | endswith(" / " + $jn)) or (.name | contains($jn))) | .id
+      ' 2>/dev/null | head -1)
       log_info "    Found fix transition: run $last_failing_run_id (fail) -> run $run_id (pass)"
       break
     fi
@@ -259,6 +264,7 @@ for i in $(seq 0 $((num_failures - 1))); do
   jq --argjson failure "$entry" \
      --arg last_fail_id "$last_failing_run_id" \
      --arg first_pass_id "$first_passing_run_id" \
+     --arg first_pass_job_id "${first_passing_job_id:-0}" \
      --arg last_fail_sha "$last_failing_run_sha" \
      --arg first_pass_sha "$first_passing_run_sha" \
      --argjson fixes "$candidate_fixes" \
@@ -266,6 +272,7 @@ for i in $(seq 0 $((num_failures - 1))); do
        "failure": $failure,
        "last_failing_run_id": ($last_fail_id | tonumber),
        "first_passing_run_id": ($first_pass_id | tonumber),
+       "first_passing_job_id": (if $first_pass_job_id == "0" or $first_pass_job_id == "" then null else ($first_pass_job_id | tonumber) end),
        "last_failing_sha": $last_fail_sha,
        "first_passing_sha": $first_pass_sha,
        "candidate_fix_commits": $fixes
