@@ -187,15 +187,25 @@ for i in $(seq 0 $((num_failures - 1))); do
 
     if [ "$is_fix" = "true" ] && [ "$sha" != "null" ] && [ -n "$sha" ]; then
       commit_msg=$(echo "$commits_json" | jq -r --arg s "$sha" '.[] | select(.sha == $s) | .msg // ""')
+
+      # Determine fix layer from actual file paths (authoritative, overrides agent guess)
+      fix_files_json=$(gh api "repos/${AT_OWNER_REPO}/commits/${sha}" \
+        --jq '[.files[].filename]' 2>/dev/null || echo "[]")
+      file_layer=$(be_dominant_layer "$fix_files_json" 2>/dev/null || echo "unknown")
+      if [ "$file_layer" != "unknown" ] && [ -n "$file_layer" ]; then
+        layer="$file_layer"
+      fi
+
       log_info "      Agent identified fix: ${sha:0:12} (layer=$layer, confidence=$confidence)"
       log_info "      Message: ${commit_msg:0:120}"
       candidate_fixes=$(jq -n \
         --arg sha "$sha" \
         --arg msg "$commit_msg" \
+        --argjson files "$fix_files_json" \
         --arg layer "$layer" \
         --arg conf "$confidence" \
         --arg reason "$reasoning" \
-        '[{"sha": $sha, "message": $msg, "files_changed": [], "fix_layer": $layer, "confidence": $conf, "reasoning": $reason}]')
+        '[{"sha": $sha, "message": $msg, "files_changed": $files, "fix_layer": $layer, "confidence": $conf, "reasoning": $reason}]')
     else
       log_info "    Agent could not identify a specific fix commit"
       if [ -n "$reasoning" ] && [ "$reasoning" != "" ] && [ "$reasoning" != "null" ]; then
@@ -209,9 +219,15 @@ for i in $(seq 0 $((num_failures - 1))); do
 
   num_fixes=$(echo "$candidate_fixes" | jq 'length')
   if [ "$num_fixes" -eq 0 ]; then
+    # Try to determine layer from the first passing SHA's changed files
+    fallback_files=$(gh api "repos/${AT_OWNER_REPO}/commits/${first_passing_run_sha}" \
+      --jq '[.files[].filename]' 2>/dev/null || echo "[]")
+    fallback_layer=$(be_dominant_layer "$fallback_files" 2>/dev/null || echo "unknown")
     candidate_fixes=$(jq -n \
       --arg sha "$first_passing_run_sha" \
-      '[{"sha": $sha, "message": "", "files_changed": [], "fix_layer": "unknown", "confidence": "low", "reasoning": "Agent could not identify specific fix; using first passing run SHA"}]')
+      --argjson files "$fallback_files" \
+      --arg layer "$fallback_layer" \
+      '[{"sha": $sha, "message": "", "files_changed": $files, "fix_layer": $layer, "confidence": "low", "reasoning": "Agent could not identify specific fix; using first passing run SHA"}]')
   fi
 
   jq --argjson failure "$entry" \

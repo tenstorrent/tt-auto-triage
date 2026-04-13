@@ -8,13 +8,18 @@ Each candidate below had ${CONSECUTIVE_RUNS}+ consecutive failing runs. Log file
 ${CANDIDATES_SUMMARY}
 
 Instructions:
-1. For each candidate, use grep/search to find error indicators in the listed log directories (look for FAILED, AssertionError, TT_FATAL, TT_THROW, RuntimeError, "exit code").
+1. For each candidate, use grep/search to find error indicators in the listed log directories (look for FAILED, AssertionError, TT_FATAL, TT_THROW, RuntimeError, "exit code", "FAIL", "Error").
 2. The log directory contains files named after jobs. The exact filenames may not match the job name perfectly — list the directory contents and pick the closest match.
 3. Once you find the relevant log file, search for the actual test failure.
 4. Determine: is this a real test failure (a bug), or infrastructure noise (runner disconnected, OOM kill, network timeout, docker pull failure, setup failure)?
-5. If a real test failure, extract the specific failing test. The test_name MUST be a concrete pytest path (e.g. "tests/foo/test_bar.py::test_something[param]").
+5. If a real test failure, extract the specific failing test identifier. This could be:
+   - A pytest path: tests/foo/test_bar.py::test_something[param]
+   - A gtest name: TestSuite.TestName or TestSuite/TestName
+   - A binary or script: ./build/test/test_something or scripts/run_test.sh
+   - A model/demo test: models/demos/foo/demo/test_demo.py::test_func[params]
+   The test_name must be specific enough to identify the same test across different CI runs.
 
-IMPORTANT: Only set is_test_failure to true if you can extract the full pytest test path. A failure without an identifiable test name is not actionable.
+IMPORTANT: Set is_test_failure to true if you find a real, reproducible test failure with an identifiable test name (any format). Only set it to false if the failure is infrastructure noise OR you cannot identify any specific test.
 Be efficient: grep first, then read only the relevant section around the error.
 
 Respond with ONLY a JSON array (one object per candidate, same order):
@@ -23,7 +28,7 @@ Respond with ONLY a JSON array (one object per candidate, same order):
     "job": "<job name exactly as shown above>",
     "is_test_failure": true or false,
     "is_infrastructure_noise": true or false,
-    "test_name": "<full pytest path e.g. tests/foo/test_bar.py::test_func[params] or null>",
+    "test_name": "<test identifier in any format, or null if not identifiable>",
     "failure_signature": "<core error message or null>",
     "confidence": "high/medium/low",
     "reasoning": "<1-2 sentences>"
