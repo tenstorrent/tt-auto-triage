@@ -7,6 +7,14 @@ on:
         description: "Create GitHub issues for deterministic failures"
         type: boolean
         default: false
+      assign-owners:
+        description: "Resolve assignees for already-created CI triage issues"
+        type: boolean
+        default: false
+      slack-notify:
+        description: "Post testing-channel Slack messages for issues with assignee metadata"
+        type: boolean
+        default: false
       issue-repo:
         description: "Repository to create issues in"
         type: string
@@ -19,29 +27,103 @@ on:
         description: "Maximum number of issues to create (0 = unlimited)"
         type: string
         default: "0"
+      slack-channel-id:
+        description: "Slack channel ID for triage notifications"
+        type: string
+        default: "C0APK6215B5"
     secrets:
       AGGREGATE_READ_TOKEN:
-        required: true
+        required: false
       ISSUE_WRITE_TOKEN:
         required: true
       SLACK_BOT_TOKEN:
-        required: true
-      SLACK_CHANNEL_ID:
-        required: true
+        required: false
       CURSOR_API_KEY:
-        required: true
+        required: false
 
 jobs:
-  auto-issues:
-    uses: ./.github/workflows/issue-creation-ci.yaml
+  validate-create-issues:
+    if: ${{ inputs.create-issues }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate create-issues secrets
+        env:
+          AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -z "$AGGREGATE_READ_TOKEN" ]; then
+            echo "::error::AGGREGATE_READ_TOKEN is required when create-issues is enabled"
+            exit 1
+          fi
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "::error::CURSOR_API_KEY is required when create-issues is enabled"
+            exit 1
+          fi
+
+  create-issues:
+    if: ${{ inputs.create-issues }}
+    needs:
+      - validate-create-issues
+    uses: ./.github/workflows/triage-create-issues.yaml
     with:
-      create-issues: ${{ inputs.create-issues }}
       issue-repo: ${{ inputs.issue-repo }}
       target-repo: ${{ inputs.target-repo }}
       max-issues: ${{ inputs.max-issues }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
-      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-      SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
       CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+
+  validate-assign-owners:
+    if: ${{ inputs.assign-owners }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate assign-owners secrets
+        env:
+          AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+        run: |
+          if [ -z "$AGGREGATE_READ_TOKEN" ]; then
+            echo "::error::AGGREGATE_READ_TOKEN is required when assign-owners is enabled"
+            exit 1
+          fi
+
+  assign-owners:
+    if: ${{ always() && inputs.assign-owners && needs.validate-assign-owners.result == 'success' && (!inputs.create-issues || needs.create-issues.result == 'success') }}
+    needs:
+      - create-issues
+      - validate-assign-owners
+    uses: ./.github/workflows/triage-assign-owners.yaml
+    with:
+      issue-repo: ${{ inputs.issue-repo }}
+      target-repo: ${{ inputs.target-repo }}
+    secrets:
+      AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+      ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+  validate-slack-notify:
+    if: ${{ inputs.slack-notify }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate slack-notify secrets
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "::error::SLACK_BOT_TOKEN is required when slack-notify is enabled"
+            exit 1
+          fi
+
+  slack-notify:
+    if: ${{ always() && inputs.slack-notify && needs.validate-slack-notify.result == 'success' && (!inputs.create-issues || needs.create-issues.result == 'success') && (!inputs.assign-owners || needs.assign-owners.result == 'success') }}
+    needs:
+      - create-issues
+      - assign-owners
+      - validate-slack-notify
+    uses: ./.github/workflows/triage-slack-notify.yaml
+    with:
+      issue-repo: ${{ inputs.issue-repo }}
+      slack-channel-id: ${{ inputs.slack-channel-id }}
+    secrets:
+      ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}

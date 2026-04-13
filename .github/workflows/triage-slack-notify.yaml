@@ -1,0 +1,52 @@
+name: "(triage) Slack Notify"
+
+on:
+  workflow_call:
+    inputs:
+      issue-repo:
+        description: "Repository that stores CI triage issues"
+        type: string
+        default: "ebanerjeeTT/issue_dump"
+      slack-channel-id:
+        description: "Slack channel ID to post notifications to"
+        type: string
+        default: "C0APK6215B5"
+    secrets:
+      ISSUE_WRITE_TOKEN:
+        description: "Token with write access to issue-repo"
+        required: true
+      SLACK_BOT_TOKEN:
+        description: "Slack bot token for posting notifications"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  slack-notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout tt-auto-triage
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run Slack notification stage
+        env:
+          ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ inputs.slack-channel-id }}
+          ISSUE_REPO: ${{ inputs.issue-repo }}
+          SUMMARY_OUTPUT: summary.md
+          PYTHONPATH: .
+        run: python3 -m tools.ci.slack_notify
+
+      - name: Publish summary to run output
+        if: always()
+        run: |
+          if [ -f summary.md ]; then
+            cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No summary produced." >> "$GITHUB_STEP_SUMMARY"
+          fi

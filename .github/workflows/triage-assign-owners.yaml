@@ -1,0 +1,71 @@
+name: "(triage) Assign Owners"
+
+on:
+  workflow_call:
+    inputs:
+      issue-repo:
+        description: "Repository that stores CI triage issues"
+        type: string
+        default: "ebanerjeeTT/issue_dump"
+      target-repo:
+        description: "Repository to read ownership metadata from"
+        type: string
+        default: "tenstorrent/tt-metal"
+    secrets:
+      AGGREGATE_READ_TOKEN:
+        description: "Token with read access to target-repo"
+        required: true
+      ISSUE_WRITE_TOKEN:
+        description: "Token with write access to issue-repo"
+        required: true
+      SLACK_BOT_TOKEN:
+        description: "Optional Slack bot token for GitHub-to-Slack resolution"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  assign-owners:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout tt-auto-triage
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout target repo ownership data
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target-repo }}
+          path: tt-metal
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/analyze-workflow-data/owners.json
+            .github/CODEOWNERS
+            tests/pipeline_reorg
+          token: ${{ secrets.AGGREGATE_READ_TOKEN }}
+
+      - name: Run assignee resolution stage
+        env:
+          GITHUB_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+          ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          ISSUE_REPO: ${{ inputs.issue-repo }}
+          TARGET_REPO: ${{ inputs.target-repo }}
+          OWNERS_JSON_PATH: tt-metal/.github/actions/analyze-workflow-data/owners.json
+          PIPELINE_REORG_DIR: tt-metal/tests/pipeline_reorg
+          CODEOWNERS_PATH: tt-metal/.github/CODEOWNERS
+          SUMMARY_OUTPUT: summary.md
+          PYTHONPATH: .
+        run: python3 -m tools.ci.assign_owners
+
+      - name: Publish summary to run output
+        if: always()
+        run: |
+          if [ -f summary.md ]; then
+            cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No summary produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
