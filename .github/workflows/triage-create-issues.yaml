@@ -1,0 +1,85 @@
+name: "(triage) Create Issues"
+
+on:
+  workflow_call:
+    inputs:
+      issue-repo:
+        description: "Repository to create issues in"
+        type: string
+        default: "ebanerjeeTT/issue_dump"
+      target-repo:
+        description: "Repository to analyze workflow data from"
+        type: string
+        default: "tenstorrent/tt-metal"
+      max-issues:
+        description: "Maximum number of issues to create (0 = unlimited)"
+        type: string
+        default: "0"
+    secrets:
+      AGGREGATE_READ_TOKEN:
+        description: "Token with read access to workflow runs and artifacts"
+        required: true
+      ISSUE_WRITE_TOKEN:
+        description: "Token with write access to the issue repository"
+        required: true
+      CURSOR_API_KEY:
+        description: "Optional Cursor API key for issue drafting"
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  create-issues:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout tt-auto-triage
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Cursor CLI
+        if: ${{ secrets.CURSOR_API_KEY != '' }}
+        run: |
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: Require Cursor API key
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "::error::CURSOR_API_KEY is required for the create-issues stage"
+            exit 1
+          fi
+
+      - name: Run issue creation stage
+        env:
+          GITHUB_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+          ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          CREATE_ISSUES: "true"
+          ISSUE_REPO: ${{ inputs.issue-repo }}
+          TARGET_REPO: ${{ inputs.target-repo }}
+          MAX_ISSUES: ${{ inputs.max-issues }}
+          SUMMARY_OUTPUT: summary.md
+          PYTHONPATH: .
+        run: python3 -m tools.ci.create_issues
+
+      - name: Publish summary to run output
+        if: always()
+        run: |
+          if [ -f summary.md ]; then
+            cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No summary produced." >> "$GITHUB_STEP_SUMMARY"
+          fi

@@ -1,0 +1,42 @@
+You are reviewing a CI failure for deterministic issue creation.
+
+Workflow: $workflow_name
+Job: $job_name
+
+Failing run URLs:
+$run_url_list
+
+Failing job URLs:
+$job_url_list
+
+Log files for each of the $consecutive failing runs are saved locally.
+You MUST read each log file and determine the terminal failure.
+
+Log file references:
+$log_sections
+INSTRUCTIONS:
+1. Read ALL three log files using your file reading tools.
+2. Identify the terminal failure or error in each log.
+3. Determine if all $consecutive runs fail with semantically identical errors.
+4. If yes: draft a GitHub issue title and body in this exact format:
+   - Title: a concise description of the failure (NOT just "deterministic failure")
+   - Body: a markdown CI Failure Report with these sections:
+     ## CI Failure Report
+     **Workflow:** ...
+     **Job:** ...
+     ### Failing job URLs (last 3 runs)
+     - (list each job URL)
+     ### Failing test path(s)
+     - (identify which test files/commands are failing, from log content)
+     ### Error excerpt (terminal failure from logs)
+     (fenced code blocks with the actual error messages from logs)
+     ### Reproduction steps
+     (how to reproduce locally based on the job command)
+     ### Notes
+     (any additional context, e.g. timeout vs assertion failure)
+5. If the errors are NOT semantically identical across all 3 runs, set deterministic to false.
+6. Return an empty "suggested_owners" list for this stage. Owner resolution happens in a separate workflow.
+
+Output the marker below on its own line, followed by compact JSON only:
+$marker
+{"deterministic": true/false, "confidence": "low|medium|high", "signature": "short error signature", "error_excerpt": "key error text", "issue_title": "[CI] ...", "issue_body": "full markdown body", "suggested_owners": []}
