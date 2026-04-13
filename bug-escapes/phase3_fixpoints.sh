@@ -201,16 +201,9 @@ for i in $(seq 0 $((num_failures - 1))); do
       # Determine fix layer from actual file paths (authoritative, overrides agent guess)
       fix_files_json=$(gh api "repos/${AT_OWNER_REPO}/commits/${sha}" \
         --jq '[.files[].filename]' 2>/dev/null || echo "[]")
-
-      # If every changed file is a test/golden file, the fix is in the test layer itself
-      is_test_only=$(be_is_test_only_change "$fix_files_json" 2>/dev/null || echo "false")
-      if [ "$is_test_only" = "true" ]; then
-        layer="$test_layer"
-      else
-        file_layer=$(be_dominant_layer "$fix_files_json" 2>/dev/null || echo "unknown")
-        if [ "$file_layer" != "unknown" ] && [ -n "$file_layer" ]; then
-          layer="$file_layer"
-        fi
+      file_layer=$(be_dominant_layer "$fix_files_json" 2>/dev/null || echo "unknown")
+      if [ "$file_layer" != "unknown" ] && [ -n "$file_layer" ]; then
+        layer="$file_layer"
       fi
 
       # Fetch PR metadata for this commit
