@@ -29,5 +29,5 @@ Respond with ONLY a JSON object (no markdown, no explanation):
   "is_skip_or_disable": true if the commit just skips/disables/xfails the test rather than fixing root cause,
   "fix_confidence": "high", "medium", or "low",
   "fix_layer": "<one of: tt-llk, tt-metalium, ttnn, models, or unknown>",
-  "reasoning": "<2-4 sentences explaining WHY this commit would fix the failure. Describe the causal chain: what was broken, what the commit changed, and why that resolves the specific error signature. If unsure, say so.>"
+  "reasoning": "<2-4 sentences explaining WHY this commit would fix the failure. You MUST explicitly name which architectural layer the fix is in and which layer the failing test is in (e.g. 'This is a fix in the ttnn layer that resolves a failure in a models-layer test'). Then describe the causal chain: what was broken, what the commit changed, and why that resolves the specific error signature. If unsure, say so.>"
 }
