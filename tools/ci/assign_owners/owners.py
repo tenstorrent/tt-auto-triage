@@ -155,7 +155,9 @@ def resolve_owners(
     codeowners: dict[str, list[str]],
     slack_directory: list[dict[str, Any]],
     github_token: str | None,
+    agent_suggested: list[str] | None = None,
 ) -> dict[str, object]:
+    """Resolve owners with 4-tier priority: pipeline_reorg > owners.json > CODEOWNERS > agent suggestions."""
     combined = f"{workflow_name} / {job_name}".lower()
     job_lower = job_name.lower()
 
@@ -194,6 +196,15 @@ def resolve_owners(
             "github_assignees": github_users,
             "slack_assignees": slack_ids,
         }
+
+    if agent_suggested:
+        github_users, slack_ids = _resolve_github_users(agent_suggested, slack_directory, github_token)
+        if github_users:
+            return {
+                "source": "agent",
+                "github_assignees": github_users,
+                "slack_assignees": slack_ids,
+            }
 
     return {
         "source": "none",

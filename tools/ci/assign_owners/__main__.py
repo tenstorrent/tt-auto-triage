@@ -56,11 +56,12 @@ def main() -> int:
     updated: list[dict[str, Any]] = []
     for issue in issues:
         base = parse_base_markers(issue.get("body", ""))
-        workflow_name = base["workflow_name"]
-        job_name = base["job_name"]
+        workflow_name = str(base["workflow_name"])
+        job_name = str(base["job_name"])
         if not workflow_name or not job_name:
             continue
 
+        agent_suggested = base.get("suggested_owners") or []
         resolved = resolve_owners(
             workflow_name,
             job_name,
@@ -69,6 +70,7 @@ def main() -> int:
             codeowners,
             slack_directory,
             os.environ.get("GITHUB_TOKEN"),
+            agent_suggested=list(agent_suggested),
         )
         github_assignees = resolved["github_assignees"]
         slack_assignees = resolved["slack_assignees"]
