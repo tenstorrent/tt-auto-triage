@@ -181,6 +181,7 @@ for i in $(seq 0 $((num_failures - 1))); do
 
     sha=$(jq -r '.sha // "null"' "$agent_output" 2>/dev/null || echo "null")
     is_fix=$(jq -r '.is_likely_fix // false' "$agent_output" 2>/dev/null || echo "false")
+    is_skip=$(jq -r '.is_skip_or_disable // false' "$agent_output" 2>/dev/null || echo "false")
     confidence=$(jq -r '.fix_confidence // "low"' "$agent_output" 2>/dev/null || echo "low")
     layer=$(jq -r '.fix_layer // "unknown"' "$agent_output" 2>/dev/null || echo "unknown")
     reasoning=$(jq -r '.reasoning // ""' "$agent_output" 2>/dev/null || echo "")
@@ -196,6 +197,18 @@ for i in $(seq 0 $((num_failures - 1))); do
         layer="$file_layer"
       fi
 
+      # Fetch PR metadata for this commit
+      pr_number=""
+      pr_url=""
+      pr_title=""
+      pr_json=$(gh api "repos/${AT_OWNER_REPO}/commits/${sha}/pulls" \
+        --jq '.[0] | {number, html_url, title}' 2>/dev/null || echo "{}")
+      if [ -n "$pr_json" ] && [ "$pr_json" != "{}" ]; then
+        pr_number=$(echo "$pr_json" | jq -r '.number // empty' 2>/dev/null || echo "")
+        pr_url=$(echo "$pr_json" | jq -r '.html_url // empty' 2>/dev/null || echo "")
+        pr_title=$(echo "$pr_json" | jq -r '.title // empty' 2>/dev/null || echo "")
+      fi
+
       log_info "      Agent identified fix: ${sha:0:12} (layer=$layer, confidence=$confidence)"
       log_info "      Message: ${commit_msg:0:120}"
       candidate_fixes=$(jq -n \
@@ -205,7 +218,11 @@ for i in $(seq 0 $((num_failures - 1))); do
         --arg layer "$layer" \
         --arg conf "$confidence" \
         --arg reason "$reasoning" \
-        '[{"sha": $sha, "message": $msg, "files_changed": $files, "fix_layer": $layer, "confidence": $conf, "reasoning": $reason}]')
+        --arg is_skip "$is_skip" \
+        --arg pr_num "$pr_number" \
+        --arg pr_url "$pr_url" \
+        --arg pr_title "$pr_title" \
+        '[{"sha": $sha, "message": $msg, "files_changed": $files, "fix_layer": $layer, "confidence": $conf, "reasoning": $reason, "is_skip_or_disable": ($is_skip == "true"), "pr_number": (if $pr_num == "" then null else ($pr_num | tonumber) end), "pr_url": (if $pr_url == "" then null else $pr_url end), "pr_title": (if $pr_title == "" then null else $pr_title end)}]')
     else
       log_info "    Agent could not identify a specific fix commit"
       if [ -n "$reasoning" ] && [ "$reasoning" != "" ] && [ "$reasoning" != "null" ]; then
