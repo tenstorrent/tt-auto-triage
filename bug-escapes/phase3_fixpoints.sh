@@ -102,6 +102,9 @@ for i in $(seq 0 $((num_failures - 1))); do
   first_passing_run_sha=""
   last_failing_run_sha=$(get_run_info "$last_failing_run_id" | jq -r '.head_sha // empty' 2>/dev/null || echo "")
 
+  consecutive_gaps=0
+  max_consecutive_gaps=10
+
   for r in $(seq 0 $((num_subsequent - 1))); do
     if [ "$r" -ge "$MAX_FORWARD_RUNS" ]; then
       log_info "    Reached max forward scan ($MAX_FORWARD_RUNS) without finding a pass — skipping"
@@ -117,9 +120,15 @@ for i in $(seq 0 $((num_failures - 1))); do
     ' 2>/dev/null | head -1)
 
     if [ -z "$job_conclusion" ]; then
-      log_info "      Run $run_id: job '$job_name' not present — skipping (gap)"
+      consecutive_gaps=$((consecutive_gaps + 1))
+      if [ "$consecutive_gaps" -ge "$max_consecutive_gaps" ]; then
+        log_info "    Job '$job_name' absent for $consecutive_gaps consecutive runs — likely removed/renamed, skipping"
+        break
+      fi
       continue
     fi
+
+    consecutive_gaps=0
 
     if [ "$job_conclusion" = "success" ]; then
       first_passing_run_id="$run_id"
