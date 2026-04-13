@@ -7,8 +7,8 @@ set -euo pipefail
 #   1. Compare the fix commit layer vs the test layer
 #   2. Same layer → horizontal bug escape
 #   3. Fix in lower layer → vertical bug escape
-#   4. Write bug-escapes-output.json with the final results
-#   5. Print a summary to $GITHUB_STEP_SUMMARY (if available)
+#   4. Write bug-escapes-output.json with full URLs and details
+#   5. Print a rich summary to $GITHUB_STEP_SUMMARY (if available)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
@@ -69,6 +69,23 @@ for i in $(seq 0 $((num_fixpoints - 1))); do
   fix_message=$(echo "$fix_commit" | jq -r '.message // ""')
   fix_files=$(echo "$fix_commit" | jq -c '.files_changed // []')
   fix_reasoning=$(echo "$fix_commit" | jq -r '.reasoning // ""')
+  fix_confidence=$(echo "$fix_commit" | jq -r '.confidence // "low"')
+  is_skip=$(echo "$fix_commit" | jq -r '.is_skip_or_disable // false')
+  pr_number=$(echo "$fix_commit" | jq -r '.pr_number // empty' 2>/dev/null || echo "")
+  pr_url=$(echo "$fix_commit" | jq -r '.pr_url // empty' 2>/dev/null || echo "")
+  pr_title=$(echo "$fix_commit" | jq -r '.pr_title // empty' 2>/dev/null || echo "")
+
+  # Build URLs
+  commit_url="${AT_BASE_URL}/commit/${fix_sha}"
+
+  # Failing run URLs
+  failing_run_urls="[]"
+  for rid in $(echo "$failing_run_ids" | jq -r '.[]'); do
+    failing_run_urls=$(echo "$failing_run_urls" | jq --arg url "${AT_BASE_URL}/actions/runs/${rid}" '. += [$url]')
+  done
+
+  last_failing_run_url="${AT_BASE_URL}/actions/runs/${last_failing_run_id}"
+  first_passing_run_url="${AT_BASE_URL}/actions/runs/${first_passing_run_id}"
 
   # Classify the escape
   escape_type=$(be_classify_escape "$test_layer" "$fix_layer")
@@ -87,13 +104,22 @@ for i in $(seq 0 $((num_fixpoints - 1))); do
     --arg tl "$test_layer" \
     --arg fs "$failure_sig" \
     --argjson frid "$failing_run_ids" \
+    --argjson frurls "$failing_run_urls" \
     --argjson lfr "$last_failing_run_id" \
+    --arg lfr_url "$last_failing_run_url" \
     --argjson fpr "$first_passing_run_id" \
+    --arg fpr_url "$first_passing_run_url" \
     --arg fsha "$fix_sha" \
     --arg fl "$fix_layer" \
     --arg fm "$fix_message" \
     --argjson ff "$fix_files" \
     --arg notes "$fix_reasoning" \
+    --arg conf "$fix_confidence" \
+    --arg is_skip "$is_skip" \
+    --arg commit_url "$commit_url" \
+    --arg pr_num "$pr_number" \
+    --arg pr_url "$pr_url" \
+    --arg pr_title "$pr_title" \
     '. += [{
       "type": $type,
       "test_name": $tn,
@@ -102,13 +128,22 @@ for i in $(seq 0 $((num_fixpoints - 1))); do
       "test_layer": $tl,
       "failure_signature": $fs,
       "failing_run_ids": $frid,
+      "failing_run_urls": $frurls,
       "last_failing_run_id": $lfr,
+      "last_failing_run_url": $lfr_url,
       "first_passing_run_id": $fpr,
+      "first_passing_run_url": $fpr_url,
       "fix_commit_sha": $fsha,
+      "fix_commit_url": $commit_url,
       "fix_commit_layer": $fl,
       "fix_commit_message": $fm,
       "fix_commit_files_changed": $ff,
-      "agent_analysis_notes": $notes
+      "fix_confidence": $conf,
+      "is_skip_or_disable": ($is_skip == "true"),
+      "pr_number": (if $pr_num == "" then null else ($pr_num | tonumber) end),
+      "pr_url": (if $pr_url == "" then null else $pr_url end),
+      "pr_title": (if $pr_title == "" then null else $pr_title end),
+      "analysis": $notes
     }]')
 
   current_count=$(echo "$bug_escapes" | jq 'length')
@@ -122,10 +157,12 @@ done
 jq -n \
   --arg gen "$generated_at" \
   --arg window "${lookback_start} to ${lookback_end}" \
+  --arg repo "$AT_OWNER_REPO" \
   --argjson escapes "$bug_escapes" \
   '{
     "generated_at": $gen,
     "lookback_window": $window,
+    "repository": $repo,
     "bug_escapes": $escapes
   }' > "$BUG_ESCAPES_OUTPUT"
 
@@ -134,8 +171,9 @@ total=$(echo "$bug_escapes" | jq 'length')
 horizontal=$(echo "$bug_escapes" | jq '[.[] | select(.type == "horizontal")] | length')
 vertical=$(echo "$bug_escapes" | jq '[.[] | select(.type == "vertical")] | length')
 unknown_count=$(echo "$bug_escapes" | jq '[.[] | select(.type == "unknown")] | length')
+skip_count=$(echo "$bug_escapes" | jq '[.[] | select(.is_skip_or_disable == true)] | length')
 
-log_info "Phase 4 done: $total bug escapes (horizontal=$horizontal, vertical=$vertical, unknown=$unknown_count)"
+log_info "Phase 4 done: $total bug escapes (horizontal=$horizontal, vertical=$vertical, unknown=$unknown_count, skips=$skip_count)"
 
 # Emit verify-commands.sh for high/medium confidence escapes
 verify_script="$OUTPUT_DIR/verify-commands.sh"
@@ -172,25 +210,124 @@ log_info "Wrote verify-commands.sh with dispatch commands"
 # Write GitHub Actions step summary if available
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
-    echo "## Bug Escape Detection Results"
+    echo "## Bug Escape Detection Report"
     echo ""
-    echo "- **Generated**: $generated_at"
-    echo "- **Lookback window**: ${lookback_start} to ${lookback_end}"
-    echo "- **Total bug escapes**: $total"
-    echo "  - Horizontal: $horizontal"
-    echo "  - Vertical: $vertical"
-    echo "  - Unknown: $unknown_count"
+    echo "| | |"
+    echo "|---|---|"
+    echo "| **Repository** | \`$AT_OWNER_REPO\` |"
+    echo "| **Generated** | $generated_at |"
+    echo "| **Lookback window** | ${lookback_start} to ${lookback_end} |"
+    echo "| **Total bug escapes** | **$total** ($horizontal horizontal, $vertical vertical, $unknown_count unknown) |"
+    if [ "$skip_count" -gt 0 ]; then
+      echo "| **Test skips (not real fixes)** | $skip_count |"
+    fi
     echo ""
 
     if [ "$total" -gt 0 ]; then
-      echo "### Bug Escapes"
+      echo "---"
       echo ""
-      echo "| Type | Test | Test Layer | Fix Layer | Fix Commit |"
-      echo "|------|------|------------|-----------|------------|"
 
-      echo "$bug_escapes" | jq -r '.[] |
-        "| \(.type) | \(.test_name) | \(.test_layer) | \(.fix_commit_layer) | \(.fix_commit_sha[:8]) |"
-      '
+      idx=0
+      echo "$bug_escapes" | jq -c '.[]' | while IFS= read -r escape; do
+        idx=$((idx + 1))
+
+        etype=$(echo "$escape" | jq -r '.type')
+        tn=$(echo "$escape" | jq -r '.test_name')
+        tj=$(echo "$escape" | jq -r '.test_job')
+        tl=$(echo "$escape" | jq -r '.test_layer')
+        fl=$(echo "$escape" | jq -r '.fix_commit_layer')
+        fs=$(echo "$escape" | jq -r '.failure_signature')
+        conf=$(echo "$escape" | jq -r '.fix_confidence')
+        analysis=$(echo "$escape" | jq -r '.analysis')
+        is_skip_val=$(echo "$escape" | jq -r '.is_skip_or_disable')
+
+        fsha=$(echo "$escape" | jq -r '.fix_commit_sha')
+        commit_url=$(echo "$escape" | jq -r '.fix_commit_url')
+        fm=$(echo "$escape" | jq -r '.fix_commit_message')
+        fpr_url=$(echo "$escape" | jq -r '.first_passing_run_url')
+        lfr_url=$(echo "$escape" | jq -r '.last_failing_run_url')
+
+        e_pr_url=$(echo "$escape" | jq -r '.pr_url // empty' 2>/dev/null || echo "")
+        e_pr_num=$(echo "$escape" | jq -r '.pr_number // empty' 2>/dev/null || echo "")
+
+        # Type badge
+        case "$etype" in
+          horizontal) type_badge="Horizontal" ;;
+          vertical) type_badge="Vertical" ;;
+          *) type_badge="Unknown" ;;
+        esac
+
+        # Confidence badge
+        case "$conf" in
+          high) conf_badge="High" ;;
+          medium) conf_badge="Medium" ;;
+          *) conf_badge="Low" ;;
+        esac
+
+        echo "### ${idx}. ${type_badge} Bug Escape — \`${tj}\`"
+        echo ""
+
+        if [ "$is_skip_val" = "true" ]; then
+          echo "> **Note**: This commit skipped/disabled the test rather than fixing the root cause."
+          echo ""
+        fi
+
+        echo "| | |"
+        echo "|---|---|"
+        echo "| **Escape type** | ${type_badge} (test layer: \`${tl}\`, fix layer: \`${fl}\`) |"
+        echo "| **Confidence** | ${conf_badge} |"
+        echo "| **Test** | \`${tn}\` |"
+        echo "| **Failure signature** | ${fs} |"
+        echo "| **Fix commit** | [\`${fsha:0:10}\`](${commit_url}) — ${fm} |"
+
+        if [ -n "$e_pr_url" ] && [ -n "$e_pr_num" ]; then
+          echo "| **Pull request** | [#${e_pr_num}](${e_pr_url}) |"
+        fi
+
+        echo "| **Last failing run** | [View run](${lfr_url}) |"
+        echo "| **First passing run** | [View run](${fpr_url}) |"
+
+        # Failing run links
+        num_failing=$(echo "$escape" | jq '.failing_run_urls | length')
+        if [ "$num_failing" -gt 0 ]; then
+          failing_links=""
+          fidx=0
+          for furl in $(echo "$escape" | jq -r '.failing_run_urls[]'); do
+            fidx=$((fidx + 1))
+            if [ -n "$failing_links" ]; then
+              failing_links="${failing_links}, "
+            fi
+            failing_links="${failing_links}[Run ${fidx}](${furl})"
+          done
+          echo "| **All failing runs** | ${failing_links} |"
+        fi
+
+        # Files changed
+        num_files=$(echo "$escape" | jq '.fix_commit_files_changed | length')
+        if [ "$num_files" -gt 0 ]; then
+          files_list=$(echo "$escape" | jq -r '[.fix_commit_files_changed[:10][] | "`\(.)`"] | join(", ")')
+          if [ "$num_files" -gt 10 ]; then
+            files_list="${files_list}, ... (+$((num_files - 10)) more)"
+          fi
+          echo "| **Files changed** | ${files_list} |"
+        fi
+
+        echo ""
+
+        # Analysis section
+        if [ -n "$analysis" ] && [ "$analysis" != "null" ]; then
+          echo "<details>"
+          echo "<summary><b>Analysis</b> (click to expand)</summary>"
+          echo ""
+          echo "$analysis"
+          echo ""
+          echo "</details>"
+          echo ""
+        fi
+
+        echo "---"
+        echo ""
+      done
     else
       echo "_No bug escapes detected in this window._"
     fi

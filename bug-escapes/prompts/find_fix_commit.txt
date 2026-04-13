@@ -20,12 +20,14 @@ Pick the SINGLE most likely fix commit based on the commit message relevance to 
 - Does the commit message mention the failing test, the error, or the subsystem?
 - Does the commit touch code in a layer relevant to the test?
 - Ignore CI/infra commits (.github/, scripts/) unless they directly affect test execution.
+- A commit that simply skips/disables a test is NOT a real fix — it is a workaround.
 
 Respond with ONLY a JSON object (no markdown, no explanation):
 {
   "sha": "<full 40-char commit SHA, or null if no plausible fix>",
   "is_likely_fix": true or false,
+  "is_skip_or_disable": true if the commit just skips/disables/xfails the test rather than fixing root cause,
   "fix_confidence": "high", "medium", or "low",
   "fix_layer": "<one of: tt-llk, tt-metalium, ttnn, models, or unknown>",
-  "reasoning": "<1-2 sentences>"
+  "reasoning": "<2-4 sentences explaining WHY this commit would fix the failure. Describe the causal chain: what was broken, what the commit changed, and why that resolves the specific error signature. If unsure, say so.>"
 }
