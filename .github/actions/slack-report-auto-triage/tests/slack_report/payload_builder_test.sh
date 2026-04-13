@@ -117,6 +117,8 @@ assert "Case 4 omits confidence lines" [ -z "$(echo "$text4" | grep -F 'CONFIDEN
 assert "Case 4 pings top-level relevant developers only" [ -n "$(echo "$text4" | grep -F '<@U07G7EXAMPLE>' || true)" ]
 assert "Case 4 does not ping commit author" [ -z "$(echo "$text4" | grep -F '<@U04D4EXAMPLE>' || true)" ]
 assert "Case 4 does not ping approver subteam" [ -z "$(echo "$text4" | grep -F '<!subteam^S06F6EXAMPLE' || true)" ]
+assert "Case 4 S-prefixed top-level developer renders as plain text name" [ -n "$(echo "$text4" | grep -F 'Graph Runtime Owners' || true)" ]
+assert "Case 4 S-prefixed top-level developer not rendered as subteam ping" [ -z "$(echo "$text4" | grep -F '<!subteam^S10K0EXAMPLE' || true)" ]
 assert "Case 4 has no thread_ts" [ "$(echo "$payload4" | jq -r '.thread_ts // empty')" = "" ]
 
 # -- Empty/missing message path: has_payload=false ------------------------------
@@ -135,5 +137,33 @@ cd "$tmpdir"
 bash "$BUILD_SCRIPT"
 cd - >/dev/null
 assert "has_payload=false when MESSAGE_PATH empty" grep -q "has_payload=false" "$tmpdir/github_output"
+
+# -- JOB_OWNER_FILE with mixed U/S IDs: user pinged, group stays plain text ----
+rm -rf "$tmpdir/.auto_triage"
+mkdir -p "$tmpdir/.auto_triage/output" "$tmpdir/.auto_triage/data"
+cp "$SAMPLE_CASE4_MSG" "$tmpdir/.auto_triage/output/slack_message.json"
+export MESSAGE_PATH="$tmpdir/.auto_triage/output/slack_message.json"
+export SLACK_TS=""
+export ALLOW_PINGS="true"
+rm -f "$tmpdir/github_output"
+
+# Write a job_owner.json with one U-prefixed user and one S-prefixed group
+cat > "$tmpdir/.auto_triage/data/job_owner.json" <<'EOF'
+[
+  {"name": "Alice Dev", "slack_id": "U99USEREX"},
+  {"name": "Core Team", "slack_id": "S88GROUPEX"}
+]
+EOF
+
+cd "$tmpdir"
+bash "$BUILD_SCRIPT"
+cd - >/dev/null
+
+payload_owner=$(cat "$tmpdir/.auto_triage/slack_payload.json")
+text_owner=$(echo "$payload_owner" | jq -r '.text // empty')
+assert "JOB OWNER section present" [ -n "$(echo "$text_owner" | grep -F 'JOB OWNER' || true)" ]
+assert "JOB OWNER U-prefixed user is pinged" [ -n "$(echo "$text_owner" | grep -F '<@U99USEREX>' || true)" ]
+assert "JOB OWNER S-prefixed group is not pinged as subteam" [ -z "$(echo "$text_owner" | grep -F '<!subteam^S88GROUPEX' || true)" ]
+assert "JOB OWNER S-prefixed group renders as plain text name" [ -n "$(echo "$text_owner" | grep -F 'Core Team' || true)" ]
 
 test_summary

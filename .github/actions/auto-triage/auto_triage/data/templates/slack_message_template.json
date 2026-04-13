@@ -78,9 +78,7 @@
                 "approvers": [
                     {"name": "Carmen Li", "slack_id": "U05E5EXAMPLE"}
                 ],
-                "relevant_developers": [
-                    {"name": "Harper Singh", "slack_id": "U07G7EXAMPLE"}
-                ],
+                "relevant_developers": [],
                 "relevant_files": [
                     "ttnn/graph/src/partitioner.cpp",
                     "ttnn/graph/include/partition_plan.hpp"
@@ -130,9 +128,7 @@
                 "approvers": [
                     {"name": "Jun Tanaka", "slack_id": "U12P2EXAMPLE"}
                 ],
-                "relevant_developers": [
-                    {"name": "Wei Zhang", "slack_id": "U13Q3EXAMPLE"}
-                ],
+                "relevant_developers": [],
                 "relevant_files": [
                     "ttnn/ops/src/fused_matmul.cpp",
                     "ttnn/ops/include/fused_matmul_kernels.hpp"
@@ -144,9 +140,7 @@
                 "url": "https://github.com/tenstorrent/tt-metal/commit/ee11ff22aa33bb44cc55dd6677889900ffeeddcc",
                 "author": {"name": "Omar Diaz", "slack_id": "U14R4EXAMPLE"},
                 "approvers": [],
-                "relevant_developers": [
-                    {"name": "Layla Torres", "slack_id": "U15S5EXAMPLE"}
-                ],
+                "relevant_developers": [],
                 "relevant_files": [
                     "ttnn/runtime/src/pipeline_config.cpp"
                 ],

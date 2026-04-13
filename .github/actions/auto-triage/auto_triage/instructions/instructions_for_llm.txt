@@ -181,7 +181,7 @@ Toolbox Reference
    ```
    Downloads all Slack users and groups your token can access into separate files:
    - Users go to `./auto_triage/data/slack_directory.json` (consumed by `get_slack_ids.py`)
-   - Groups go to `./auto_triage/data/slack_groups.json` (read directly for group lookups)
+   - Groups go to `./auto_triage/data/slack_groups.json` (for reference only; the LLM must NOT use group IDs from this file for owner resolution or pinging — use `git log`/`git blame` and `./get_slack_ids.py` to find individual developers instead)
    The GitHub Action runs this automatically before the LLM step, but you can re-run it when debugging locally.
 10. **Sanitize Slack payload JSON**
    ```
