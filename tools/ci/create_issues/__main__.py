@@ -34,6 +34,7 @@ def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> tuple[str
         agent_result.get("issue_title", f"[CI] {job['workflow_name']} / {job['job_name']}")
     )
     signature = agent_result.get("signature", "")
+    suggested_owners = agent_result.get("suggested_owners") or []
     body = append_base_markers(
         sanitize_issue_text(agent_result["issue_body"]),
         workflow_name=job["workflow_name"],
@@ -41,6 +42,7 @@ def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> tuple[str
         fingerprint=fingerprint_for(job["workflow_name"], job["job_name"], signature)
         if signature
         else "",
+        suggested_owners=[str(o) for o in suggested_owners if str(o)],
     )
     issue_url = gh(
         "issue",
