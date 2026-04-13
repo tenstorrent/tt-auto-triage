@@ -17,7 +17,6 @@ import shlex
 import subprocess
 import sys
 import tempfile
-import textwrap
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -122,7 +121,6 @@ def create_draft_pr(
     branch: str,
     title: str,
     body: str,
-    labels: list[str],
     token: str,
     cwd: str | Path,
 ) -> dict:
@@ -136,8 +134,6 @@ def create_draft_pr(
         "--body", body,
         "--draft",
     ]
-    for label in labels:
-        cmd.extend(["--label", label])
     proc = run(cmd, env={"GH_TOKEN": token}, cwd=cwd)
     url = proc.stdout.strip()
     return {"url": url}
@@ -306,13 +302,12 @@ def main() -> int:
             "reason": "pr_already_exists",
             "existing_pr_url": pr_url,
         })
-        write_summary(args.summary_md, textwrap.dedent(f"""\
-            ## Draft PR Creation
-
-            **Status:** Skipped (PR already exists)
-            **Issue:** #{args.issue_number} - {issue_title}
-            **Existing PR:** {pr_url}
-        """))
+        write_summary(args.summary_md, (
+            f"## Draft PR Creation\n\n"
+            f"**Status:** Skipped (PR already exists)\n"
+            f"**Issue:** #{args.issue_number} - {issue_title}\n"
+            f"**Existing PR:** {pr_url}\n"
+        ))
         return 0
 
     # 3. Create branch
@@ -354,14 +349,13 @@ def main() -> int:
             "reason": "agent_made_no_changes",
             "agent_exit_code": agent_result.returncode,
         })
-        write_summary(args.summary_md, textwrap.dedent(f"""\
-            ## Draft PR Creation
-
-            **Status:** Failed (no changes produced)
-            **Issue:** #{args.issue_number} - {issue_title}
-            **Mode:** {mode}
-            **Agent exit code:** {agent_result.returncode}
-        """))
+        write_summary(args.summary_md, (
+            f"## Draft PR Creation\n\n"
+            f"**Status:** Failed (no changes produced)\n"
+            f"**Issue:** #{args.issue_number} - {issue_title}\n"
+            f"**Mode:** {mode}\n"
+            f"**Agent exit code:** {agent_result.returncode}\n"
+        ))
         return 1
 
     # 7. Commit
@@ -384,23 +378,17 @@ def main() -> int:
 
     # 9. Create draft PR
     pr_title = f"{'fix' if mode == 'fix' else 'ci'}: auto-triage {mode} for issue #{args.issue_number}"
-    pr_body = textwrap.dedent(f"""\
-        ## Auto-Triage Draft PR
+    pr_body = (
+        f"## Auto-Triage Draft PR\n\n"
+        f"**Mode:** {mode}\n"
+        f"**Source issue:** {args.issue_repo}#{args.issue_number}\n"
+        f"**Issue title:** {issue_title}\n\n"
+        f"---\n\n"
+        f"{commit_msg}\n\n"
+        f"---\n\n"
+        f"<!-- {PR_MARKER_PREFIX} {args.issue_number} -->\n"
+    )
 
-        **Mode:** {mode}
-        **Source issue:** {args.issue_repo}#{args.issue_number}
-        **Issue title:** {issue_title}
-
-        ---
-
-        {commit_msg}
-
-        ---
-
-        <!-- {PR_MARKER_PREFIX} {args.issue_number} -->
-    """)
-
-    labels = ["auto-triage", f"auto-triage:{mode}"]
     try:
         pr_info = create_draft_pr(
             target_pr_repo=args.target_pr_repo,
@@ -408,7 +396,6 @@ def main() -> int:
             branch=branch,
             title=pr_title,
             body=pr_body,
-            labels=labels,
             token=token,
             cwd=work_dir,
         )
@@ -434,20 +421,15 @@ def main() -> int:
         "issue_title": issue_title,
         "files_changed": diff_stat.stdout.strip(),
     })
-    write_summary(args.summary_md, textwrap.dedent(f"""\
-        ## Draft PR Creation
-
-        **Status:** Created
-        **Issue:** #{args.issue_number} - {issue_title}
-        **Mode:** {mode}
-        **Draft PR:** {pr_url}
-        **Branch:** `{branch}`
-
-        ### Changes
-        ```
-        {diff_stat.stdout.strip()}
-        ```
-    """))
+    write_summary(args.summary_md, (
+        f"## Draft PR Creation\n\n"
+        f"**Status:** Created\n"
+        f"**Issue:** #{args.issue_number} - {issue_title}\n"
+        f"**Mode:** {mode}\n"
+        f"**Draft PR:** {pr_url}\n"
+        f"**Branch:** `{branch}`\n\n"
+        f"### Changes\n```\n{diff_stat.stdout.strip()}\n```\n"
+    ))
 
     log("Done")
     return 0
