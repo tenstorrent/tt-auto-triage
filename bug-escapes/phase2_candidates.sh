@@ -23,7 +23,7 @@ CONSECUTIVE_RUNS="${CONSECUTIVE_RUNS:-3}"
 LOOKBACK_DAYS="${LOOKBACK_DAYS:-14}"
 MAX_CANDIDATES="${MAX_CANDIDATES:-999}"
 MAX_LOG_BYTES="${MAX_LOG_BYTES:-100000}"
-MAX_RUNS_PER_WORKFLOW="${MAX_RUNS_PER_WORKFLOW:-15}"
+MAX_RUNS_PER_WORKFLOW="${MAX_RUNS_PER_WORKFLOW:-50}"
 
 mkdir -p "$LOGS_DIR"
 
@@ -58,7 +58,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
   # when building per-job timelines (1 API call per run for job data).
   all_runs="[]"
   page=1
-  max_pages=3
+  max_pages=5
   while [ "$page" -le "$max_pages" ]; do
     page_json=$(get_workflow_runs "$wf_id" "$page")
     runs_on_page=$(echo "$page_json" | jq '.workflow_runs | length' 2>/dev/null || echo 0)
@@ -323,14 +323,23 @@ Log directory: ${log_dir_found}
       failing_run_ids=$(echo "$matched_meta" | jq -c '.failing_runs')
       is_flaky=$(echo "$matched_meta" | jq -r '.likely_flaky // false')
       flake_score=$(echo "$matched_meta" | jq -r '.flake_score // 0')
-      log_info "      CONFIRMED: $test_name ($agent_job, confidence=$confidence, flaky=$is_flaky)"
+
+      # Refine test_layer from the test path when possible (more specific than workflow-level)
+      effective_test_layer="$test_layer"
+      test_file_path="${test_name%%::*}"
+      refined_layer=$(be_file_to_layer "$test_file_path" 2>/dev/null || echo "unknown")
+      if [ "$refined_layer" != "unknown" ] && [ -n "$refined_layer" ]; then
+        effective_test_layer="$refined_layer"
+      fi
+
+      log_info "      CONFIRMED: $test_name ($agent_job, confidence=$confidence, flaky=$is_flaky, layer=$effective_test_layer)"
 
       jq --arg wf "$wf_path" \
          --arg job "$agent_job" \
          --arg tn "$test_name" \
          --arg fs "$failure_sig" \
          --argjson frid "$failing_run_ids" \
-         --arg tl "$test_layer" \
+         --arg tl "$effective_test_layer" \
          --arg conf "$confidence" \
          --arg notes "$reasoning" \
          --argjson flaky "$is_flaky" \
