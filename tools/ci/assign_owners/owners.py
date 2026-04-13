@@ -13,6 +13,11 @@ IGNORE_CODEOWNERS = {
 }
 
 
+def _is_slack_user_id(slack_id: str) -> bool:
+    """Slack user IDs start with U or W; usergroup IDs start with S."""
+    return bool(slack_id) and slack_id[0] in ("U", "W")
+
+
 def _normalize(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.lower())
 
@@ -163,11 +168,15 @@ def resolve_owners(
         entry_name = entry["name"].lower()
         if entry_name in job_lower or job_lower in entry_name:
             slack_id = entry["id"]
-            return {
-                "source": "pipeline_reorg",
-                "github_assignees": [],
-                "slack_assignees": [slack_id] if slack_id else [],
-            }
+            individual_ids = [slack_id] if slack_id and _is_slack_user_id(slack_id) else []
+            if individual_ids:
+                return {
+                    "source": "pipeline_reorg",
+                    "github_assignees": [],
+                    "slack_assignees": individual_ids,
+                }
+            log(f"  Skipping group Slack ID from pipeline_reorg for {entry_name}")
+            break
 
     for record in owners_json:
         component = str(record.get("job-name-component", "")).lower()
@@ -180,11 +189,15 @@ def resolve_owners(
             slack_ids = [owner["id"]] if owner.get("id") else []
         else:
             slack_ids = []
-        return {
-            "source": "owners_json",
-            "github_assignees": [],
-            "slack_assignees": list(dict.fromkeys(slack_ids)),
-        }
+        individual_ids = [sid for sid in dict.fromkeys(slack_ids) if _is_slack_user_id(sid)]
+        if individual_ids:
+            return {
+                "source": "owners_json",
+                "github_assignees": [],
+                "slack_assignees": individual_ids,
+            }
+        log(f"  Skipping group-only Slack IDs from owners_json for {component}")
+        break
 
     github_assignees = _codeowners_matches(workflow_name, codeowners)
     if github_assignees:

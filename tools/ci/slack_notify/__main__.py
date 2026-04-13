@@ -20,8 +20,15 @@ SLACK_CHANNEL_ID = os.environ.get("SLACK_CHANNEL_ID", "C0APK6215B5")
 SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
 
 
+def _is_slack_user_id(slack_id: str) -> bool:
+    """Slack user IDs start with U or W; usergroup IDs start with S."""
+    return bool(slack_id) and slack_id[0] in ("U", "W")
+
+
 def format_owner_text(markers: dict[str, object]) -> str:
-    slack_assignees = [f"<@{value}>" for value in markers["slack_assignees"]]
+    slack_assignees = [
+        f"<@{value}>" for value in markers["slack_assignees"] if _is_slack_user_id(value)
+    ]
     github_assignees = [f"`@{value}`" for value in markers["github_assignees"]]
     owners = slack_assignees + github_assignees
     return ", ".join(owners) if owners else "No assignees available"
