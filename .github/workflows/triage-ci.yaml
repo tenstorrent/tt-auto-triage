@@ -18,7 +18,7 @@ on:
       issue-repo:
         description: "Repository to create issues in"
         type: string
-        default: "ebanerjee/issue_dump"
+        default: "ebanerjeeTT/issue_dump"
       target-repo:
         description: "Repository to analyze workflow data from"
         type: string
