@@ -17,13 +17,18 @@ def person(p; use_slack_id):
   if p == null then
     "Unknown"
   else
+    (p.name // p.login // "Unknown") as $display_name
     # Only ping if allow_pings is true AND use_slack_id is true AND slack_id exists
-    # Groups/subteams (S-prefixed IDs) are never pinged to avoid spamming entire teams
-    (if ($allow_pings == "true") and use_slack_id and (p.slack_id // "") != "" and ((p.slack_id | startswith("S")) | not) then
-      "<@" + p.slack_id + ">"
-    else
-      (p.name // p.login // "Unknown")
-    end)
+    # Groups/subteams (S-prefixed IDs) are never pinged to avoid spamming entire teams;
+    # resolve_group_pings.py pre-resolves them to a U-prefixed individual before this runs.
+    | (if ($allow_pings == "true") and use_slack_id and (p.slack_id // "") != "" and ((p.slack_id | startswith("S")) | not) then
+        # When the name contains "(representing <group>)", preserve that context alongside the ping
+        "<@" + p.slack_id + ">"
+        + (($display_name | split("(representing ")) as $parts
+           | if ($parts | length) > 1 then " (representing " + $parts[1] else "" end)
+      else
+        $display_name
+      end)
   end;
 
 def join_people(arr; use_slack_id):

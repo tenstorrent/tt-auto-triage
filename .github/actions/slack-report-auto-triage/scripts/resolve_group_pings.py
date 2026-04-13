@@ -135,14 +135,22 @@ def main() -> int:
         print(f"Error: invalid JSON on stdin: {e}", file=sys.stderr)
         return 1
 
-    groups_path = Path(config.get("slack_groups", ""))
-    directory_path = Path(config.get("slack_directory", ""))
-    file_paths = [Path(f) for f in config.get("files", [])]
+    groups_path_value = config.get("slack_groups")
+    directory_path_value = config.get("slack_directory")
+    files_value = config.get("files", [])
 
-    if not groups_path.name or not directory_path.name or not file_paths:
+    if (
+        not isinstance(groups_path_value, str) or not groups_path_value.strip()
+        or not isinstance(directory_path_value, str) or not directory_path_value.strip()
+        or not isinstance(files_value, list) or not files_value
+    ):
         print("Error: stdin JSON must contain slack_groups, slack_directory, and files",
               file=sys.stderr)
         return 1
+
+    groups_path = Path(groups_path_value)
+    directory_path = Path(directory_path_value)
+    file_paths = [Path(f) for f in files_value]
 
     groups_data = load_json_file(groups_path)
     if groups_data is None:

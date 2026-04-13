@@ -119,8 +119,12 @@ assert "Case 4 omits confidence lines" [ -z "$(echo "$text4" | grep -F 'CONFIDEN
 assert "Case 4 pings top-level relevant developers only" [ -n "$(echo "$text4" | grep -F '<@U07G7EXAMPLE>' || true)" ]
 assert "Case 4 does not ping commit author" [ -z "$(echo "$text4" | grep -F '<@U04D4EXAMPLE>' || true)" ]
 assert "Case 4 does not ping approver subteam" [ -z "$(echo "$text4" | grep -F '<!subteam^S06F6EXAMPLE' || true)" ]
-assert "Case 4 S-prefixed top-level developer renders as plain text name" [ -n "$(echo "$text4" | grep -F 'Graph Runtime Owners' || true)" ]
-assert "Case 4 S-prefixed top-level developer not rendered as subteam ping" [ -z "$(echo "$text4" | grep -F '<!subteam^S10K0EXAMPLE' || true)" ]
+# Group resolution is intentionally skipped here (no slack_groups.json / slack_directory.json fixtures),
+# so the S-prefixed ID in the top-level relevant_developers stays unresolved and renders as plain text.
+assert "Case 4 skips group resolution: no slack_groups.json fixture" [ ! -f "$tmpdir/.auto_triage/data/slack_groups.json" ]
+assert "Case 4 skips group resolution: no slack_directory.json fixture" [ ! -f "$tmpdir/.auto_triage/data/slack_directory.json" ]
+assert "Case 4 unresolved S-prefixed top-level developer renders as plain text name" [ -n "$(echo "$text4" | grep -F 'Graph Runtime Owners' || true)" ]
+assert "Case 4 unresolved S-prefixed top-level developer not rendered as subteam ping" [ -z "$(echo "$text4" | grep -F '<!subteam^S10K0EXAMPLE' || true)" ]
 assert "Case 4 has no thread_ts" [ "$(echo "$payload4" | jq -r '.thread_ts // empty')" = "" ]
 
 # -- Case 5 report: commit truncation (only top commit shown) -----------------
