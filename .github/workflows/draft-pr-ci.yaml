@@ -1,0 +1,179 @@
+name: "(triage) Draft PR Creation"
+
+on:
+  workflow_call:
+    inputs:
+      issue-number:
+        required: true
+        type: string
+        description: "Issue number from the issue repo"
+      try-to-fix:
+        required: false
+        type: boolean
+        default: false
+        description: "If true, try to fix root cause. If false, just disable the test."
+      issue-repo:
+        required: false
+        type: string
+        default: "ebanerjeeTT/issue_dump"
+      target-pr-repo:
+        required: false
+        type: string
+        default: "ebanerjeeTT/tt-metal"
+      target-pr-base:
+        required: false
+        type: string
+        default: "main"
+      model:
+        required: false
+        type: string
+        default: "claude-4-sonnet"
+      triage-logic-ref:
+        required: false
+        type: string
+        default: "ebanerjee/draft-pr-creation"
+    secrets:
+      CURSOR_API_KEY:
+        required: true
+      GITHUB_WRITE_TOKEN:
+        required: true
+
+  workflow_dispatch:
+    inputs:
+      issue-number:
+        description: "Issue number from the issue repo"
+        required: true
+      try-to-fix:
+        description: "If true, try to fix root cause. If false, just disable the test."
+        required: false
+        type: boolean
+        default: false
+      issue-repo:
+        description: "Repository containing the triage issues"
+        required: false
+        default: "ebanerjeeTT/issue_dump"
+      target-pr-repo:
+        description: "Repository where the draft PR will be created"
+        required: false
+        default: "ebanerjeeTT/tt-metal"
+      target-pr-base:
+        description: "Base branch for the draft PR"
+        required: false
+        default: "main"
+      model:
+        description: "Cursor model to use"
+        required: false
+        type: choice
+        options:
+          - auto
+          - claude-4-sonnet
+          - claude-4-opus
+          - claude-3.7-sonnet
+          - gpt-5
+          - gpt-5-mini
+          - gpt-4.1
+          - o3
+          - gemini-2.5-pro
+          - gemini-2.5-flash
+        default: "claude-4-sonnet"
+      triage-logic-ref:
+        description: "Branch/tag/SHA in tenstorrent/tt-auto-triage for triage logic"
+        required: false
+        default: "ebanerjee/draft-pr-creation"
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  create-draft-pr:
+    name: "Create draft PR for issue"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout tt-auto-triage logic
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-auto-triage
+          ref: ${{ inputs.triage-logic-ref || 'ebanerjee/draft-pr-creation' }}
+          path: .tt-auto-triage
+          persist-credentials: false
+
+      - name: Checkout target PR repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target-pr-repo || 'ebanerjeeTT/tt-metal' }}
+          token: ${{ secrets.GITHUB_WRITE_TOKEN }}
+          path: tt-metal-fork
+          persist-credentials: true
+
+      - name: Ensure CURSOR_API_KEY is configured
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "::error::Missing secret CURSOR_API_KEY"
+            exit 1
+          fi
+
+      - name: Ensure GITHUB_WRITE_TOKEN is configured
+        env:
+          GITHUB_WRITE_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN }}
+        run: |
+          if [ -z "$GITHUB_WRITE_TOKEN" ]; then
+            echo "::error::Missing secret GITHUB_WRITE_TOKEN"
+            exit 1
+          fi
+
+      - name: Install Cursor CLI
+        run: |
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: Create draft PR
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          python .tt-auto-triage/tools/ci/create_draft_pr.py \
+            --issue-number "${{ inputs.issue-number }}" \
+            --issue-repo "${{ inputs.issue-repo || 'ebanerjeeTT/issue_dump' }}" \
+            --target-pr-repo "${{ inputs.target-pr-repo || 'ebanerjeeTT/tt-metal' }}" \
+            --target-pr-base "${{ inputs.target-pr-base || 'main' }}" \
+            ${{ inputs.try-to-fix == true && '--try-to-fix' || '' }} \
+            --model "${{ inputs.model || 'claude-4-sonnet' }}" \
+            --work-dir tt-metal-fork \
+            --output-json build_ci/draft_pr/result.json \
+            --summary-md build_ci/draft_pr/summary.md
+
+      - name: Upload draft PR artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: draft-pr-artifacts
+          path: |
+            build_ci/draft_pr/result.json
+            build_ci/draft_pr/summary.md
+          retention-days: 7
+
+      - name: Publish summary to run summary
+        if: always()
+        run: |
+          set -euo pipefail
+          summary_path="build_ci/draft_pr/summary.md"
+          if [ -s "$summary_path" ]; then
+            cat "$summary_path" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "## Draft PR Creation" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "No summary produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
