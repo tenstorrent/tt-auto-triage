@@ -97,7 +97,7 @@ for i in $(seq 0 $((num_failures - 1))); do
   if [ "$num_subsequent" -eq 0 ]; then
     log_info "    No subsequent runs found — skipping (failure may still be active)"
     jq --argjson failure "$entry" \
-       '[ . += [{"failure": $failure, "ongoing_reason": "still_failing", "note": "No subsequent workflow runs found"}] ]' \
+       '. += [{"failure": $failure, "ongoing_reason": "still_failing", "note": "No subsequent workflow runs found"}]' \
        "$ONGOING_FAILURES_OUTPUT" > "${ONGOING_FAILURES_OUTPUT}.tmp" && mv "${ONGOING_FAILURES_OUTPUT}.tmp" "$ONGOING_FAILURES_OUTPUT" || true
     continue
   fi
@@ -151,7 +151,7 @@ for i in $(seq 0 $((num_failures - 1))); do
   if [ -z "$first_passing_run_id" ]; then
     log_info "    No passing run found — failure is still active, skipping"
     jq --argjson failure "$entry" \
-       '[ . += [{"failure": $failure, "ongoing_reason": "still_failing", "note": "No passing run found in forward scan"}] ]' \
+       '. += [{"failure": $failure, "ongoing_reason": "still_failing", "note": "No passing run found in forward scan"}]' \
        "$ONGOING_FAILURES_OUTPUT" > "${ONGOING_FAILURES_OUTPUT}.tmp" && mv "${ONGOING_FAILURES_OUTPUT}.tmp" "$ONGOING_FAILURES_OUTPUT" || true
     continue
   fi
@@ -179,7 +179,7 @@ for i in $(seq 0 $((num_failures - 1))); do
     log_warn "    Transition window too wide ($num_commits commits > $MAX_COMMITS_PER_WINDOW) — skipping"
     jq --argjson failure "$entry" \
        --arg n "$num_commits" \
-       '[ . += [{"failure": $failure, "ongoing_reason": "wide_window", "note": ("Transition has " + $n + " commits > MAX")}] ]' \
+       '. += [{"failure": $failure, "ongoing_reason": "wide_window", "note": ("Transition has " + $n + " commits > MAX")}]' \
        "$ONGOING_FAILURES_OUTPUT" > "${ONGOING_FAILURES_OUTPUT}.tmp" && mv "${ONGOING_FAILURES_OUTPUT}.tmp" "$ONGOING_FAILURES_OUTPUT" || true
     continue
   fi
