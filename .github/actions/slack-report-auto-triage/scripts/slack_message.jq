@@ -18,14 +18,16 @@ def person(p; use_slack_id):
     "Unknown"
   else
     (p.name // p.login // "Unknown") as $display_name
-    # Only ping if allow_pings is true AND use_slack_id is true AND slack_id exists
-    # Groups/subteams (S-prefixed IDs) are never pinged to avoid spamming entire teams;
-    # resolve_group_pings.py pre-resolves them to a U-prefixed individual before this runs.
+    # Only ping if allow_pings is true AND use_slack_id is true AND slack_id exists.
+    # resolve_group_pings.py pre-resolves S-prefixed group IDs to a U-prefixed individual;
+    # any remaining S-prefixed IDs are unresolvable and are excluded from pings.
     | (if ($allow_pings == "true") and use_slack_id and (p.slack_id // "") != "" and ((p.slack_id | startswith("S")) | not) then
-        # When the name contains "(representing <group>)", preserve that context alongside the ping
+        # When the name contains "(representing <group>)", preserve that context alongside the ping.
+        # Use index() to safely find the suffix — avoids issues with split() when the group name
+        # itself contains the literal substring "(representing ".
         "<@" + p.slack_id + ">"
-        + (($display_name | split("(representing ")) as $parts
-           | if ($parts | length) > 1 then " (representing " + $parts[1] else "" end)
+        + (($display_name | index("(representing ")) as $idx
+           | if $idx != null then " " + $display_name[$idx:] else "" end)
       else
         $display_name
       end)
@@ -33,10 +35,6 @@ def person(p; use_slack_id):
 
 def join_people(arr; use_slack_id):
   arr | map(person(.; use_slack_id)) | join(", ");
-
-# Case 3 (non-deterministic/hardware): do not auto-ping metalinfra; leave RELEVANT DEVELOPERS blank.
-def ensure_case3_ping(arr; case_val):
-  (arr // []);
 
 def section_line(lbl; txt):
   if (txt // "") != "" then "*\(lbl):* " + txt + "\n" else "" end;
@@ -101,13 +99,16 @@ def commits_section(arr):
   + section_code("FAILURE MESSAGE"; .failure_message)
   + (if $is_case4 then "" else commits_section(.commits) end)
   + (if $is_case4
-     # NOTE: ensure_case3_ping is used for multiple cases (3, 4, and others) to keep ping formatting consistent.
-     then section_people("RELEVANT DEVELOPERS"; ensure_case3_ping(.relevant_developers; .case); true)
+     # Case 4: show relevant_developers for context but omit commits section above
+     then section_people("RELEVANT DEVELOPERS"; (.relevant_developers // []); true)
      elif ($has_commits and ($case == "5"))
-     then section_people("RELEVANT DEVELOPERS"; ensure_case3_ping(.relevant_developers; .case); true)
+     # Case 5: LLM populates relevant_developers from the top suspect commits
+     then section_people("RELEVANT DEVELOPERS"; (.relevant_developers // []); true)
      elif $has_commits
+     # Cases 1/2: developers are listed per-commit, not at the top level
      then ""
-     else section_people("RELEVANT DEVELOPERS"; ensure_case3_ping(.relevant_developers; .case); true)
+     # Case 3: LLM emits [] for relevant_developers to suppress pings on non-deterministic failures
+     else section_people("RELEVANT DEVELOPERS"; (.relevant_developers // []); true)
     end)
   + (if $is_case4 then section_line("SUMMARY"; .slack_message) else "" end)
   + (if $is_case4 then section_line("NOTE"; "Could not identify a single high-confidence culprit commit.") else "" end)
