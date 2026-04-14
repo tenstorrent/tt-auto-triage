@@ -59,12 +59,12 @@ Slack Message Output
 - **CRITICAL: `relevant_developers` rules - READ CAREFULLY:**
   - **`author` and `approvers`** (within commit objects): These are people who were directly involved in making the commit (the commit author and those who approved the PR).
   - **`relevant_developers`** (within commit objects or at top level): 
-    - **SHOULD be individual developers** whenever possible. When `.github/CODEOWNERS` only lists a team (e.g. `@tenstorrent/ttnn-core`), prefer using `git log` and `git blame` on the implicated files to find individual developers who recently modified them. However, if you cannot identify a specific individual, you MAY use the team's Slack group ID (S-prefixed) — the Slack reporter will automatically resolve it to one random representative member of that group.
+    - **Use the CODEOWNERS team's Slack group ID (S-prefixed) when `.github/CODEOWNERS` maps the failing area to a team.** This is the primary and most reliable ownership signal. The Slack reporter automatically resolves each group ID to one random active member and pings them as a representative — groups are never spammed. Look up the team's S-prefixed ID in `slack_groups.json`.
+    - You MAY additionally include specific individual developers (U-prefixed) you identify via `git log` or `git blame` on the implicated files, but **do not skip the group ID just because you found an individual.** The group ensures the right team is always reached even if the individual is unavailable.
     - **MUST be codeowners** of files that need to be changed to fix the issue.
     - **MUST NOT include** the commit author or any approvers from the same commit.
     - **MUST NOT include** any person who is already listed as `author` or `approvers` in any commit in the same `slack_message.json`.
-    - **CAN be empty** if you truly cannot find appropriate codeowners or recent file modifiers, but prefer using the CODEOWNERS team's group Slack ID (S-prefixed) over leaving the field empty — at least one person from the team will be randomly pinged.
-    - Use `git log`, `git blame`, or `.github/CODEOWNERS` to identify who owns the files that need modification. When CODEOWNERS points to a team, try to drill down to individuals via `git log`/`git blame` first; if that fails, use the team's Slack group ID from `slack_groups.json`.
+    - **Should NOT be empty** for non-Case-3 outputs. If `.github/CODEOWNERS` lists a team, always include that team's Slack group ID. The field should only be empty if there is genuinely no codeowner for the affected area.
     - Only include people who would need to review/approve the fix, not those who already reviewed the problematic commit.
     - **No duplicates:** Each person should appear at most once across all `relevant_developers` lists in the entire JSON.
 - **Ping behavior in Slack messages:**
@@ -75,14 +75,14 @@ Slack Message Output
   - **All fields must still be populated** in `slack_message.json` regardless of ping behavior - the Slack reporter handles the conditional pinging automatically.
 - **Security:** **NEVER** write Slack IDs to `explanation.md`. Only include names and GitHub handles/URLs in the markdown report. Slack IDs should only exist in `slack_message.json`.
 - Resolve Slack IDs as follows:
-  - Use `./get_slack_ids.py` (see Toolbox) to look up Slack IDs for individual developers. The script searches `./auto_triage/data/slack_directory.json` for users only.
-  - Slack group/subteam IDs (S-prefixed, from `slack_groups.json`) are allowed in `relevant_developers` when you cannot identify a specific individual. The Slack reporter will automatically pick one random member of the group to ping instead of spamming the entire team. Individual U-prefixed IDs are still preferred when available.
+  - **For teams listed in `.github/CODEOWNERS`:** look up the team's Slack group ID (S-prefixed) in `./auto_triage/data/slack_groups.json` and use it directly. The Slack reporter will automatically pick one random active member to ping — the entire group is never spammed. This is the preferred approach for `relevant_developers`.
+  - **For individual developers** (commit authors, approvers, or specific people from `git log`/`git blame`): use `./get_slack_ids.py` to look up their U-prefixed Slack IDs from `./auto_triage/data/slack_directory.json`.
   - If lookup fails or the person cannot be found, leave `slack_id` as an empty string `""` and document the attempt in your reasoning rather than fabricating data.
   - Always represent people as objects: `{"name":"Full Name","slack_id":""}`. Never paste raw CLI output (like `[[],[]]`) or bare strings into `relevant_developers`, commit `author`, or `approvers`.
 - Limit `relevant_files` to the most critical paths (at most five per commit or case). Prioritize files that directly illustrate the suspected failure mechanism; do not copy the entire diff file list.
 - Case hints:
-  - Case 1: `commits` must contain exactly one entry for the culprit commit. The `relevant_developers` field **MUST NOT** include the commit author or any approvers. It should only list codeowners of files that need changes to fix the issue. If you cannot find individual codeowners, fall back to the team's Slack group ID (S-prefixed) from `slack_groups.json` so at least one team member gets pinged.
-  - Case 2: `commits` stays empty, but fill the top-level `relevant_developers`/`relevant_files` arrays with the best codeowners to engage (people who own the files that need to be fixed). If you cannot find individual codeowners, fall back to the team's Slack group ID (S-prefixed) so at least one team member gets pinged.
+  - Case 1: `commits` must contain exactly one entry for the culprit commit. The `relevant_developers` field **MUST NOT** include the commit author or any approvers. It should list the CODEOWNERS team's Slack group ID (S-prefixed) for the affected files, plus any specific individual codeowners you identify via `git log`/`git blame`.
+  - Case 2: `commits` stays empty, but fill the top-level `relevant_developers`/`relevant_files` arrays with the CODEOWNERS team's Slack group ID and/or specific codeowners to engage.
   - Case 3: keep `commits` empty and populate `notes` to summarize why this is external. **Do not list any `relevant_developers`** (leave the array empty). The Slack workflow will not ping anyone for Case 3; RELEVANT DEVELOPERS remains blank.
   - Case 4: include every commit in the window in `commits` (with scores and metadata for artifacts). **Also set top-level** `relevant_developers` and **`relevant_files`** using the **same methodology as Case 2**—owners of the code paths implicated by the failure (from `CODEOWNERS` / `git` on those paths), **not** contacts inferred from “who is on the suspect commits.” Per-commit `relevant_developers` may be `[]` when they would only duplicate top-level owners. Mention confidence in the `slack_message` summary; the Slack formatter hides per-commit spam for Case 4.
 - `failing_run_url` / `failing_run_label` must describe the newest run that actually exhibits the deterministic failure signature (ignore newer runs that only fail due to infra/setup issues such as runner disconnects). Use the exact job URL from `./data/subjob_runs.json` and provide a short label such as `Run #123456789 (latest reproducible failure)`.
@@ -176,15 +176,15 @@ Toolbox Reference
    """
    ```
 8. **Slack group IDs are auto-resolved to one representative**
-   - Group/subteam Slack IDs (S-prefixed) are **never used to ping the entire group**. Instead, the Slack reporter automatically picks one random active member and pings them as a representative.
-   - You MAY include S-prefixed group IDs in `relevant_developers` when you cannot identify a specific individual from `git log`/`git blame`. Prefer individual U-prefixed IDs when available.
+   - Group/subteam Slack IDs (S-prefixed) are **never used to ping the entire group**. Instead, the Slack reporter automatically picks one random active member and pings them as a representative (displayed as `@Person Name (representing Team Name)`).
+   - **Use S-prefixed group IDs as the primary way to populate `relevant_developers`** when `.github/CODEOWNERS` maps the failing area to a team. Look up the team in `slack_groups.json` and use its `id` field. You can also include additional individuals from `git log`/`git blame`, but always include the group.
 9. **Refresh Slack directory cache (only if needed)**
    ```
    ./download_slack_directory.py [--output auto_triage/data/slack_directory.json] [--groups-output auto_triage/data/slack_groups.json] [--pretty]
    ```
    Downloads all Slack users and groups your token can access into separate files:
    - Users go to `./auto_triage/data/slack_directory.json` (consumed by `get_slack_ids.py`)
-   - Groups go to `./auto_triage/data/slack_groups.json` (maps team handles to S-prefixed IDs). When you need to use a team's Slack group ID because individual lookup failed, find the team's entry in this file and use its `id` field in `relevant_developers`.
+   - Groups go to `./auto_triage/data/slack_groups.json` (maps team handles to S-prefixed IDs). When `.github/CODEOWNERS` points to a team, find the team's entry in this file and use its `id` field in `relevant_developers`.
    The GitHub Action runs this automatically before the LLM step, but you can re-run it when debugging locally.
 10. **Sanitize Slack payload JSON**
    ```
@@ -285,7 +285,7 @@ Actions:
 1. Run the same commit download workflow as Case 1 so you understand every suspect.
 2. Populate `./output/slack_message.json` using the Case 4 template: `commits` must list **every commit in the window** (per scoring rules), each with `hash`, `url`, `author`, `approvers`, `relevant_developers`, `relevant_files`, and Slack IDs when available. **CRITICAL:** For each commit, `relevant_developers` **MUST NOT** include that commit's author or any of its approvers. Prefer **`[]` for per-commit `relevant_developers`** when ownership is expressed at the **top level** instead (see next step). Mention the relative confidence (high/medium/low) in the `slack_message` text.
 3. Set **top-level** `relevant_developers` and **`relevant_files`** the **same way as Case 2**: use `.github/CODEOWNERS` and `git log` / `git blame` on **paths implicated by the failure** in `./workspace/` (the subsystem that actually needs a fix). **Do not** build this list by aggregating authors, approvers, or “people who landed commits in the bisection window.” Those belong in commit metadata for the record and in `explanation.md`, not as the basis for Slack pings.
-   - **Sanitizer note:** `./sanitize_slack_message.py` rejects top-level `relevant_developers` who are also a commit **author** or **approver** anywhere in `commits`. If the most obvious owner is in that situation, first try to identify a different **individual** codeowner for the affected area via `.github/CODEOWNERS`, `git log`, or `git blame`. If no suitable individual owner can be identified, use the **S-prefixed group ID fallback** for that area instead of duplicating the same person; the reporter will resolve the group to the right humans.
+   - **Sanitizer note:** `./sanitize_slack_message.py` rejects top-level `relevant_developers` who are also a commit **author** or **approver** anywhere in `commits`. If this happens, use the **CODEOWNERS team's S-prefixed group ID** instead of the individual — the reporter will resolve it to a representative.
 4. In `./output/explanation.md`, clearly state this is Case 4, summarize the shared failure signature, and explain why each candidate commit could be responsible. Cite files + before/after hunks, link to each commit URL, and note the confidence bucket for every entry. Include guidance on how to validate or bisect the suspects sequentially.
 5. Treat every candidate as if it were the Case 1 culprit in the **written report**: list clickable commit links, exact error tie-in, and the "who to contact" details. Include commit authors/approvers for attribution, but prioritize codeowners of files that need to be changed (from `git log`, `git blame`, `.github/CODEOWNERS`). **Never include Slack IDs in explanation.md** - only names and GitHub information. After covering the per-commit info, add the overall contact section so humans know who to loop in—including the **top-level** Slack ping targets (subsystem owners) you chose in step 3.
 
