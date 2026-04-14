@@ -133,14 +133,20 @@ jobs:
               echo "## Bug Escape Detection"
               echo "- **max-phase**: ${{ inputs.max-phase }}"
               echo "- **consecutive-runs threshold**: ${{ inputs.consecutive-runs }}"
-              echo "- **Total bug escapes**: $total"
-              echo "  - Horizontal: $horizontal"
-              echo "  - Vertical: $vertical"
+              echo "- **lookback-days**: ${{ inputs.lookback-days }}"
+              if [ -n "${{ inputs.test-workflows }}" ]; then
+                echo "- **workflows scanned**: `${{ inputs.test-workflows }}`"
+              fi
+              echo "- **Total bug escapes**: $total (horizontal=$horizontal, vertical=$vertical)"
             } >> "$GITHUB_STEP_SUMMARY"
           else
             {
               echo "## Bug Escape Detection"
               echo "- **max-phase**: ${{ inputs.max-phase }}"
+              echo "- **lookback-days**: ${{ inputs.lookback-days }}"
+              if [ -n "${{ inputs.test-workflows }}" ]; then
+                echo "- **workflows scanned**: `${{ inputs.test-workflows }}`"
+              fi
               echo "- **Status**: No final output (max-phase=${{ inputs.max-phase }})"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
