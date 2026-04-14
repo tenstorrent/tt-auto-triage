@@ -143,6 +143,29 @@ def extract_job_id_from_url(job_url: str) -> Optional[int]:
     
     return None
 
+
+def extract_run_id_from_url(run_url: str) -> Optional[int]:
+    """Extract workflow run ID from GitHub Actions run URL.
+
+    Args:
+        run_url: GitHub Actions run URL (e.g., https://github.com/owner/repo/actions/runs/RUN_ID)
+
+    Returns:
+        Run ID as integer, or None if not found
+    """
+    if not run_url:
+        return None
+
+    try:
+        match = re.search(r'/actions/runs/(\d+)', run_url)
+        if match:
+            return int(match.group(1))
+    except (ValueError, AttributeError):
+        pass
+
+    return None
+
+
 # Job name fetching is now handled by github_api_utils.get_job_name_from_github
 # with persistent caching - this local function is no longer needed
 
@@ -577,6 +600,7 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
         job_url = error_entry[1] if len(error_entry) > 1 else None
         timestamp_str = error_entry[2] if len(error_entry) > 2 else ""
         is_nd = error_entry[5] if len(error_entry) > 5 else False
+        full_report_link = error_entry[6] if len(error_entry) > 6 else None
         
         if not error_message or not job_url:
             if not job_url:
@@ -874,6 +898,9 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
             "oldest_job_error_message": oldest_run_error_message,
             "oldest_job_slack_ts": oldest_run_timestamp_utc,
             "oldest_job_commit_hash": oldest_run_commit_hash,
+            # Auto-triage run mapping
+            "auto_triage_run_id": extract_run_id_from_url(full_report_link) if full_report_link else None,
+            "auto_triage_run_link": full_report_link,
         }
         report_entries.append(report_entry)
     
