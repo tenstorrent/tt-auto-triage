@@ -29,16 +29,14 @@ run_resolver() {
   local groups_file="$1"
   local directory_file="$2"
   shift 2
-  local files_json="[]"
-  for f in "$@"; do
-    files_json=$(echo "$files_json" | jq --arg f "$f" '. + [$f]')
-  done
+  local files_json
+  files_json=$(printf '%s\n' "$@" | jq -R . | jq -s .)
   jq -n \
     --arg groups "$groups_file" \
     --arg directory "$directory_file" \
     --argjson files "$files_json" \
     '{slack_groups: $groups, slack_directory: $directory, files: $files}' \
-  | python3 "$RESOLVE_SCRIPT"
+  | python3 "$RESOLVE_SCRIPT" || { echo "FAIL: resolver exited non-zero"; exit 1; }
 }
 
 # -- Fixture: slack_groups.json with member lists ------------------------------
@@ -205,5 +203,48 @@ multi_b_id=$(jq -r '.[0].slack_id' "$tmpdir/multi_b.json")
 
 assert "Multi-file: first file resolved" matches_regex "$multi_a_id" "^U_(ALICE|BOB)$"
 assert "Multi-file: second file resolved" matches_regex "$multi_b_id" "^U_(ALICE|BOB)$"
+
+
+# -- Test 10: Missing target file is skipped with a warning -------------------
+# process_file() should not fail when a file in the list doesn't exist
+cat > "$tmpdir/msg10_real.json" <<'EOF'
+{"relevant_developers": [{"name": "Metal Infra", "slack_id": "S111GROUP"}]}
+EOF
+
+run_resolver "$tmpdir/slack_groups.json" "$tmpdir/slack_directory.json" "$tmpdir/msg10_real.json" "$tmpdir/nonexistent_target.json"
+
+real_id=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg10_real.json")
+assert "Missing target file: real file still processed" matches_regex "$real_id" "^U_(ALICE|BOB)$"
+
+# -- Test 11: Malformed JSON target file is skipped, others still processed ---
+echo '{broken json' > "$tmpdir/msg11_bad.json"
+cat > "$tmpdir/msg11_good.json" <<'EOF'
+{"relevant_developers": [{"name": "Metal Infra", "slack_id": "S111GROUP"}]}
+EOF
+
+run_resolver "$tmpdir/slack_groups.json" "$tmpdir/slack_directory.json" "$tmpdir/msg11_bad.json" "$tmpdir/msg11_good.json"
+
+good_id=$(jq -r '.relevant_developers[0].slack_id' "$tmpdir/msg11_good.json")
+# Bad file should be unchanged (still bad JSON)
+bad_still_bad=$(cat "$tmpdir/msg11_bad.json")
+assert "Malformed target: good file still processed" matches_regex "$good_id" "^U_(ALICE|BOB)$"
+assert_eq "Malformed target: bad file left unchanged" "$bad_still_bad" "{broken json"
+
+# -- Test 12: All groups have empty users lists triggers a warning -------------
+cat > "$tmpdir/no_users_groups.json" <<'EOF'
+{"usergroups": [{"id": "S111GROUP", "handle": "metalinfra", "name": "Metal Infra", "users": []}]}
+EOF
+cat > "$tmpdir/msg12.json" <<'EOF'
+{"relevant_developers": [{"name": "Metal Infra", "slack_id": "S111GROUP"}]}
+EOF
+
+# Capture stderr to check for the warning message
+resolver_stderr=$(jq -n \
+    --arg groups "$tmpdir/no_users_groups.json" \
+    --arg directory "$tmpdir/slack_directory.json" \
+    --argjson files "["$tmpdir/msg12.json"]" \
+    '{slack_groups: $groups, slack_directory: $directory, files: $files}' \
+  | python3 "$RESOLVE_SCRIPT" 2>&1 1>/dev/null)
+assert "Empty users warning emitted" matches_regex "$resolver_stderr" "empty member lists"
 
 test_summary
