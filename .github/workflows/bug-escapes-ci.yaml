@@ -135,7 +135,7 @@ jobs:
               echo "- **consecutive-runs threshold**: ${{ inputs.consecutive-runs }}"
               echo "- **lookback-days**: ${{ inputs.lookback-days }}"
               if [ -n "${{ inputs.test-workflows }}" ]; then
-                echo "- **workflows scanned**: `${{ inputs.test-workflows }}`"
+                echo "- **workflows scanned**: \`${{ inputs.test-workflows }}\`"
               fi
               echo "- **Total bug escapes**: $total (horizontal=$horizontal, vertical=$vertical)"
             } >> "$GITHUB_STEP_SUMMARY"
@@ -145,7 +145,7 @@ jobs:
               echo "- **max-phase**: ${{ inputs.max-phase }}"
               echo "- **lookback-days**: ${{ inputs.lookback-days }}"
               if [ -n "${{ inputs.test-workflows }}" ]; then
-                echo "- **workflows scanned**: `${{ inputs.test-workflows }}`"
+                echo "- **workflows scanned**: \`${{ inputs.test-workflows }}\`"
               fi
               echo "- **Status**: No final output (max-phase=${{ inputs.max-phase }})"
             } >> "$GITHUB_STEP_SUMMARY"
