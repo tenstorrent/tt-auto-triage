@@ -17,6 +17,7 @@ source "$SCRIPT_DIR/lib/common.sh"
 OUTPUT_DIR="$SCRIPT_DIR/output"
 FAILURES_INPUT="$OUTPUT_DIR/consistent-failures.json"
 FIX_POINTS_OUTPUT="$OUTPUT_DIR/fix-points.json"
+ONGOING_FAILURES_OUTPUT="$OUTPUT_DIR/ongoing-failures.json"
 PROMPT_TEMPLATE="$SCRIPT_DIR/prompts/find_fix_commit.txt"
 
 MAX_FORWARD_RUNS=75
@@ -28,6 +29,7 @@ export CURSOR_AGENT_MAX_RETRIES=1
 export CURSOR_AGENT_TIMEOUT=120
 
 echo '[]' > "$FIX_POINTS_OUTPUT"
+echo '[]' > "$ONGOING_FAILURES_OUTPUT"
 
 num_failures=$(jq 'length' "$FAILURES_INPUT")
 log_info "Phase 3: analyzing $num_failures consistent failures for fix points"
@@ -94,6 +96,9 @@ for i in $(seq 0 $((num_failures - 1))); do
 
   if [ "$num_subsequent" -eq 0 ]; then
     log_info "    No subsequent runs found — skipping (failure may still be active)"
+    jq --argjson failure "$entry" \
+       '[ . += [{"failure": $failure, "ongoing_reason": "still_failing", "note": "No subsequent workflow runs found"}] ]' \
+       "$ONGOING_FAILURES_OUTPUT" > "${ONGOING_FAILURES_OUTPUT}.tmp" && mv "${ONGOING_FAILURES_OUTPUT}.tmp" "$ONGOING_FAILURES_OUTPUT" || true
     continue
   fi
 
@@ -145,6 +150,9 @@ for i in $(seq 0 $((num_failures - 1))); do
 
   if [ -z "$first_passing_run_id" ]; then
     log_info "    No passing run found — failure is still active, skipping"
+    jq --argjson failure "$entry" \
+       '[ . += [{"failure": $failure, "ongoing_reason": "still_failing", "note": "No passing run found in forward scan"}] ]' \
+       "$ONGOING_FAILURES_OUTPUT" > "${ONGOING_FAILURES_OUTPUT}.tmp" && mv "${ONGOING_FAILURES_OUTPUT}.tmp" "$ONGOING_FAILURES_OUTPUT" || true
     continue
   fi
 
@@ -169,6 +177,10 @@ for i in $(seq 0 $((num_failures - 1))); do
 
   if [ "$num_commits" -gt "$MAX_COMMITS_PER_WINDOW" ]; then
     log_warn "    Transition window too wide ($num_commits commits > $MAX_COMMITS_PER_WINDOW) — skipping"
+    jq --argjson failure "$entry" \
+       --arg n "$num_commits" \
+       '[ . += [{"failure": $failure, "ongoing_reason": "wide_window", "note": ("Transition has " + $n + " commits > MAX")}] ]' \
+       "$ONGOING_FAILURES_OUTPUT" > "${ONGOING_FAILURES_OUTPUT}.tmp" && mv "${ONGOING_FAILURES_OUTPUT}.tmp" "$ONGOING_FAILURES_OUTPUT" || true
     continue
   fi
 
