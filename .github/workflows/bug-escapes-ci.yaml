@@ -129,6 +129,8 @@ jobs:
             total=$(jq '.bug_escapes | length' bug-escapes/output/bug-escapes-output.json)
             horizontal=$(jq '[.bug_escapes[] | select(.type == "horizontal")] | length' bug-escapes/output/bug-escapes-output.json)
             vertical=$(jq '[.bug_escapes[] | select(.type == "vertical")] | length' bug-escapes/output/bug-escapes-output.json)
+            cross_layer=$(jq '[.bug_escapes[] | select(.type == "cross_layer")] | length' bug-escapes/output/bug-escapes-output.json)
+            unknown=$(jq '[.bug_escapes[] | select(.type == "unknown")] | length' bug-escapes/output/bug-escapes-output.json)
             {
               echo "## Bug Escape Detection"
               echo "- **max-phase**: ${{ inputs.max-phase }}"
@@ -137,7 +139,7 @@ jobs:
               if [ -n "${{ inputs.test-workflows }}" ]; then
                 echo "- **workflows scanned**: \`${{ inputs.test-workflows }}\`"
               fi
-              echo "- **Total bug escapes**: $total (horizontal=$horizontal, vertical=$vertical)"
+              echo "- **Total bug escapes**: $total (horizontal=$horizontal, vertical=$vertical, cross_layer=$cross_layer, unknown=$unknown)"
               if [ -f bug-escapes/output/ongoing-failures.json ]; then
                 ongoing=$(jq 'length' bug-escapes/output/ongoing-failures.json 2>/dev/null || echo 0)
                 echo "- **Ongoing/unresolved failures**: $ongoing (still active or commit window too wide)"

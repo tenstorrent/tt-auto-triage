@@ -130,6 +130,8 @@ log_success "Phase 4 complete — bug-escapes-output.json written"
 total=$(jq '.bug_escapes | length' "$SCRIPT_DIR/output/bug-escapes-output.json")
 horizontal=$(jq '[.bug_escapes[] | select(.type == "horizontal")] | length' "$SCRIPT_DIR/output/bug-escapes-output.json")
 vertical=$(jq '[.bug_escapes[] | select(.type == "vertical")] | length' "$SCRIPT_DIR/output/bug-escapes-output.json")
+cross_layer=$(jq '[.bug_escapes[] | select(.type == "cross_layer")] | length' "$SCRIPT_DIR/output/bug-escapes-output.json")
+unknown_count=$(jq '[.bug_escapes[] | select(.type == "unknown")] | length' "$SCRIPT_DIR/output/bug-escapes-output.json")
 
 log_success "=== Bug Escape Detection — done ==="
-log_info "Total bug escapes found: $total (horizontal=$horizontal, vertical=$vertical)"
+log_info "Total bug escapes found: $total (horizontal=$horizontal, vertical=$vertical, cross_layer=$cross_layer, unknown=$unknown_count)"
