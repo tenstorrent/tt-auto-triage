@@ -196,4 +196,50 @@ assert "JOB OWNER U-prefixed user is pinged" [ -n "$(echo "$text_owner" | grep -
 assert "JOB OWNER S-prefixed group is not pinged as subteam" [ -z "$(echo "$text_owner" | grep -F '<!subteam^S88GROUPEX' || true)" ]
 assert "JOB OWNER S-prefixed group renders as plain text name" [ -n "$(echo "$text_owner" | grep -F 'Core Team' || true)" ]
 
+
+# -- commits_section edge cases: 1 commit (no truncation note) ----------------
+# Test that a single commit does NOT produce a "more commit(s)" note.
+single_commit_json=$(jq -n '{
+  "case": 1,
+  "commits": [{"hash": "aabbccdd", "url": "", "author": {"name": "Dev", "slack_id": "U_DEV"}, "confidence": 100}],
+  "relevant_developers": [],
+  "failing_test_name": "test_foo",
+  "scenario": "test"
+}')
+
+text_single=$(echo "$single_commit_json" | jq -r -f "$SCRIPT_DIR/slack_message.jq" \
+  --arg run_url "http://example.com/1" \
+  --arg run_label "Run #1" \
+  --arg job_name "my-job" \
+  --arg workflow_name "my-workflow" \
+  --arg auto_fix "" \
+  --arg allow_pings "false" \
+  --arg job_owner_ping "")
+assert "1-commit: COMMITS section present" [ -n "$(echo "$text_single" | grep -F '*COMMITS:*' || true)" ]
+assert "1-commit: no truncation note" [ -z "$(echo "$text_single" | grep -F 'more commit(s)' || true)" ]
+
+# -- commits_section edge cases: 2 commits (shows "1 more") -------------------
+two_commit_json=$(jq -n '{
+  "case": 1,
+  "commits": [
+    {"hash": "aaaa1111", "url": "", "author": {"name": "Dev A", "slack_id": "U_A"}, "confidence": 100},
+    {"hash": "bbbb2222", "url": "", "author": {"name": "Dev B", "slack_id": "U_B"}, "confidence": 80}
+  ],
+  "relevant_developers": [],
+  "failing_test_name": "test_bar",
+  "scenario": "test"
+}')
+
+text_two=$(echo "$two_commit_json" | jq -r -f "$SCRIPT_DIR/slack_message.jq" \
+  --arg run_url "http://example.com/2" \
+  --arg run_label "Run #2" \
+  --arg job_name "my-job" \
+  --arg workflow_name "my-workflow" \
+  --arg auto_fix "" \
+  --arg allow_pings "false" \
+  --arg job_owner_ping "")
+assert "2-commits: shows first hash" [ -n "$(echo "$text_two" | grep -F 'aaaa1111' || true)" ]
+assert "2-commits: does not show second hash" [ -z "$(echo "$text_two" | grep -F 'bbbb2222' || true)" ]
+assert "2-commits: truncation note says 1 more" [ -n "$(echo "$text_two" | grep -F '1 more commit(s)' || true)" ]
+
 test_summary
