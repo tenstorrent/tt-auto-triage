@@ -292,7 +292,7 @@ runs:
         set -euo pipefail
         TARGET="${GITHUB_WORKSPACE}/.auto_triage/output"
         mkdir -p "$TARGET"
-        cp "${{ github.action_path }}/auto_triage/data/examples/sample_slack_message_group_test.json" "$TARGET/slack_message.json"
+        cp "${{ github.action_path }}/auto_triage/data/examples/sample_slack_message.json" "$TARGET/slack_message.json"
 
     - name: Debug Slack send configuration
       if: always()
