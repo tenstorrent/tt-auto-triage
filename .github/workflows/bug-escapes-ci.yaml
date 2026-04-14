@@ -138,6 +138,10 @@ jobs:
                 echo "- **workflows scanned**: \`${{ inputs.test-workflows }}\`"
               fi
               echo "- **Total bug escapes**: $total (horizontal=$horizontal, vertical=$vertical)"
+              if [ -f bug-escapes/output/ongoing-failures.json ]; then
+                ongoing=$(jq 'length' bug-escapes/output/ongoing-failures.json 2>/dev/null || echo 0)
+                echo "- **Ongoing/unresolved failures**: $ongoing (still active or commit window too wide)"
+              fi
             } >> "$GITHUB_STEP_SUMMARY"
           else
             {
