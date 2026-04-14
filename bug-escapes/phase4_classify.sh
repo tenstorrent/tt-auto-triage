@@ -178,6 +178,25 @@ for i in $(seq 0 $((num_fixpoints - 1))); do
   fi
 done
 
+# Deduplicate: if the same test_name+failure_signature appears multiple times
+# (from different workflows or batches), keep only the highest-confidence entry.
+before_dedup=$(echo "$bug_escapes" | jq 'length')
+bug_escapes=$(echo "$bug_escapes" | jq '
+  group_by(.test_name + ":" + .failure_signature) |
+  map(
+    sort_by(
+      if .fix_confidence == "high" then 0
+      elif .fix_confidence == "medium" then 1
+      else 2 end
+    ) | .[0]
+  )
+')
+after_dedup=$(echo "$bug_escapes" | jq 'length')
+if [ "$before_dedup" -ne "$after_dedup" ]; then
+  removed=$((before_dedup - after_dedup))
+  log_info "Deduplication: removed $removed duplicate escape(s) (same test seen in multiple workflows)"
+fi
+
 # Write final output
 jq -n \
   --arg gen "$generated_at" \
