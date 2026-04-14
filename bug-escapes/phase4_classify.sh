@@ -214,10 +214,11 @@ jq -n \
 total=$(echo "$bug_escapes" | jq 'length')
 horizontal=$(echo "$bug_escapes" | jq '[.[] | select(.type == "horizontal")] | length')
 vertical=$(echo "$bug_escapes" | jq '[.[] | select(.type == "vertical")] | length')
+cross_layer=$(echo "$bug_escapes" | jq '[.[] | select(.type == "cross_layer")] | length')
 unknown_count=$(echo "$bug_escapes" | jq '[.[] | select(.type == "unknown")] | length')
 skip_count=$(echo "$bug_escapes" | jq '[.[] | select(.is_skip_or_disable == true)] | length')
 
-log_info "Phase 4 done: $total bug escapes (horizontal=$horizontal, vertical=$vertical, unknown=$unknown_count, skips=$skip_count)"
+log_info "Phase 4 done: $total bug escapes (horizontal=$horizontal, vertical=$vertical, cross_layer=${cross_layer:-0}, unknown=$unknown_count, skips=$skip_count)"
 
 # Emit verify-commands.sh for high/medium confidence escapes
 verify_script="$OUTPUT_DIR/verify-commands.sh"
@@ -261,7 +262,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "| **Repository** | \`$AT_OWNER_REPO\` |"
     echo "| **Generated** | $generated_at |"
     echo "| **Lookback window** | ${lookback_start} to ${lookback_end} |"
-    echo "| **Total bug escapes** | **$total** ($horizontal horizontal, $vertical vertical, $unknown_count unknown) |"
+    echo "| **Total bug escapes** | **$total** ($horizontal horizontal, $vertical vertical, ${cross_layer:-0} cross-layer, $unknown_count unknown) |"
     if [ "$skip_count" -gt 0 ]; then
       echo "| **Test skips (not real fixes)** | $skip_count |"
     fi
@@ -298,6 +299,7 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
         case "$etype" in
           horizontal) type_badge="Horizontal" ;;
           vertical) type_badge="Vertical" ;;
+          cross_layer) type_badge="Cross-Layer" ;;
           *) type_badge="Unknown" ;;
         esac
 
