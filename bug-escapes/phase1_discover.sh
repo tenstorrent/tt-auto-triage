@@ -42,4 +42,11 @@ fi
 
 total=$(jq '.workflows | length' "$PIPELINE_CONFIG")
 other_count=$(jq '[.workflows[] | select(.classification == "other")] | length' "$PIPELINE_CONFIG")
+non_other_count=$(jq '[.workflows[] | select(.classification != "other")] | length' "$PIPELINE_CONFIG")
+
+if [ "$non_other_count" -gt 0 ]; then
+  non_other_names=$(jq -r '[.workflows[] | select(.classification != "other") | .path | gsub(".*/"; "")] | join(", ")' "$PIPELINE_CONFIG")
+  log_warn "Phase 1: $non_other_count workflow(s) will be skipped in Phase 2 (not 'other' classification): $non_other_names"
+fi
+
 log_info "Phase 1 done: $total workflows loaded ($other_count classified as 'other')"
