@@ -207,7 +207,7 @@ single_commit_json=$(jq -n '{
   "scenario": "test"
 }')
 
-text_single=$(echo "$single_commit_json" | jq -r -f "$SCRIPT_DIR/slack_message.jq" \
+text_single=$(echo "$single_commit_json" | jq -r -f "$SCRIPTS_DIR/slack_message.jq" \
   --arg run_url "http://example.com/1" \
   --arg run_label "Run #1" \
   --arg job_name "my-job" \
@@ -230,7 +230,7 @@ two_commit_json=$(jq -n '{
   "scenario": "test"
 }')
 
-text_two=$(echo "$two_commit_json" | jq -r -f "$SCRIPT_DIR/slack_message.jq" \
+text_two=$(echo "$two_commit_json" | jq -r -f "$SCRIPTS_DIR/slack_message.jq" \
   --arg run_url "http://example.com/2" \
   --arg run_label "Run #2" \
   --arg job_name "my-job" \

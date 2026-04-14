@@ -242,7 +242,7 @@ EOF
 resolver_stderr=$(jq -n \
     --arg groups "$tmpdir/no_users_groups.json" \
     --arg directory "$tmpdir/slack_directory.json" \
-    --argjson files "["$tmpdir/msg12.json"]" \
+    --argjson files "[\"$tmpdir/msg12.json\"]" \
     '{slack_groups: $groups, slack_directory: $directory, files: $files}' \
   | python3 "$RESOLVE_SCRIPT" 2>&1 1>/dev/null)
 assert "Empty users warning emitted" matches_regex "$resolver_stderr" "empty member lists"
