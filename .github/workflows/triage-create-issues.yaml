@@ -23,8 +23,8 @@ on:
         description: "Token with write access to the issue repository"
         required: true
       CURSOR_API_KEY:
-        description: "Optional Cursor API key for issue drafting"
-        required: false
+        description: "Cursor API key for issue drafting"
+        required: true
 
 permissions:
   contents: read

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -31,9 +30,9 @@ def load_all_open_issues(issue_repo: str, token: str) -> list[dict[str, Any]]:
             f"&per_page=100&page={page}",
             token,
         )
-        batch = [item for item in data if "pull_request" not in item]
-        if not batch:
+        if not data:
             break
+        batch = [item for item in data if "pull_request" not in item]
         issues.extend(
             {
                 "number": item.get("number", ""),

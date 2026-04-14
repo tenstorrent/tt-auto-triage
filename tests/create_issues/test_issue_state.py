@@ -1,6 +1,6 @@
 import unittest
 
-from tools.ci.create_issues.__main__ import sanitize_issue_text
+from tools.ci.create_issues.helpers import sanitize_text as sanitize_issue_text
 from tools.ci.create_issues.issue_state import append_base_markers, tracked_pairs_from_issues
 
 

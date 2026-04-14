@@ -8,13 +8,6 @@ AUTO_TRIAGE_LABEL = "CI auto triage"
 METADATA_START = "<!-- AUTO-TRIAGE-METADATA-START -->"
 METADATA_END = "<!-- AUTO-TRIAGE-METADATA-END -->"
 
-_BASE_MARKERS = (
-    "Auto-triage-fingerprint",
-    "Auto-triage-workflow",
-    "Auto-triage-job-name",
-    "Auto-triage-suggested-owners",
-)
-
 
 def _extract_metadata_block(body: str) -> str:
     match = re.search(
