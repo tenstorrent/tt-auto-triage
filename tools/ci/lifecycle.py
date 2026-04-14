@@ -22,6 +22,7 @@ import string
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -254,6 +255,63 @@ def _add_label(issue_number: int, label: str, token: str) -> None:
     )
 
 
+def _edit_issue_body(issue_number: int, new_body: str, token: str) -> None:
+    gh(
+        "issue", "edit", str(issue_number),
+        f"--repo={ISSUE_REPO}",
+        f"--body={new_body}",
+        token=token,
+    )
+
+
+_FAILING_URLS_RE = re.compile(
+    r"(### Failing job URLs \(last \d+ runs\)\n)"
+    r"((?:- https://github\.com/[^\n]+\n?)+)",
+)
+
+
+def _replace_failing_urls(body: str, new_urls: list[str], count: int) -> str | None:
+    """Replace the 'Failing job URLs' section in the issue body.
+
+    Returns the updated body, or None if the section wasn't found.
+    """
+    new_section = f"### Failing job URLs (last {count} runs)\n"
+    new_section += "".join(f"- {url}\n" for url in new_urls)
+
+    result, subs = _FAILING_URLS_RE.subn(new_section, body, count=1)
+    return result if subs > 0 else None
+
+
+def _update_failing_urls(
+    issue_number: int,
+    body: str,
+    failing_runs: list[dict[str, Any]],
+    token: str,
+) -> str | None:
+    """Update the issue body with new failing job URLs and post a timestamp comment.
+
+    Returns the updated body, or None if no update was made.
+    """
+    new_urls = [run["job_url"] for run in failing_runs if run.get("job_url")]
+    if not new_urls:
+        return None
+
+    updated_body = _replace_failing_urls(body, new_urls, len(new_urls))
+    if updated_body is None:
+        log(f"  #{issue_number}: could not find 'Failing job URLs' section in body -- skipping update")
+        return None
+
+    if updated_body == body:
+        log(f"  #{issue_number}: failing URLs unchanged -- skipping update")
+        return None
+
+    _edit_issue_body(issue_number, updated_body, token)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    _post_comment(issue_number, f"Failing job URLs updated. Last updated: {now}", token)
+    log(f"  #{issue_number}: updated failing URLs ({len(new_urls)} links)")
+    return updated_body
+
+
 # ---------------------------------------------------------------------------
 # Per-issue processing
 # ---------------------------------------------------------------------------
@@ -347,6 +405,16 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
                 "action": "kept_open",
                 "reason": "no new workflow runs since issue was created",
             }
+
+    # Step 2b: Update failing job URLs in the issue body if still failing.
+    if status == JobStatus.STILL_FAILING and ISSUE_WRITE_TOKEN:
+        failing_runs = get_recent_failing_run_jobs(
+            workflow_name, job_name, TARGET_REPO,
+            GITHUB_TOKEN or None, RUNS_TO_EVALUATE,
+        )
+        updated = _update_failing_urls(number, body, failing_runs, ISSUE_WRITE_TOKEN)
+        if updated is not None:
+            body = updated
 
     # Step 3: STILL_FAILING, RESOLVED, or REMOVED -- agent must analyze.
     if not os.environ.get("CURSOR_API_KEY"):
