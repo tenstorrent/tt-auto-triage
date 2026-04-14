@@ -12,6 +12,10 @@ Reads configuration from stdin as JSON:
 
 Each input file is modified in place. Person objects whose slack_id starts
 with "S" are resolved to a random active member of that group.
+
+Exit codes:
+  0 — success, or gracefully skipped (missing data files, no S-IDs found)
+  1 — invalid stdin JSON or missing required fields
 """
 
 import json
@@ -74,24 +78,29 @@ def resolve_person(person: Dict, group_index: Dict, user_index: Dict) -> bool:
 
     group = group_index.get(sid)
     if not group:
-        print(f"  Group {sid} not found in slack_groups.json, leaving as plain name")
+        print(f"  Group {sid} not found in slack_groups.json, leaving as plain name", file=sys.stderr)
         return False
 
     group_name = group.get("name") or group.get("handle") or sid
     member = pick_active_member(group, user_index)
     if not member:
-        print(f"  Group '{group_name}' ({sid}) has no active members, leaving as plain name")
+        print(f"  Group '{group_name}' ({sid}) has no active members, leaving as plain name", file=sys.stderr)
         return False
 
     chosen_name = user_display_name(member)
     person["slack_id"] = member["id"]
     person["name"] = f"{chosen_name} (representing {group_name})"
-    print(f"  Resolved group '{group_name}' -> {chosen_name} ({member['id']})")
+    print(f"  Resolved group '{group_name}' -> {chosen_name} ({member['id']})", file=sys.stderr)
     return True
 
 
 def walk_person_fields(obj: Any, group_index: Dict, user_index: Dict) -> int:
-    """Recursively walk a JSON structure and resolve all person objects."""
+    """Recursively walk a JSON structure and resolve all person objects.
+
+    A dict is treated as a person object if it has both 'slack_id' and 'name'
+    keys. This matches the schema of author, approver, and relevant_developer
+    objects in slack_message.json and job_owner.json.
+    """
     resolved = 0
     if isinstance(obj, dict):
         if "slack_id" in obj and "name" in obj:
@@ -106,24 +115,29 @@ def walk_person_fields(obj: Any, group_index: Dict, user_index: Dict) -> int:
 
 
 def process_file(filepath: Path, group_index: Dict, user_index: Dict) -> int:
-    """Load a JSON file, resolve group pings, and write it back."""
+    """Load a JSON file, resolve group pings, and write it back.
+
+    Files with resolved pings are written back with indent=2 regardless of
+    original formatting. Files that do not exist are skipped with a warning.
+    """
     if not filepath.is_file():
+        print(f"  Skipping {filepath}: file not found", file=sys.stderr)
         return 0
 
-    print(f"Processing {filepath}")
+    print(f"Processing {filepath}", file=sys.stderr)
     try:
         data = json.loads(filepath.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, ValueError) as e:
-        print(f"  Skipping {filepath}: invalid JSON ({e})")
+        print(f"  Skipping {filepath}: invalid JSON ({e})", file=sys.stderr)
         return 0
 
     resolved = walk_person_fields(data, group_index, user_index)
 
     if resolved > 0:
         filepath.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        print(f"  Resolved {resolved} group ping(s)")
+        print(f"  Resolved {resolved} group ping(s)", file=sys.stderr)
     else:
-        print(f"  No group pings found")
+        print(f"  No group pings found", file=sys.stderr)
 
     return resolved
 
@@ -139,13 +153,14 @@ def main() -> int:
     directory_path_value = config.get("slack_directory")
     files_value = config.get("files", [])
 
-    if (
-        not isinstance(groups_path_value, str) or not groups_path_value.strip()
-        or not isinstance(directory_path_value, str) or not directory_path_value.strip()
-        or not isinstance(files_value, list) or not files_value
-    ):
-        print("Error: stdin JSON must contain slack_groups, slack_directory, and files",
-              file=sys.stderr)
+    if not isinstance(groups_path_value, str) or not groups_path_value.strip():
+        print("Error: stdin JSON must contain 'slack_groups' as a non-empty string", file=sys.stderr)
+        return 1
+    if not isinstance(directory_path_value, str) or not directory_path_value.strip():
+        print("Error: stdin JSON must contain 'slack_directory' as a non-empty string", file=sys.stderr)
+        return 1
+    if not isinstance(files_value, list) or not files_value:
+        print("Error: stdin JSON must contain 'files' as a non-empty list", file=sys.stderr)
         return 1
 
     groups_path = Path(groups_path_value)
@@ -164,13 +179,22 @@ def main() -> int:
 
     group_index = build_group_index(groups_data)
     user_index = build_user_index(users_data)
-    print(f"Loaded {len(group_index)} groups, {len(user_index)} users")
+    print(f"Loaded {len(group_index)} groups, {len(user_index)} users", file=sys.stderr)
+
+    # Warn if groups exist but none have member lists — likely download_slack_directory.py
+    # was not run with include_users=true, which silently disables resolution.
+    if group_index and all(not g.get("users") for g in group_index.values()):
+        print(
+            "Warning: all groups have empty member lists -- was download_slack_directory.py "
+            "run with include_users=true?",
+            file=sys.stderr,
+        )
 
     total = 0
     for fp in file_paths:
         total += process_file(fp, group_index, user_index)
 
-    print(f"Total: {total} group ping(s) resolved")
+    print(f"Total: {total} group ping(s) resolved", file=sys.stderr)
     return 0
 
 
