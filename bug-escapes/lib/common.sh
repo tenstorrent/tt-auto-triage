@@ -144,6 +144,7 @@ be_classify_escape() {
   elif [ "$fix_level" -eq "$test_level" ]; then
     echo "horizontal"
   else
-    echo "unknown"
+    # fix_level > test_level: higher-layer change fixed a lower-layer test
+    echo "cross_layer"
   fi
 }
