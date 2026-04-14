@@ -16,18 +16,31 @@ Here are all ${NUM_COMMITS} commits between the last failing and first passing r
 
 ${COMMITS_LIST}
 
-Pick the SINGLE most likely fix commit based on the commit message relevance to the test failure. Consider:
-- Does the commit message mention the failing test, the error, or the subsystem?
-- Does the commit touch code in a layer relevant to the test?
-- Ignore CI/infra commits (.github/, scripts/) unless they directly affect test execution.
-- A commit that simply skips/disables a test is NOT a real fix — it is a workaround.
+Scan this commit list and identify the SINGLE most likely fix commit. Strategy:
+1. First pass — eliminate obvious non-fixes:
+   - CI/infra only commits (changes only to .github/, scripts/, cmake/, docs/)
+   - Formatting/style-only commits (clang-format, copyright, whitespace)
+   - Unrelated feature additions in a completely different subsystem
+2. Second pass — identify candidates by relevance:
+   - Commit message mentions the failing test name, its module, or its error keyword
+   - Commit message says "fix", "revert", "restore", "resolve", "workaround" for the affected subsystem
+   - Changed files are in the same layer as the test (or a lower layer that the test depends on)
+3. Third pass — if multiple candidates remain, prefer:
+   - Commits mentioning the exact test name or error signature
+   - Reverts (they undo a regression exactly)
+   - Higher-specificity matches over broad refactors
+
+IMPORTANT DISTINCTIONS:
+- A commit that adds `@pytest.mark.skip`, `pytest.importorskip`, `xfail`, disables via config, or removes the test is a SKIP/DISABLE workaround, NOT a real fix. Set is_skip_or_disable=true.
+- A revert of a previous commit IS a real fix (restores a working state). Set is_skip_or_disable=false.
+- If no commit plausibly fixes the specific test/error, return is_likely_fix=false and sha=null.
 
 Respond with ONLY a JSON object (no markdown, no explanation):
 {
   "sha": "<full 40-char commit SHA, or null if no plausible fix>",
   "is_likely_fix": true or false,
-  "is_skip_or_disable": true if the commit just skips/disables/xfails the test rather than fixing root cause,
-  "fix_confidence": "high", "medium", or "low",
+  "is_skip_or_disable": true if the commit skips/disables/xfails/removes the test rather than fixing root cause,
+  "fix_confidence": "high" (commit directly mentions test or error), "medium" (related subsystem), or "low" (indirect or uncertain),
   "fix_layer": "<one of: tt-llk, tt-metalium, ttnn, models, or unknown>",
-  "reasoning": "<2-4 sentences explaining WHY this commit would fix the failure. You MUST explicitly name which architectural layer the fix is in and which layer the failing test is in (e.g. 'This is a fix in the ttnn layer that resolves a failure in a models-layer test'). Then describe the causal chain: what was broken, what the commit changed, and why that resolves the specific error signature. If unsure, say so.>"
+  "reasoning": "<2-4 sentences. MUST explicitly name: (1) which layer the fix is in, (2) which layer the failing test is in, (3) the causal chain — what was broken and how this commit resolves the specific error signature. If returning is_likely_fix=false, explain why none of the commits are a plausible fix.>"
 }
