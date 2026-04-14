@@ -127,10 +127,11 @@ AUTO_FIX_NOTE=""
 RESOLVE_SCRIPT="$SCRIPT_DIR/resolve_group_pings.py"
 SLACK_DATA_DIR=".auto_triage/auto_triage/data"
 if [ -f "$RESOLVE_SCRIPT" ] && [ -d "$SLACK_DATA_DIR" ]; then
-  RESOLVE_FILES_JSON="[]"
-  [ -f "$MESSAGE_PATH" ] && RESOLVE_FILES_JSON=$(echo "$RESOLVE_FILES_JSON" | jq --arg f "$MESSAGE_PATH" '. + [$f]')
-  [ -f "$JOB_OWNER_FILE" ] && RESOLVE_FILES_JSON=$(echo "$RESOLVE_FILES_JSON" | jq --arg f "$JOB_OWNER_FILE" '. + [$f]')
-  if [ "$RESOLVE_FILES_JSON" != "[]" ]; then
+  # MESSAGE_PATH is already validated above; JOB_OWNER_FILE is optional
+  _resolve_files=("$MESSAGE_PATH")
+  [ -f "$JOB_OWNER_FILE" ] && _resolve_files+=("$JOB_OWNER_FILE")
+  RESOLVE_FILES_JSON=$(printf '%s\n' "${_resolve_files[@]}" | jq -R . | jq -s .)
+  if true; then
     jq -n \
       --arg groups "$SLACK_DATA_DIR/slack_groups.json" \
       --arg directory "$SLACK_DATA_DIR/slack_directory.json" \
@@ -142,7 +143,8 @@ fi
 
 JOB_OWNER_PING=""
 if [ -f "$JOB_OWNER_FILE" ]; then
-  # Groups/subteams (S-prefixed IDs) are never pinged to avoid spamming entire teams
+  # resolve_group_pings.py already converted resolvable S-IDs to U-IDs above.
+  # Any remaining S-prefixed IDs are unresolvable groups -- exclude them from pings.
   JOB_OWNER_PING=$(jq -r --arg allow "${ALLOW_PINGS:-false}" '
     [.[] | select(.name != "") |
       if ($allow == "true") and ((.slack_id // "") != "") and ((.slack_id | startswith("S")) | not) then
