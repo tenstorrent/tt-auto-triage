@@ -13,9 +13,10 @@ When EXTRACT_ALL_ERRORS is True:
 All errors are extracted from the "FAILURE MESSAGE:" field as-is, without any truncation or cleanup.
 Entries without "FAILURE MESSAGE:" are skipped.
 
-Output format: [error_message, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd]
+Output format: [error_message, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd, full_report_link]
 All fields except error_message can be None if not available.
 is_nd is a boolean indicating if the error is marked as non-deterministic (ND).
+full_report_link is the URL to the auto-triage workflow run that analyzed this failure.
 """
 
 import json
@@ -225,9 +226,11 @@ def main():
                     job_name = parsed_job
             # Determine if this is an ND error
             is_nd = is_non_deterministic(entry)
-            # Save as list: [error_message, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd]
+            # Extract full_report_link (URL to the auto-triage workflow run)
+            full_report_link = entry.get("full_report_link", "") or None
+            # Save as list: [error_message, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd, full_report_link]
             # Use None if URL, timestamp, job, or workflow not found
-            errors.append([error_msg, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd])
+            errors.append([error_msg, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd, full_report_link])
         else:
             skipped += 1
 
