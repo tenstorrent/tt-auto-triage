@@ -23,8 +23,13 @@
     "tt_stl/": "tt-metalium",
     "tests/tt_metal/": "tt-metalium",
     "tests/ttnn/": "ttnn",
+    "tests/sweep_tests/": "ttnn",
     "tests/nightly/": "models",
+    "tests/perf_tests/": "models",
+    "tests/scripts/": "multi-layer",
     "ttnn/": "ttnn",
+    "tt_eager/": "ttnn",
+    "tt_lib/": "ttnn",
     "models/": "models",
     "tt-train/": "models"
   },
