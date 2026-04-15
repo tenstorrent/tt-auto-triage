@@ -5,8 +5,8 @@ set -euo pipefail
 #
 # Completely separate from the detection pipeline (Phases 1-4).
 # Takes a specific bug escape prediction as input and validates it by:
-#   1. Creating before/after branches around the fix commit
-#   2. Pruning the test matrix to run only the relevant test
+#   1. Creating before/after branches via GitHub API (no git push needed)
+#   2. Pruning the test matrix YAML via GitHub Contents API
 #   3. Dispatching workflow runs on both branches
 #   4. Polling until complete
 #   5. Comparing results to confirm or refute the prediction
@@ -16,7 +16,8 @@ set -euo pipefail
 #   TEST_PIPELINE     — workflow file (e.g. .github/workflows/galaxy-e2e-tests.yaml)
 #   TEST_JOB          — job display name (e.g. "BH Galaxy CCL tests")
 #   TEST_NAME         — full pytest path (e.g. tests/.../test_foo.py::test_bar)
-#   REPO_DIR          — path to the tt-metal checkout
+#   REPO_DIR          — path to the tt-metal checkout (used for YAML discovery only)
+#   GITHUB_TOKEN      — token with contents:write and actions:write on OWNER_REPO
 #
 # Optional:
 #   POLL_INTERVAL     — seconds between status checks (default: 120)
@@ -33,6 +34,7 @@ TEST_PIPELINE="${TEST_PIPELINE:?TEST_PIPELINE is required}"
 TEST_JOB="${TEST_JOB:?TEST_JOB is required}"
 TEST_NAME="${TEST_NAME:?TEST_NAME is required}"
 REPO_DIR="${REPO_DIR:?REPO_DIR is required}"
+GITHUB_TOKEN="${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
 POLL_INTERVAL="${POLL_INTERVAL:-120}"
 MAX_WAIT_MINUTES="${MAX_WAIT_MINUTES:-120}"
 OWNER_REPO="${OWNER_REPO:-tenstorrent/tt-metal}"
@@ -43,10 +45,72 @@ SHORT_SHA="${FIX_COMMIT_SHA:0:8}"
 BRANCH_BEFORE="verify-${SHORT_SHA}-before"
 BRANCH_AFTER="verify-${SHORT_SHA}-after"
 
+# ---- GitHub API helpers (avoid git push / workflow scope issues) ----
+
+api_delete_branch() {
+  local branch="$1"
+  curl -sf -X DELETE \
+    -H "Authorization: token $GITHUB_TOKEN" \
+    "https://api.github.com/repos/$OWNER_REPO/git/refs/heads/$branch" \
+    2>/dev/null || true
+}
+
+api_create_or_reset_branch() {
+  local branch="$1" sha="$2"
+  # Try create first; if it exists (422), force-update instead
+  local http_code
+  http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+    -H "Authorization: token $GITHUB_TOKEN" \
+    -H "Content-Type: application/json" \
+    "https://api.github.com/repos/$OWNER_REPO/git/refs" \
+    -d "{\"ref\": \"refs/heads/$branch\", \"sha\": \"$sha\"}")
+
+  if [ "$http_code" = "422" ]; then
+    # Branch already exists — force update
+    curl -sf -X PATCH \
+      -H "Authorization: token $GITHUB_TOKEN" \
+      -H "Content-Type: application/json" \
+      "https://api.github.com/repos/$OWNER_REPO/git/refs/heads/$branch" \
+      -d "{\"sha\": \"$sha\", \"force\": true}" > /dev/null
+  elif [ "$http_code" != "201" ]; then
+    verify_error "Failed to create branch $branch (HTTP $http_code)"
+    return 1
+  fi
+}
+
+api_update_file() {
+  local branch="$1" file_path="$2" content="$3"
+
+  # Get current file SHA on the branch
+  local file_sha
+  file_sha=$(curl -sf \
+    -H "Authorization: token $GITHUB_TOKEN" \
+    "https://api.github.com/repos/$OWNER_REPO/contents/$file_path?ref=$branch" \
+    | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])")
+
+  # Base64-encode content (no line wrapping — API expects unwrapped)
+  local encoded_content
+  encoded_content=$(echo "$content" | base64 -w0)
+
+  local result
+  result=$(curl -sf -X PUT \
+    -H "Authorization: token $GITHUB_TOKEN" \
+    -H "Content-Type: application/json" \
+    "https://api.github.com/repos/$OWNER_REPO/contents/$file_path" \
+    -d "{
+      \"message\": \"verify: prune test matrix for bug escape verification\",
+      \"content\": \"$encoded_content\",
+      \"sha\": \"$file_sha\",
+      \"branch\": \"$branch\"
+    }")
+
+  echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print('Updated', r.get('commit',{}).get('sha','?'))"
+}
+
 cleanup_branches() {
   verify_info "Cleaning up verification branches"
-  (cd "$REPO_DIR" && git push origin --delete "$BRANCH_BEFORE" 2>/dev/null || true)
-  (cd "$REPO_DIR" && git push origin --delete "$BRANCH_AFTER" 2>/dev/null || true)
+  api_delete_branch "$BRANCH_BEFORE"
+  api_delete_branch "$BRANCH_AFTER"
 }
 
 write_result() {
@@ -85,7 +149,6 @@ write_result() {
   verify_info "Verdict: $verdict — $reason"
   verify_info "Result written to $result_file"
 
-  # Write GitHub step summary if available
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     {
       echo "## Bug Escape Verification"
@@ -157,42 +220,21 @@ verify_info "SKU flags: $SKU_FLAGS"
 PRUNED_YAML=$(build_pruned_yaml "$TEST_JOB" "$TEST_NAME" "$TEST_ENTRY_JSON")
 verify_info "Pruned YAML generated ($(echo "$PRUNED_YAML" | wc -l) lines)"
 
-# ---- Step 5: Create branches and push ----
+# ---- Step 5: Create branches and update file via GitHub API ----
+# (Using the API avoids git push, which requires 'workflow' PAT scope
+#  even when the pushed files are not in .github/workflows/)
 
-# Configure git identity for CI
-git config user.email "triage-bot@tenstorrent.com"
-git config user.name "Triage Bot"
-
-# Clean up any existing verification branches before creating new ones
 cleanup_branches
 
-# Save current HEAD to restore later
-ORIGINAL_HEAD=$(git rev-parse HEAD)
-
-create_and_push_branch() {
-  local branch_name="$1" target_sha="$2"
-
-  # Delete local branch if it already exists (stale from previous run)
-  git branch -D "$branch_name" 2>/dev/null || true
-
-  git checkout -b "$branch_name" "$target_sha"
-
-  echo "$PRUNED_YAML" > "$REPO_DIR/$TESTS_YAML_PATH"
-  git add "$TESTS_YAML_PATH"
-  git commit -m "verify: prune test matrix for bug escape verification" --allow-empty
-
-  verify_info "Pushing $branch_name..."
-  git push -u origin "$branch_name" --force
-}
-
 verify_info "Creating branch $BRANCH_BEFORE at $PARENT_SHA"
-create_and_push_branch "$BRANCH_BEFORE" "$PARENT_SHA"
+api_create_or_reset_branch "$BRANCH_BEFORE" "$PARENT_SHA"
+verify_info "Updating $TESTS_YAML_PATH on $BRANCH_BEFORE"
+api_update_file "$BRANCH_BEFORE" "$TESTS_YAML_PATH" "$PRUNED_YAML"
 
 verify_info "Creating branch $BRANCH_AFTER at $FIX_COMMIT_SHA"
-create_and_push_branch "$BRANCH_AFTER" "$FIX_COMMIT_SHA"
-
-# Restore HEAD
-git checkout "$ORIGINAL_HEAD" --detach 2>/dev/null || true
+api_create_or_reset_branch "$BRANCH_AFTER" "$FIX_COMMIT_SHA"
+verify_info "Updating $TESTS_YAML_PATH on $BRANCH_AFTER"
+api_update_file "$BRANCH_AFTER" "$TESTS_YAML_PATH" "$PRUNED_YAML"
 
 # ---- Step 6: Dispatch workflow runs ----
 
@@ -210,7 +252,6 @@ gh workflow run "$WF_BASENAME" --ref "$BRANCH_AFTER" $SKU_FLAGS || {
   exit 1
 }
 
-# Wait a moment for runs to register
 sleep 15
 
 # ---- Step 7: Find the run IDs ----
