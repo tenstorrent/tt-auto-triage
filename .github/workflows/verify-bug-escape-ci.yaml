@@ -57,13 +57,12 @@ on:
         default: "120"
     secrets:
       GITHUB_WRITE_TOKEN:
-        description: "Token with contents:write, workflows:write and actions:write to push branches and dispatch workflows"
+        description: "Token with contents:write and actions:write to push branches and dispatch workflows"
         required: true
 
 permissions:
   contents: write
   actions: write
-  workflows: write
 
 jobs:
   verify:
@@ -77,7 +76,7 @@ jobs:
           ref: ebanerjee/bug-escapes
           path: triage
 
-      - name: Checkout tt-metal (for branch creation and YAML discovery)
+      - name: Checkout tt-metal (for YAML discovery)
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/tt-metal
