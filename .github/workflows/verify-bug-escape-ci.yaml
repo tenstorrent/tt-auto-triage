@@ -1,6 +1,6 @@
 name: "(triage) Verify Bug Escape"
 
-# Can be called as a reusable workflow (from bug-escapes-ci.yaml auto-verify)
+# Can be called as a reusable workflow (from triage-ci.yaml via workflow_call)
 # OR dispatched directly via workflow_dispatch / gh workflow run.
 on:
   workflow_dispatch:
@@ -57,12 +57,13 @@ on:
         default: "120"
     secrets:
       GITHUB_WRITE_TOKEN:
-        description: "Token with contents:write and actions:write to push branches and dispatch workflows"
+        description: "Token with contents:write, workflows:write and actions:write to push branches and dispatch workflows"
         required: true
 
 permissions:
   contents: write
   actions: write
+  workflows: write
 
 jobs:
   verify:
@@ -112,4 +113,3 @@ jobs:
           path: triage/bug-escapes/verify/output/
           retention-days: 30
           if-no-files-found: warn
-
