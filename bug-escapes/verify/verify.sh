@@ -147,7 +147,7 @@ if [ -z "$TEST_ENTRY_JSON" ] || [ "$TEST_ENTRY_JSON" = "null" ]; then
   exit 1
 fi
 
-verify_info "Found test entry: $(echo "$TEST_ENTRY_JSON" | jq -r '.name' 2>/dev/null)"
+verify_info "Found test entry: $(echo "$TEST_ENTRY_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('name','?'))")"
 
 SKU_FLAGS=$(derive_sku_flags "$TEST_ENTRY_JSON" "$WF_BASENAME" "$REPO_DIR")
 verify_info "SKU flags: $SKU_FLAGS"
@@ -159,23 +159,30 @@ verify_info "Pruned YAML generated ($(echo "$PRUNED_YAML" | wc -l) lines)"
 
 # ---- Step 5: Create branches and push ----
 
-# Ensure we don't leave stale branches
+# Configure git identity for CI
+git config user.email "triage-bot@tenstorrent.com"
+git config user.name "Triage Bot"
+
+# Clean up any existing verification branches before creating new ones
 cleanup_branches
 
-# Save current branch/HEAD to restore later
-ORIGINAL_REF=$(git symbolic-ref --short HEAD 2>/dev/null || git rev-parse HEAD)
+# Save current HEAD to restore later
+ORIGINAL_HEAD=$(git rev-parse HEAD)
 
 create_and_push_branch() {
   local branch_name="$1" target_sha="$2"
 
-  git checkout -b "$branch_name" "$target_sha" 2>/dev/null || {
-    git checkout "$branch_name" 2>/dev/null && git reset --hard "$target_sha"
-  }
+  # Delete local branch if it already exists (stale from previous run)
+  git branch -D "$branch_name" 2>/dev/null || true
+
+  git checkout -b "$branch_name" "$target_sha"
 
   echo "$PRUNED_YAML" > "$REPO_DIR/$TESTS_YAML_PATH"
   git add "$TESTS_YAML_PATH"
-  git commit -m "verify: prune test matrix for bug escape verification" --allow-empty 2>/dev/null || true
-  git push -u origin "$branch_name" --force 2>/dev/null
+  git commit -m "verify: prune test matrix for bug escape verification" --allow-empty
+
+  verify_info "Pushing $branch_name..."
+  git push -u origin "$branch_name" --force
 }
 
 verify_info "Creating branch $BRANCH_BEFORE at $PARENT_SHA"
@@ -184,20 +191,20 @@ create_and_push_branch "$BRANCH_BEFORE" "$PARENT_SHA"
 verify_info "Creating branch $BRANCH_AFTER at $FIX_COMMIT_SHA"
 create_and_push_branch "$BRANCH_AFTER" "$FIX_COMMIT_SHA"
 
-# Restore original ref
-git checkout "$ORIGINAL_REF" 2>/dev/null || true
+# Restore HEAD
+git checkout "$ORIGINAL_HEAD" --detach 2>/dev/null || true
 
 # ---- Step 6: Dispatch workflow runs ----
 
 verify_info "Dispatching BEFORE run on $BRANCH_BEFORE"
-gh workflow run "$WF_BASENAME" --ref "$BRANCH_BEFORE" $SKU_FLAGS 2>/dev/null || {
+gh workflow run "$WF_BASENAME" --ref "$BRANCH_BEFORE" $SKU_FLAGS || {
   write_result "inconclusive" "Failed to dispatch BEFORE run"
   cleanup_branches
   exit 1
 }
 
 verify_info "Dispatching AFTER run on $BRANCH_AFTER"
-gh workflow run "$WF_BASENAME" --ref "$BRANCH_AFTER" $SKU_FLAGS 2>/dev/null || {
+gh workflow run "$WF_BASENAME" --ref "$BRANCH_AFTER" $SKU_FLAGS || {
   write_result "inconclusive" "Failed to dispatch AFTER run"
   cleanup_branches
   exit 1
