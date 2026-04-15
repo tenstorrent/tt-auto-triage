@@ -285,8 +285,9 @@ echo "$bug_escapes" | jq -c '.[]' | while IFS= read -r escape; do
   fi
 
   echo "echo \"Dispatching verification for $tname (fix: ${fix_sha:0:8})\"" >> "$verify_script"
-  echo "gh workflow run verify-bug-escape.yaml \\" >> "$verify_script"
-  echo "  -R tenstorrent/tt-metal \\" >> "$verify_script"
+  echo "gh workflow run verify-bug-escape-ci.yaml \\" >> "$verify_script"
+  echo "  -R tenstorrent/tt-auto-triage \\" >> "$verify_script"
+  echo "  --ref ebanerjee/bug-escapes \\" >> "$verify_script"
   echo "  -f fix-commit-sha=$fix_sha \\" >> "$verify_script"
   echo "  -f test-pipeline=$pipeline \\" >> "$verify_script"
   echo "  -f test-job=\"$job\" \\" >> "$verify_script"
