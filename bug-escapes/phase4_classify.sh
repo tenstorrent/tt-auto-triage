@@ -35,12 +35,44 @@ bug_escapes="[]"
 for i in $(seq 0 $((num_fixpoints - 1))); do
   fp=$(jq -c ".[$i]" "$FIX_POINTS_INPUT")
 
-  # Skip entries that were filtered out (e.g. flaky)
+  # Skip entries that were filtered out (e.g. flaky, spurious transitions)
   skipped_reason=$(echo "$fp" | jq -r '.skipped_reason // empty' 2>/dev/null || echo "")
   if [ -n "$skipped_reason" ]; then
     skip_test=$(echo "$fp" | jq -r '.failure.test_name // "unknown"')
     log_info "  [$((i+1))] Skipping $skip_test (reason: $skipped_reason)"
     continue
+  fi
+
+  # Skip entries where the fix transition was unstable (post-fix stability check failed).
+  # These had a spurious pass followed by continued failures — fix attribution is unreliable.
+  post_fix_stable=$(echo "$fp" | jq -r '.post_fix_stable // "unknown"')
+  if [ "$post_fix_stable" = "false" ]; then
+    skip_test=$(echo "$fp" | jq -r '.failure.test_name // "unknown"')
+    pf_pass=$(echo "$fp" | jq -r '.post_fix_pass_count // 0')
+    pf_fail=$(echo "$fp" | jq -r '.post_fix_fail_count // 0')
+    log_warn "  [$((i+1))] Skipping $skip_test — spurious fix transition (post-fix: ${pf_pass} pass, ${pf_fail} fail)"
+    continue
+  fi
+
+  # Skip low-confidence attributions for pre-existing failures.
+  # If the failure streak was already present at the start of the lookback window AND
+  # the fix attribution confidence is only "low", we can't reliably say when the regression
+  # started or that this commit is the right fix. Suppress it to avoid false positives.
+  streak_at_edge=$(echo "$fp" | jq -r '.streak_starts_at_window_edge // false')
+  if [ "$streak_at_edge" = "true" ]; then
+    # Read confidence from the best candidate fix commit
+    best_conf=$(echo "$fp" | jq -r '
+      .candidate_fix_commits
+      | sort_by(if .confidence == "high" then 0 elif .confidence == "medium" then 1 else 2 end)
+      | .[0].confidence // "low"
+    ')
+    if [ "$best_conf" = "low" ]; then
+      skip_test=$(echo "$fp" | jq -r '.failure.test_name // "unknown"')
+      log_warn "  [$((i+1))] Skipping $skip_test — pre-existing failure (streak_starts_at_window_edge=true) with low-confidence attribution"
+      continue
+    else
+      log_warn "  [$((i+1))] $(echo "$fp" | jq -r '.failure.test_name // "unknown"'): pre-existing failure (streak_at_edge=true) but keeping — attribution confidence is $best_conf"
+    fi
   fi
 
   # Extract failure info
@@ -121,6 +153,11 @@ for i in $(seq 0 $((num_fixpoints - 1))); do
     log_info "  [$((i+1))] $test_name: $escape_type escape (test=$test_layer, fix=$fix_layer)"
   fi
 
+  post_fix_stable_val=$(echo "$fp" | jq -r '.post_fix_stable // "unknown"')
+  post_fix_pass_val=$(echo "$fp" | jq -r '.post_fix_pass_count // 0')
+  post_fix_fail_val=$(echo "$fp" | jq -r '.post_fix_fail_count // 0')
+  streak_edge_val=$(echo "$fp" | jq -r '.streak_starts_at_window_edge // false')
+
   bug_escapes=$(echo "$bug_escapes" | jq \
     --arg type "$escape_type" \
     --arg tn "$test_name" \
@@ -145,6 +182,10 @@ for i in $(seq 0 $((num_fixpoints - 1))); do
     --arg pr_num "$pr_number" \
     --arg pr_url "$pr_url" \
     --arg pr_title "$pr_title" \
+    --arg pf_stable "$post_fix_stable_val" \
+    --argjson pf_pass "$post_fix_pass_val" \
+    --argjson pf_fail "$post_fix_fail_val" \
+    --argjson streak_edge "$([ "$streak_edge_val" = "true" ] && echo true || echo false)" \
     '. += [{
       "type": $type,
       "test_name": $tn,
@@ -165,6 +206,10 @@ for i in $(seq 0 $((num_fixpoints - 1))); do
       "fix_commit_files_changed": $ff,
       "fix_confidence": $conf,
       "is_skip_or_disable": ($is_skip == "true"),
+      "post_fix_stable": $pf_stable,
+      "post_fix_pass_count": $pf_pass,
+      "post_fix_fail_count": $pf_fail,
+      "streak_starts_at_window_edge": $streak_edge,
       "pr_number": (if $pr_num == "" then null else ($pr_num | tonumber) end),
       "pr_url": (if $pr_url == "" then null else $pr_url end),
       "pr_title": (if $pr_title == "" then null else $pr_title end),
@@ -324,7 +369,22 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
         echo "| **Confidence** | ${conf_badge} |"
         echo "| **Test** | \`${tn}\` |"
         echo "| **Failure signature** | ${fs} |"
+        e_streak_edge=$(echo "$escape" | jq -r '.streak_starts_at_window_edge // false')
+        if [ "$e_streak_edge" = "true" ]; then
+          echo "| **⚠️ Pre-existing failure** | Failure streak began before the lookback window — start date unknown |"
+        fi
         echo "| **Fix commit** | [\`${fsha:0:10}\`](${commit_url}) — ${fm} |"
+
+        pf_stable_val=$(echo "$escape" | jq -r '.post_fix_stable // "unknown"')
+        pf_pass_val=$(echo "$escape" | jq -r '.post_fix_pass_count // 0')
+        pf_fail_val=$(echo "$escape" | jq -r '.post_fix_fail_count // 0')
+        case "$pf_stable_val" in
+          "true")    pf_badge="✅ Stable (${pf_pass_val}/${$((pf_pass_val + pf_fail_val))} pass)" ;;
+          "false")   pf_badge="❌ Unstable (${pf_pass_val}/${$((pf_pass_val + pf_fail_val))} pass)" ;;
+          "insufficient_data") pf_badge="⚠️ Insufficient data (${pf_pass_val}p/${pf_fail_val}f)" ;;
+          *)         pf_badge="—" ;;
+        esac
+        echo "| **Post-fix stability** | ${pf_badge} |"
 
         if [ -n "$e_pr_url" ] && [ -n "$e_pr_num" ]; then
           echo "| **Pull request** | [#${e_pr_num}](${e_pr_url}) |"

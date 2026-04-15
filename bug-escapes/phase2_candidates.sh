@@ -183,15 +183,19 @@ for i in $(seq 0 $((num_workflows - 1))); do
     continue
   fi
 
-  # Flakiness pre-filter: score each candidate using its full timeline
-  # A job is likely_flaky if its failure rate is between 0.2 and 0.8 AND
-  # it shows pass-fail-pass alternation (not a clean streak).
+  # Flakiness pre-filter: score each candidate using its full timeline.
+  # Two signals:
+  #   1. likely_flaky — moderate failure rate with frequent pass/fail alternation
+  #   2. streak_starts_at_window_edge — the failure streak already existed at the start of
+  #      the lookback window (first run in the timeline is also a failure). This is a
+  #      pre-existing failure, not a new regression — mark it separately so downstream
+  #      phases treat it with lower confidence.
   candidate_jobs=$(echo "$candidate_jobs" | jq -c --slurpfile tl "$job_timeline_file" '
     [.[] | . as $cand |
       ($tl[0][$cand.job] // []) as $runs |
       ($runs | sort_by(.created_at)) as $sorted |
       ($sorted | length) as $total |
-      if $total < 3 then . + {"likely_flaky": false, "flake_score": 0}
+      if $total < 3 then . + {"likely_flaky": false, "flake_score": 0, "streak_starts_at_window_edge": false}
       else
         ([$sorted[].conclusion | select(. == "failure")] | length) as $fails |
         ($fails / $total) as $ratio |
@@ -201,11 +205,11 @@ for i in $(seq 0 $((num_workflows - 1))); do
         ) | add // 0) as $alternations |
         ($alternations / ($total - 1)) as $alt_rate |
         # Flaky: moderate failure rate + frequent alternation
-        if ($ratio > 0.2 and $ratio < 0.8 and $alt_rate > 0.3) then
-          . + {"likely_flaky": true, "flake_score": $alt_rate}
-        else
-          . + {"likely_flaky": false, "flake_score": $alt_rate}
-        end
+        ($ratio > 0.2 and $ratio < 0.8 and $alt_rate > 0.3) as $is_flaky |
+        # Pre-existing: first run in timeline is already a failure
+        ($sorted[0].conclusion == "failure") as $edge_fail |
+        . + {"likely_flaky": $is_flaky, "flake_score": $alt_rate,
+             "streak_starts_at_window_edge": $edge_fail}
       end
     ]
   ')
