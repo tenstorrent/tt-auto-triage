@@ -32,35 +32,22 @@ on:
         description: "How many days back to scan for failures"
         type: string
         default: "14"
-      auto-verify:
-        description: "Automatically run verification for the first detected escape (true/false)"
-        type: string
-        default: "false"
     secrets:
       GITHUB_READ_TOKEN:
         description: "Token with read access to target-repo workflow runs"
         required: true
-      GITHUB_WRITE_TOKEN:
-        description: "Token with contents:write and actions:write on tt-metal (for verification)"
-        required: false
       CURSOR_API_KEY:
         description: "Cursor CLI API key for agent-driven steps"
         required: true
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
+  actions: read
 
 jobs:
   detect:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    outputs:
-      has_escape: ${{ steps.export-escape.outputs.has_escape }}
-      fix_commit_sha: ${{ steps.export-escape.outputs.fix_commit_sha }}
-      test_pipeline: ${{ steps.export-escape.outputs.test_pipeline }}
-      test_job: ${{ steps.export-escape.outputs.test_job }}
-      test_name: ${{ steps.export-escape.outputs.test_name }}
     steps:
       - name: Checkout tt-auto-triage (bug-escapes branch)
         uses: actions/checkout@v4
@@ -107,34 +94,6 @@ jobs:
           chmod +x bug-escapes/run.sh
           ./bug-escapes/run.sh
 
-      - name: Export first escape for verification
-        id: export-escape
-        if: inputs.auto-verify == 'true' && inputs.max-phase == '4'
-        run: |
-          set -euo pipefail
-          if [ ! -f bug-escapes/output/bug-escapes-output.json ]; then
-            echo "has_escape=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          escape=$(jq -c '[.bug_escapes[] | select(
-            .type != "unknown" and
-            .fix_commit_sha != null and
-            .fix_commit_sha != "unknown" and
-            .fix_commit_sha != ""
-          )] | first // empty' bug-escapes/output/bug-escapes-output.json)
-          if [ -z "$escape" ] || [ "$escape" = "null" ]; then
-            echo "has_escape=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_escape=true" >> "$GITHUB_OUTPUT"
-            echo "fix_commit_sha=$(echo "$escape" | jq -r '.fix_commit_sha')" >> "$GITHUB_OUTPUT"
-            echo "test_pipeline=$(echo "$escape" | jq -r '.test_pipeline')" >> "$GITHUB_OUTPUT"
-            echo "test_job=$(echo "$escape" | jq -r '.test_job')" >> "$GITHUB_OUTPUT"
-            # test_name may contain special chars — use base64 to avoid injection
-            tname=$(echo "$escape" | jq -r '.test_name')
-            echo "test_name=$tname" >> "$GITHUB_OUTPUT"
-            echo "::notice::Will verify: $tname"
-          fi
-
       - name: Upload bug escapes output
         if: always()
         uses: actions/upload-artifact@v4
@@ -178,17 +137,3 @@ jobs:
               echo "- **Status**: No final output (max-phase=${{ inputs.max-phase }})"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-
-  verify:
-    needs: detect
-    if: inputs.auto-verify == 'true' && inputs.max-phase == '4' && needs.detect.outputs.has_escape == 'true'
-    uses: tenstorrent/tt-auto-triage/.github/workflows/verify-bug-escape-ci.yaml@ebanerjee/bug-escapes
-    with:
-      fix-commit-sha: ${{ needs.detect.outputs.fix_commit_sha }}
-      test-pipeline: ${{ needs.detect.outputs.test_pipeline }}
-      test-job: ${{ needs.detect.outputs.test_job }}
-      test-name: ${{ needs.detect.outputs.test_name }}
-      poll-interval-seconds: "30"
-      max-wait-minutes: "120"
-    secrets:
-      GITHUB_WRITE_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN }}
