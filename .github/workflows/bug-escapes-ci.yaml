@@ -47,7 +47,7 @@ on:
 
 permissions:
   contents: read
-  actions: read
+  actions: write
 
 jobs:
   bug-escapes:
@@ -111,7 +111,7 @@ jobs:
       - name: Auto-verify detected escapes
         if: inputs.auto-verify == 'true' && inputs.max-phase == '4'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_READ_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           verify_script="bug-escapes/output/verify-commands.sh"
