@@ -45,8 +45,13 @@ for i in $(seq 0 $((num_failures - 1))); do
   # failing_run_ids is [{run_id, job_id}, ...] — extract last run_id
   last_failing_run_id=$(echo "$failing_run_ids" | jq '.[-1].run_id // .[-1]')
   likely_flaky=$(echo "$entry" | jq -r '.likely_flaky // false')
+  streak_at_edge=$(echo "$entry" | jq -r '.streak_starts_at_window_edge // false')
 
   log_info "  [$((i+1))/$num_failures] $job_name — looking for fix after run $last_failing_run_id"
+
+  if [ "$streak_at_edge" = "true" ]; then
+    log_warn "    streak_starts_at_window_edge=true — failure was already present at start of lookback window (pre-existing regression)"
+  fi
 
   if [ "$likely_flaky" = "true" ]; then
     log_warn "    Marked as likely_flaky — skipping (no agent call)"
@@ -111,6 +116,7 @@ for i in $(seq 0 $((num_failures - 1))); do
 
   consecutive_gaps=0
   max_consecutive_gaps=10
+  first_passing_idx=-1
 
   for r in $(seq 0 $((num_subsequent - 1))); do
     if [ "$r" -ge "$MAX_FORWARD_RUNS" ]; then
@@ -140,6 +146,7 @@ for i in $(seq 0 $((num_failures - 1))); do
     if [ "$job_conclusion" = "success" ]; then
       first_passing_run_id="$run_id"
       first_passing_run_sha="$run_sha"
+      first_passing_idx="$r"
       first_passing_job_id=$(echo "$jobs_json" | jq -r --arg jn "$job_name" '
         .jobs[] | select(.name == $jn or (.name | endswith(" / " + $jn)) or (.name | contains($jn))) | .id
       ' 2>/dev/null | head -1)
@@ -147,6 +154,79 @@ for i in $(seq 0 $((num_failures - 1))); do
       break
     fi
   done
+
+  # ---- Post-fix stability check ----
+  # Scan the next POST_FIX_CHECK_RUNS runs after the first passing run.
+  # If the majority fail, the "fix" was likely a fluke — not a real fix.
+  # This catches false-positive attributions where a test passes once and then
+  # continues to fail (PR attribution would be wrong in that case).
+  POST_FIX_CHECK_RUNS=4
+  post_fix_pass=0
+  post_fix_fail=0
+  post_fix_stable="unknown"
+  likely_spurious="false"
+
+  if [ -n "$first_passing_run_id" ] && [ "$first_passing_idx" -ge 0 ]; then
+    check_start=$((first_passing_idx + 1))
+    check_end=$((check_start + POST_FIX_CHECK_RUNS - 1))
+    if [ "$check_end" -ge "$num_subsequent" ]; then
+      check_end=$((num_subsequent - 1))
+    fi
+
+    if [ "$check_start" -le "$check_end" ]; then
+      log_info "    Post-fix stability: checking runs $check_start..$check_end (idx in subsequent)"
+      for r in $(seq "$check_start" "$check_end"); do
+        pf_run_id=$(echo "$subsequent_runs" | jq -r ".[$r].id")
+        pf_jobs=$(get_jobs_for_run "$pf_run_id")
+        pf_conclusion=$(echo "$pf_jobs" | jq -r --arg jn "$job_name" '
+          .jobs[] | select(.name == $jn or (.name | endswith(" / " + $jn)) or (.name | contains($jn))) | .conclusion // "unknown"
+        ' 2>/dev/null | head -1)
+
+        if [ "$pf_conclusion" = "success" ]; then
+          post_fix_pass=$((post_fix_pass + 1))
+        elif [ "$pf_conclusion" = "failure" ]; then
+          post_fix_fail=$((post_fix_fail + 1))
+        fi
+        # absent/unknown runs are skipped (not counted)
+      done
+
+      pf_total=$((post_fix_pass + post_fix_fail))
+      if [ "$pf_total" -ge 2 ]; then
+        # Require at least 2/3 of checked runs to pass for a stable fix
+        min_pass=$(( (pf_total * 2 + 2) / 3 ))
+        if [ "$post_fix_pass" -ge "$min_pass" ]; then
+          post_fix_stable="true"
+          log_info "    Post-fix stable: $post_fix_pass/$pf_total pass (stable)"
+        else
+          post_fix_stable="false"
+          likely_spurious="true"
+          log_warn "    Post-fix UNSTABLE: $post_fix_pass/$pf_total pass — transition appears spurious, moving to ongoing failures"
+        fi
+      else
+        # Not enough data: be optimistic but note the uncertainty
+        post_fix_stable="insufficient_data"
+        log_info "    Post-fix stability: only $pf_total run(s) available after transition — insufficient data"
+      fi
+    else
+      post_fix_stable="no_subsequent_runs"
+      log_info "    Post-fix stability: no runs available after first passing run"
+    fi
+  fi
+
+  # If the transition was spurious, treat it as an ongoing/unresolved failure
+  if [ "$likely_spurious" = "true" ]; then
+    jq --argjson failure "$entry" \
+       --arg last_fail_id "$last_failing_run_id" \
+       --arg first_pass_id "$first_passing_run_id" \
+       --argjson pf_pass "$post_fix_pass" \
+       --argjson pf_fail "$post_fix_fail" \
+       '. += [{"failure": $failure, "ongoing_reason": "spurious_transition",
+               "note": ("First passing run " + $first_pass_id + " was not followed by stable passes (" + ($pf_pass|tostring) + " pass, " + ($pf_fail|tostring) + " fail in post-fix window)"),
+               "last_failing_run_id": ($last_fail_id | tonumber),
+               "first_passing_run_id": ($first_pass_id | tonumber)}]' \
+       "$ONGOING_FAILURES_OUTPUT" > "${ONGOING_FAILURES_OUTPUT}.tmp" && mv "${ONGOING_FAILURES_OUTPUT}.tmp" "$ONGOING_FAILURES_OUTPUT" || true
+    continue
+  fi
 
   if [ -z "$first_passing_run_id" ]; then
     log_info "    No passing run found — failure is still active, skipping"
@@ -280,6 +360,10 @@ for i in $(seq 0 $((num_failures - 1))); do
      --arg last_fail_sha "$last_failing_run_sha" \
      --arg first_pass_sha "$first_passing_run_sha" \
      --argjson fixes "$candidate_fixes" \
+     --arg pf_stable "$post_fix_stable" \
+     --argjson pf_pass "$post_fix_pass" \
+     --argjson pf_fail "$post_fix_fail" \
+     --argjson streak_edge "$([ "$streak_at_edge" = "true" ] && echo true || echo false)" \
      '. += [{
        "failure": $failure,
        "last_failing_run_id": ($last_fail_id | tonumber),
@@ -287,7 +371,11 @@ for i in $(seq 0 $((num_failures - 1))); do
        "first_passing_job_id": (if $first_pass_job_id == "0" or $first_pass_job_id == "" then null else ($first_pass_job_id | tonumber) end),
        "last_failing_sha": $last_fail_sha,
        "first_passing_sha": $first_pass_sha,
-       "candidate_fix_commits": $fixes
+       "candidate_fix_commits": $fixes,
+       "post_fix_stable": $pf_stable,
+       "post_fix_pass_count": $pf_pass,
+       "post_fix_fail_count": $pf_fail,
+       "streak_starts_at_window_edge": $streak_edge
      }]' \
      "$FIX_POINTS_OUTPUT" > "${FIX_POINTS_OUTPUT}.tmp" && mv "${FIX_POINTS_OUTPUT}.tmp" "$FIX_POINTS_OUTPUT"
 done
