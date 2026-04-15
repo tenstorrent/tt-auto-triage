@@ -378,9 +378,10 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
         pf_stable_val=$(echo "$escape" | jq -r '.post_fix_stable // "unknown"')
         pf_pass_val=$(echo "$escape" | jq -r '.post_fix_pass_count // 0')
         pf_fail_val=$(echo "$escape" | jq -r '.post_fix_fail_count // 0')
+        pf_total=$((pf_pass_val + pf_fail_val))
         case "$pf_stable_val" in
-          "true")    pf_badge="✅ Stable (${pf_pass_val}/${$((pf_pass_val + pf_fail_val))} pass)" ;;
-          "false")   pf_badge="❌ Unstable (${pf_pass_val}/${$((pf_pass_val + pf_fail_val))} pass)" ;;
+          "true")    pf_badge="✅ Stable (${pf_pass_val}/${pf_total} pass)" ;;
+          "false")   pf_badge="❌ Unstable (${pf_pass_val}/${pf_total} pass)" ;;
           "insufficient_data") pf_badge="⚠️ Insufficient data (${pf_pass_val}p/${pf_fail_val}f)" ;;
           *)         pf_badge="—" ;;
         esac
