@@ -1,8 +1,34 @@
 name: "(triage) Verify Bug Escape"
 
-# Reusable workflow called from tt-metal .github/workflows/verify-bug-escape.yaml
-# Completely independent from the bug escape detection pipeline.
+# Can be called as a reusable workflow (from bug-escapes-ci.yaml auto-verify)
+# OR dispatched directly via workflow_dispatch / gh workflow run.
 on:
+  workflow_dispatch:
+    inputs:
+      fix-commit-sha:
+        description: "The commit SHA believed to have fixed the bug"
+        type: string
+        required: true
+      test-pipeline:
+        description: "Workflow file path (e.g. .github/workflows/galaxy-e2e-tests.yaml)"
+        type: string
+        required: true
+      test-job:
+        description: "Job display name (e.g. BH Galaxy CCL tests)"
+        type: string
+        required: true
+      test-name:
+        description: "Full pytest path (e.g. tests/.../test_foo.py::test_bar)"
+        type: string
+        required: true
+      poll-interval-seconds:
+        description: "Seconds between run status checks"
+        type: string
+        default: "120"
+      max-wait-minutes:
+        description: "Max minutes to wait for verification runs"
+        type: string
+        default: "120"
   workflow_call:
     inputs:
       fix-commit-sha:
@@ -56,7 +82,7 @@ jobs:
           repository: tenstorrent/tt-metal
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_WRITE_TOKEN }}
+          token: ${{ secrets.GITHUB_WRITE_TOKEN || github.token }}
           path: tt-metal
 
       - name: Install dependencies
@@ -64,7 +90,7 @@ jobs:
 
       - name: Run verification
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN || github.token }}
           FIX_COMMIT_SHA: ${{ inputs.fix-commit-sha }}
           TEST_PIPELINE: ${{ inputs.test-pipeline }}
           TEST_JOB: ${{ inputs.test-job }}
@@ -86,3 +112,4 @@ jobs:
           path: triage/bug-escapes/verify/output/
           retention-days: 30
           if-no-files-found: warn
+
