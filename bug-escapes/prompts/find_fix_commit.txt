@@ -35,6 +35,13 @@ IMPORTANT DISTINCTIONS:
 - A revert of a previous commit IS a real fix (restores a working state). Set is_skip_or_disable=false.
 - If no commit plausibly fixes the specific test/error, return is_likely_fix=false and sha=null.
 
+CONFIDENCE CALIBRATION — be conservative:
+- "high": commit message explicitly names the failing test file, test function, or exact error string.
+- "medium": commit touches the same subsystem and mentions "fix"/"revert"/"resolve" but does not name the test directly.
+- "low": all other cases — broad refactors, cleanups, or commits where the connection is indirect.
+- When the commit window is large (many commits), lean toward lower confidence — the attribution is less certain.
+- When in doubt between two candidates, pick the more specific one at lower confidence rather than the broader one at higher confidence.
+
 Respond with ONLY a JSON object (no markdown, no explanation):
 {
   "sha": "<full 40-char commit SHA, or null if no plausible fix>",
