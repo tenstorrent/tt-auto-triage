@@ -7,14 +7,6 @@ on:
         description: "Create GitHub issues for deterministic failures"
         type: boolean
         default: false
-      assign-owners:
-        description: "Resolve assignees for already-created CI triage issues"
-        type: boolean
-        default: false
-      slack-notify:
-        description: "Post testing-channel Slack messages for issues with assignee metadata"
-        type: boolean
-        default: false
       issue-repo:
         description: "Repository to create issues in"
         type: string
@@ -27,17 +19,11 @@ on:
         description: "Maximum number of issues to create (0 = unlimited)"
         type: string
         default: "0"
-      slack-channel-id:
-        description: "Slack channel ID for triage notifications"
-        type: string
-        default: "C0APK6215B5"
     secrets:
       AGGREGATE_READ_TOKEN:
         required: false
       ISSUE_WRITE_TOKEN:
         required: true
-      SLACK_BOT_TOKEN:
-        required: false
       CURSOR_API_KEY:
         required: false
 
