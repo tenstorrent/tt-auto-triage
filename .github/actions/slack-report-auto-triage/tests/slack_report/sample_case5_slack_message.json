@@ -1,0 +1,44 @@
+{
+  "workflow_name": "sanity-tests-debug",
+  "failing_job_name": "blackhole deepseek blitz op tests",
+  "failing_test_name": "test_broadcast_rms_single_device",
+  "failing_run_url": "https://github.com/org/repo/actions/runs/789",
+  "failing_run_label": "Run #789 (latest deterministic failure)",
+  "scenario": "Deterministic failure with incomplete commit metadata (best-effort culprit)",
+  "failure_message": "RuntimeError: TT_THROW @ llrt.cpp:348: Timeout waiting for cores",
+  "case": "5",
+  "commits": [
+    {
+      "hash": "25eb02e7abcd1234ef567890abcd1234ef567890",
+      "url": "https://github.com/tenstorrent/tt-metal/commit/25eb02e7",
+      "author": {"name": "Filip Vranic", "slack_id": "U_FILIP"},
+      "approvers": [{"name": "Nikola Velickovic", "slack_id": "U_NIKOLA"}],
+      "relevant_developers": [],
+      "relevant_files": ["tt_metal/tt-llk/tt_llk_blackhole/common/inc/cunpack_common.h"],
+      "confidence": 45
+    },
+    {
+      "hash": "b79cfdc4dcba4321fe098765dcba4321fe098765",
+      "url": "https://github.com/tenstorrent/tt-metal/commit/b79cfdc4",
+      "author": {"name": "Filip Vranic", "slack_id": "U_FILIP2"},
+      "approvers": [{"name": "Nikola Velickovic", "slack_id": "U_NIKOLA2"}],
+      "relevant_developers": [],
+      "relevant_files": [],
+      "confidence": 30
+    },
+    {
+      "hash": "71649328aabb1122ccdd3344eeff5566aabb7788",
+      "url": "https://github.com/tenstorrent/tt-metal/commit/71649328",
+      "author": {"name": "Aswin Zayasankaran", "slack_id": "U_ASWIN"},
+      "approvers": [{"name": "Mateusz Nowak", "slack_id": "U_MATEUSZ"}],
+      "relevant_developers": [],
+      "relevant_files": [],
+      "confidence": 15
+    }
+  ],
+  "relevant_developers": [
+    {"name": "John Bauman", "slack_id": "U_JOHN"},
+    {"name": "Rui Zhang", "slack_id": "U_RUI"}
+  ],
+  "notes": "NOTE: Some commits could not be downloaded."
+}

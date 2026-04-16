@@ -123,14 +123,32 @@ fi
 AUTO_FIX_NOTE=""
 [ -n "${AUTO_FIX_META:-}" ] && [ -f "$AUTO_FIX_META" ] && AUTO_FIX_NOTE=$(jq -r '.auto_fix_pr_url // ""' "$AUTO_FIX_META" 2>/dev/null || echo "")
 
+# Resolve group pings (S-prefixed IDs) to a random individual member
+RESOLVE_SCRIPT="$SCRIPT_DIR/resolve_group_pings.py"
+SLACK_DATA_DIR=".auto_triage/auto_triage/data"
+if [ -f "$RESOLVE_SCRIPT" ] && [ -d "$SLACK_DATA_DIR" ]; then
+  # MESSAGE_PATH is already validated above; JOB_OWNER_FILE is optional
+  _resolve_files=("$MESSAGE_PATH")
+  [ -f "$JOB_OWNER_FILE" ] && _resolve_files+=("$JOB_OWNER_FILE")
+  RESOLVE_FILES_JSON=$(printf '%s\n' "${_resolve_files[@]}" | jq -R . | jq -s .)
+  if true; then
+    jq -n \
+      --arg groups "$SLACK_DATA_DIR/slack_groups.json" \
+      --arg directory "$SLACK_DATA_DIR/slack_directory.json" \
+      --argjson files "$RESOLVE_FILES_JSON" \
+      '{slack_groups: $groups, slack_directory: $directory, files: $files}' \
+    | python3 "$RESOLVE_SCRIPT" 2>&1 || echo "Warning: group ping resolution failed (non-fatal)"
+  fi
+fi
+
 JOB_OWNER_PING=""
 if [ -f "$JOB_OWNER_FILE" ]; then
+  # resolve_group_pings.py already converted resolvable S-IDs to U-IDs above.
+  # Any remaining S-prefixed IDs are unresolvable groups -- exclude them from pings.
   JOB_OWNER_PING=$(jq -r --arg allow "${ALLOW_PINGS:-false}" '
     [.[] | select(.name != "") |
-      if ($allow == "true") and ((.slack_id // "") != "") then
-        if (.slack_id | startswith("S")) then "<!subteam^" + .slack_id + "|@" + .name + ">"
-        else "<@" + .slack_id + ">"
-        end
+      if ($allow == "true") and ((.slack_id // "") != "") and ((.slack_id | startswith("S")) | not) then
+        "<@" + .slack_id + ">"
       else .name
       end
     ] | join(", ")

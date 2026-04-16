@@ -87,7 +87,6 @@ runs:
         GITHUB_TOKEN: ${{ github.token }}
 
     - name: Download Slack directory
-      if: inputs.slack-test-only != 'true'
       shell: bash
       run: |
         set -euo pipefail

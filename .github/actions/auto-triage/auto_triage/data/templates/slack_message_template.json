@@ -17,7 +17,8 @@
                     {"name": "Jon Park", "slack_id": "U02B2EXAMPLE"}
                 ],
                 "relevant_developers": [
-                    {"name": "Lena Ortiz", "slack_id": "U03C3EXAMPLE"}
+                    {"name": "Lena Ortiz", "slack_id": "U03C3EXAMPLE"},
+                    {"name": "tensor-ops-owners", "slack_id": "S03C3EXAMPLE"}
                 ],
                 "relevant_files": [
                     "ttnn/tensor_ops/src/reduce_max.cpp",
@@ -39,8 +40,9 @@
         "failing_run_label": "Run #1234567891 (newest failure)",
         "commits": [],
         "relevant_developers": [
+            {"name": "tensorcore-owners", "slack_id": "S11L1EXAMPLE"},
             {"name": "Priya Malhotra", "slack_id": "U11L1EXAMPLE"},
-            {"name": "tensorcore-runtime-owners", "slack_id": "S12M2EXAMPLE"}
+            {"name": "Amir Rostami", "slack_id": "U12M2EXAMPLE"}
         ],
         "relevant_files": [
             "ttnn/tensorcore/tests/test_tensorcore_smoke.py",
@@ -76,12 +78,9 @@
                 "url": "https://github.com/tenstorrent/tt-metal/commit/c3d9c9fe12ab4567de89f0123456abcd7890efab",
                 "author": {"name": "Ethan Zhao", "slack_id": "U04D4EXAMPLE"},
                 "approvers": [
-                    {"name": "Carmen Li", "slack_id": "U05E5EXAMPLE"},
-                    {"name": "graph-runtime-owners", "slack_id": "S06F6EXAMPLE"}
+                    {"name": "Carmen Li", "slack_id": "U05E5EXAMPLE"}
                 ],
-                "relevant_developers": [
-                    {"name": "Harper Singh", "slack_id": "U07G7EXAMPLE"}
-                ],
+                "relevant_developers": [],
                 "relevant_files": [
                     "ttnn/graph/src/partitioner.cpp",
                     "ttnn/graph/include/partition_plan.hpp"
@@ -93,11 +92,10 @@
                 "url": "https://github.com/tenstorrent/tt-metal/commit/db45e6f7a8b9c0d1e2f3a456b789c012def34567",
                 "author": {"name": "Rosa Nguyen", "slack_id": "U08H8EXAMPLE"},
                 "approvers": [
-                    {"name": "graph-runtime-owners", "slack_id": "S06F6EXAMPLE"}
+                    {"name": "Felix Grant", "slack_id": "U06F6EXAMPLE"}
                 ],
                 "relevant_developers": [
-                    {"name": "Mateo Allen", "slack_id": "U09J9EXAMPLE"},
-                    {"name": "graph-analysis-sig", "slack_id": "S10K0EXAMPLE"}
+                    {"name": "Mateo Allen", "slack_id": "U09J9EXAMPLE"}
                 ],
                 "relevant_files": [
                     "ttnn/graph/src/placement_validator.cpp",
@@ -107,7 +105,8 @@
             }
         ],
         "relevant_developers": [
-            {"name": "graph-analysis-sig", "slack_id": "S10K0EXAMPLE"}
+            {"name": "Harper Singh", "slack_id": "U07G7EXAMPLE"},
+            {"name": "graph-runtime-owners", "slack_id": "S06F6EXAMPLE"}
         ],
         "relevant_files": [
             "ttnn/graph/src/partitioner.cpp",
@@ -130,11 +129,9 @@
                 "url": "https://github.com/tenstorrent/tt-metal/commit/aa11bb22cc33dd44ee55ff6677889900aabbccdd",
                 "author": {"name": "Nora Kim", "slack_id": "U11N1EXAMPLE"},
                 "approvers": [
-                    {"name": "ttnn-core-owners", "slack_id": "S12P2EXAMPLE"}
+                    {"name": "Jun Tanaka", "slack_id": "U12P2EXAMPLE"}
                 ],
-                "relevant_developers": [
-                    {"name": "ttnn-kernels-owners", "slack_id": "S13Q3EXAMPLE"}
-                ],
+                "relevant_developers": [],
                 "relevant_files": [
                     "ttnn/ops/src/fused_matmul.cpp",
                     "ttnn/ops/include/fused_matmul_kernels.hpp"
@@ -146,9 +143,7 @@
                 "url": "https://github.com/tenstorrent/tt-metal/commit/ee11ff22aa33bb44cc55dd6677889900ffeeddcc",
                 "author": {"name": "Omar Diaz", "slack_id": "U14R4EXAMPLE"},
                 "approvers": [],
-                "relevant_developers": [
-                    {"name": "ttnn-infra-owners", "slack_id": "S15S5EXAMPLE"}
-                ],
+                "relevant_developers": [],
                 "relevant_files": [
                     "ttnn/runtime/src/pipeline_config.cpp"
                 ],
@@ -156,7 +151,7 @@
             }
         ],
         "relevant_developers": [
-            {"name": "ttnn-core-owners", "slack_id": "S12P2EXAMPLE"},
+            {"name": "Wei Zhang", "slack_id": "U13Q3EXAMPLE"},
             {"name": "ttnn-kernels-owners", "slack_id": "S13Q3EXAMPLE"}
         ],
         "relevant_files": [

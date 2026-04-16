@@ -17,6 +17,7 @@ BUILD_SCRIPT="$SCRIPTS_DIR/build_slack_payload.sh"
 SLACK_MESSAGE_JQ="$SCRIPTS_DIR/slack_message.jq"
 SAMPLE_MSG="$TEST_DIR/sample_slack_message.json"
 SAMPLE_CASE4_MSG="$TEST_DIR/sample_case4_slack_message.json"
+SAMPLE_CASE5_MSG="$TEST_DIR/sample_case5_slack_message.json"
 
 echo "=== payload_builder ==="
 
@@ -25,6 +26,7 @@ assert "build_slack_payload.sh exists" [ -f "$BUILD_SCRIPT" ]
 assert "slack_message.jq exists" [ -f "$SLACK_MESSAGE_JQ" ]
 assert "sample_slack_message.json exists" [ -f "$SAMPLE_MSG" ]
 assert "sample_case4_slack_message.json exists" [ -f "$SAMPLE_CASE4_MSG" ]
+assert "sample_case5_slack_message.json exists" [ -f "$SAMPLE_CASE5_MSG" ]
 
 # -- Cancellation: with thread_ts, failing_run, error_msg ----------------------
 tmpdir=$(mktemp -d)
@@ -117,7 +119,37 @@ assert "Case 4 omits confidence lines" [ -z "$(echo "$text4" | grep -F 'CONFIDEN
 assert "Case 4 pings top-level relevant developers only" [ -n "$(echo "$text4" | grep -F '<@U07G7EXAMPLE>' || true)" ]
 assert "Case 4 does not ping commit author" [ -z "$(echo "$text4" | grep -F '<@U04D4EXAMPLE>' || true)" ]
 assert "Case 4 does not ping approver subteam" [ -z "$(echo "$text4" | grep -F '<!subteam^S06F6EXAMPLE' || true)" ]
+# Group resolution is intentionally skipped here (no slack_groups.json / slack_directory.json fixtures),
+# so the S-prefixed ID in the top-level relevant_developers stays unresolved and renders as plain text.
+assert "Case 4 skips group resolution: no slack_groups.json fixture" [ ! -f "$tmpdir/.auto_triage/data/slack_groups.json" ]
+assert "Case 4 skips group resolution: no slack_directory.json fixture" [ ! -f "$tmpdir/.auto_triage/data/slack_directory.json" ]
+assert "Case 4 unresolved S-prefixed top-level developer renders as plain text name" [ -n "$(echo "$text4" | grep -F 'Graph Runtime Owners' || true)" ]
+assert "Case 4 unresolved S-prefixed top-level developer not rendered as subteam ping" [ -z "$(echo "$text4" | grep -F '<!subteam^S10K0EXAMPLE' || true)" ]
 assert "Case 4 has no thread_ts" [ "$(echo "$payload4" | jq -r '.thread_ts // empty')" = "" ]
+
+# -- Case 5 report: commit truncation (only top commit shown) -----------------
+rm -rf "$tmpdir/.auto_triage"
+mkdir -p "$tmpdir/.auto_triage/output" "$tmpdir/.auto_triage/data"
+cp "$SAMPLE_CASE5_MSG" "$tmpdir/.auto_triage/output/slack_message.json"
+export MESSAGE_PATH="$tmpdir/.auto_triage/output/slack_message.json"
+export SLACK_TS=""
+export ALLOW_PINGS="true"
+rm -f "$tmpdir/github_output"
+
+cd "$tmpdir"
+bash "$BUILD_SCRIPT"
+cd - >/dev/null
+
+payload5=$(cat "$tmpdir/.auto_triage/slack_payload.json")
+text5=$(echo "$payload5" | jq -r '.text // empty')
+assert "Case 5 report has text" [ -n "$text5" ]
+assert "Case 5 contains COMMITS section" [ -n "$(echo "$text5" | grep -F '*COMMITS:*' || true)" ]
+assert "Case 5 shows top commit hash" [ -n "$(echo "$text5" | grep -F '25eb02e7' || true)" ]
+assert "Case 5 does NOT show second commit hash" [ -z "$(echo "$text5" | grep -F 'b79cfdc4' || true)" ]
+assert "Case 5 does NOT show third commit hash" [ -z "$(echo "$text5" | grep -F '71649328' || true)" ]
+assert "Case 5 shows truncation note" [ -n "$(echo "$text5" | grep -F 'more commit(s) in full report' || true)" ]
+assert "Case 5 truncation note says 2 more" [ -n "$(echo "$text5" | grep -F '2 more commit(s)' || true)" ]
+assert "Case 5 pings top-level relevant developers" [ -n "$(echo "$text5" | grep -F 'RELEVANT DEVELOPERS' || true)" ]
 
 # -- Empty/missing message path: has_payload=false ------------------------------
 export MESSAGE_PATH="$tmpdir/nonexistent.json"
@@ -135,5 +167,79 @@ cd "$tmpdir"
 bash "$BUILD_SCRIPT"
 cd - >/dev/null
 assert "has_payload=false when MESSAGE_PATH empty" grep -q "has_payload=false" "$tmpdir/github_output"
+
+# -- JOB_OWNER_FILE with mixed U/S IDs: user pinged, group stays plain text ----
+rm -rf "$tmpdir/.auto_triage"
+mkdir -p "$tmpdir/.auto_triage/output" "$tmpdir/.auto_triage/data"
+cp "$SAMPLE_CASE4_MSG" "$tmpdir/.auto_triage/output/slack_message.json"
+export MESSAGE_PATH="$tmpdir/.auto_triage/output/slack_message.json"
+export SLACK_TS=""
+export ALLOW_PINGS="true"
+rm -f "$tmpdir/github_output"
+
+# Write a job_owner.json with one U-prefixed user and one S-prefixed group
+cat > "$tmpdir/.auto_triage/data/job_owner.json" <<'EOF'
+[
+  {"name": "Alice Dev", "slack_id": "U99USEREX"},
+  {"name": "Core Team", "slack_id": "S88GROUPEX"}
+]
+EOF
+
+cd "$tmpdir"
+bash "$BUILD_SCRIPT"
+cd - >/dev/null
+
+payload_owner=$(cat "$tmpdir/.auto_triage/slack_payload.json")
+text_owner=$(echo "$payload_owner" | jq -r '.text // empty')
+assert "JOB OWNER section present" [ -n "$(echo "$text_owner" | grep -F 'JOB OWNER' || true)" ]
+assert "JOB OWNER U-prefixed user is pinged" [ -n "$(echo "$text_owner" | grep -F '<@U99USEREX>' || true)" ]
+assert "JOB OWNER S-prefixed group is not pinged as subteam" [ -z "$(echo "$text_owner" | grep -F '<!subteam^S88GROUPEX' || true)" ]
+assert "JOB OWNER S-prefixed group renders as plain text name" [ -n "$(echo "$text_owner" | grep -F 'Core Team' || true)" ]
+
+
+# -- commits_section edge cases: 1 commit (no truncation note) ----------------
+# Test that a single commit does NOT produce a "more commit(s)" note.
+single_commit_json=$(jq -n '{
+  "case": 1,
+  "commits": [{"hash": "aabbccdd", "url": "", "author": {"name": "Dev", "slack_id": "U_DEV"}, "confidence": 100}],
+  "relevant_developers": [],
+  "failing_test_name": "test_foo",
+  "scenario": "test"
+}')
+
+text_single=$(echo "$single_commit_json" | jq -r -f "$SCRIPTS_DIR/slack_message.jq" \
+  --arg run_url "http://example.com/1" \
+  --arg run_label "Run #1" \
+  --arg job_name "my-job" \
+  --arg workflow_name "my-workflow" \
+  --arg auto_fix "" \
+  --arg allow_pings "false" \
+  --arg job_owner_ping "")
+assert "1-commit: COMMITS section present" [ -n "$(echo "$text_single" | grep -F '*COMMITS:*' || true)" ]
+assert "1-commit: no truncation note" [ -z "$(echo "$text_single" | grep -F 'more commit(s)' || true)" ]
+
+# -- commits_section edge cases: 2 commits (shows "1 more") -------------------
+two_commit_json=$(jq -n '{
+  "case": 1,
+  "commits": [
+    {"hash": "aaaa1111", "url": "", "author": {"name": "Dev A", "slack_id": "U_A"}, "confidence": 100},
+    {"hash": "bbbb2222", "url": "", "author": {"name": "Dev B", "slack_id": "U_B"}, "confidence": 80}
+  ],
+  "relevant_developers": [],
+  "failing_test_name": "test_bar",
+  "scenario": "test"
+}')
+
+text_two=$(echo "$two_commit_json" | jq -r -f "$SCRIPTS_DIR/slack_message.jq" \
+  --arg run_url "http://example.com/2" \
+  --arg run_label "Run #2" \
+  --arg job_name "my-job" \
+  --arg workflow_name "my-workflow" \
+  --arg auto_fix "" \
+  --arg allow_pings "false" \
+  --arg job_owner_ping "")
+assert "2-commits: shows first hash" [ -n "$(echo "$text_two" | grep -F 'aaaa1111' || true)" ]
+assert "2-commits: does not show second hash" [ -z "$(echo "$text_two" | grep -F 'bbbb2222' || true)" ]
+assert "2-commits: truncation note says 1 more" [ -n "$(echo "$text_two" | grep -F '1 more commit(s)' || true)" ]
 
 test_summary

@@ -1,0 +1,36 @@
+{
+    "case": "5",
+    "scenario": "Deterministic failure with incomplete commit metadata (best-effort culprit)",
+    "workflow_name": "t3000-unit-tests",
+    "failing_job_name": "t3k_ttnn_tests",
+    "failing_test_name": "test_group_ping_resolution_smoke_test",
+    "failure_message": "RuntimeError: TT_THROW @ llrt.cpp:348: Device 0: Timeout (5000 ms) waiting for physical cores to finish",
+    "failing_run_url": "https://github.com/tenstorrent/tt-metal/actions/runs/0000000000/job/0000000000",
+    "failing_run_label": "Run #0000000000 (SMOKE TEST - not a real failure)",
+    "commits": [
+        {
+            "hash": "deadbeef01234567deadbeef01234567deadbeef",
+            "url": "https://github.com/tenstorrent/tt-metal/commit/deadbeef",
+            "author": {"name": "Smoke Test Author", "slack_id": ""},
+            "approvers": [{"name": "Smoke Test Approver", "slack_id": ""}],
+            "relevant_developers": [
+                {"name": "Metal Infra", "slack_id": "S0985AN7TC5"}
+            ],
+            "relevant_files": ["tt_metal/llrt/llrt.cpp"],
+            "confidence": 42
+        },
+        {
+            "hash": "cafebabe01234567cafebabe01234567cafebabe",
+            "url": "https://github.com/tenstorrent/tt-metal/commit/cafebabe",
+            "author": {"name": "Another Author", "slack_id": ""},
+            "approvers": [],
+            "relevant_developers": [],
+            "relevant_files": [],
+            "confidence": 10
+        }
+    ],
+    "relevant_developers": [
+        {"name": "Metal Infra", "slack_id": "S0985AN7TC5"}
+    ],
+    "notes": "SMOKE TEST: This is a synthetic message to verify group-to-individual ping resolution. The S-prefixed group IDs should be resolved to a random member with '(representing <group>)' appended."
+}
