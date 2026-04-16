@@ -45,15 +45,11 @@ def _parse_agent_json(text: str) -> dict[str, Any]:
     index = text.rfind(MARKER)
     if index < 0:
         raise ValueError(f"Marker {MARKER!r} not found in agent output")
-    payload = text[index + len(MARKER) :].strip()
+    payload = text[index + len(MARKER):].strip()
     if payload.startswith("```"):
-        payload = payload[3:]
-        first_newline = payload.find("\n")
-        if first_newline >= 0:
-            payload = payload[first_newline + 1:]
-        close_index = payload.rfind("```")
-        if close_index >= 0 and payload[close_index:].strip() == "```":
-            payload = payload[:close_index]
+        payload = payload.split("\n", 1)[-1]  # skip ```[lang] line
+        if payload.rstrip().endswith("```"):
+            payload = payload.rstrip()[:-3]
     return json.loads(payload.strip())
 
 

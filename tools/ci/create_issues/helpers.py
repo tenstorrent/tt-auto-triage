@@ -67,6 +67,20 @@ def api_get(url: str, token: str | None = None, retries: int = 3) -> Any:
     raise RuntimeError(f"Exhausted retries for {url}")
 
 
+def paginate_api(url: str, key: str, token: str | None = None) -> list[Any]:
+    """Fetch all pages of a GitHub list endpoint (adds &page=N)."""
+    items: list[Any] = []
+    page = 1
+    sep = "&" if "?" in url else "?"
+    while True:
+        batch = api_get(f"{url}{sep}page={page}", token).get(key, [])
+        items.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    return items
+
+
 def sanitize_text(text: str) -> str:
     sanitized = text
     for pattern, replacement in _REDACTION_RULES:

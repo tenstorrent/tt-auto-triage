@@ -28,26 +28,16 @@ def _remove_metadata_block(body: str) -> str:
     return cleaned.strip()
 
 
-def append_base_markers(
-    body: str,
-    *,
-    workflow_name: str,
-    job_name: str,
-    fingerprint: str,
-    suggested_owners: list[str] | None = None,
-) -> str:
+def append_base_markers(body: str, *, workflow_name: str, job_name: str, fingerprint: str, suggested_owners: list[str] | None = None) -> str:
     cleaned = _remove_metadata_block(body)
-    marker_lines: list[str] = []
+    lines = [METADATA_START]
     if fingerprint:
-        marker_lines.append(f"`Auto-triage-fingerprint: {fingerprint}`")
-    marker_lines.append(f"`Auto-triage-workflow: {workflow_name}`")
-    marker_lines.append(f"`Auto-triage-job-name: {job_name}`")
+        lines.append(f"`Auto-triage-fingerprint: {fingerprint}`")
+    lines += [f"`Auto-triage-workflow: {workflow_name}`", f"`Auto-triage-job-name: {job_name}`"]
     if suggested_owners:
-        marker_lines.append(
-            f"`Auto-triage-suggested-owners: {json.dumps(suggested_owners, separators=(',', ':'))}`"
-        )
-    metadata_block = "\n".join([METADATA_START, *marker_lines, METADATA_END])
-    return "\n\n".join(part for part in (cleaned, metadata_block) if part).strip()
+        lines.append(f"`Auto-triage-suggested-owners: {json.dumps(suggested_owners, separators=(',', ':'))}`")
+    lines.append(METADATA_END)
+    return "\n\n".join(part for part in (cleaned, "\n".join(lines)) if part).strip()
 
 
 def tracked_pairs_from_issues(issues: list[dict[str, Any]]) -> set[tuple[str, str]]:

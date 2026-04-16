@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .helpers import api_get, gh, log, sanitize_text
+from .helpers import gh, log, paginate_api, sanitize_text
 
 SKIP_KEYWORDS: tuple[str, ...] = ("sanity", "Nightly tt-metal L2 tests")
 
@@ -44,23 +44,13 @@ def find_failing_jobs(
             run_id = run.get("id")
             if not run_id:
                 continue
-            all_jobs: list[dict[str, Any]] = []
-            page = 1
-            while True:
-                url = (
-                    f"https://api.github.com/repos/{owner}/{repo}/actions/runs/"
-                    f"{run_id}/jobs?per_page=100&page={page}"
-                )
-                data = api_get(url, token)
-                batch = data.get("jobs", [])
-                all_jobs.extend(batch)
-                if len(batch) < 100:
-                    break
-                page += 1
+            all_jobs = paginate_api(
+                f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100",
+                "jobs",
+                token,
+            )
             run_failed_jobs[run_id] = {
-                job["name"]: job.get("html_url", "")
-                for job in all_jobs
-                if job.get("conclusion") == "failure"
+                job["name"]: job.get("html_url", "") for job in all_jobs if job.get("conclusion") == "failure"
             }
             time.sleep(0.3)
 

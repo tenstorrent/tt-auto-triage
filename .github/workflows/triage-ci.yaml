@@ -42,28 +42,8 @@ on:
         required: false
 
 jobs:
-  validate-create-issues:
-    if: ${{ inputs.create-issues }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate create-issues secrets
-        env:
-          AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-        run: |
-          if [ -z "$AGGREGATE_READ_TOKEN" ]; then
-            echo "::error::AGGREGATE_READ_TOKEN is required when create-issues is enabled"
-            exit 1
-          fi
-          if [ -z "$CURSOR_API_KEY" ]; then
-            echo "::error::CURSOR_API_KEY is required when create-issues is enabled"
-            exit 1
-          fi
-
   create-issues:
-    if: ${{ inputs.create-issues && needs.validate-create-issues.result == 'success' }}
-    needs:
-      - validate-create-issues
+    if: ${{ inputs.create-issues }}
     uses: ./.github/workflows/triage-create-issues.yaml
     with:
       issue-repo: ${{ inputs.issue-repo }}

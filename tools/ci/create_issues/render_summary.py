@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .helpers import api_get
+from .helpers import api_get, paginate_api
 from .issue_state import AUTO_TRIAGE_LABEL
 
 
@@ -12,36 +12,25 @@ def _extract_signature_snippet(body: str, max_len: int = 80) -> str:
     fingerprint = match.group(1) if match else ""
     for line in body.splitlines():
         stripped = line.strip()
-        if stripped.startswith("RuntimeError") or stripped.startswith("##[error]"):
-            return stripped[:max_len]
-        if "TT_FATAL" in stripped:
+        if stripped.startswith(("RuntimeError", "##[error]")) or "TT_FATAL" in stripped:
             return stripped[:max_len]
     return fingerprint[:max_len] if fingerprint else ""
 
 
 def load_all_open_issues(issue_repo: str, token: str) -> list[dict[str, Any]]:
     owner, repo = issue_repo.split("/", 1)
-    page = 1
+    label = AUTO_TRIAGE_LABEL.replace(" ", "%20")
+    base_url = f"https://api.github.com/repos/{owner}/{repo}/issues?state=open&labels={label}&per_page=100"
     issues: list[dict[str, Any]] = []
+    page = 1
     while True:
-        data = api_get(
-            "https://api.github.com/repos/"
-            f"{owner}/{repo}/issues?state=open&labels={AUTO_TRIAGE_LABEL.replace(' ', '%20')}"
-            f"&per_page=100&page={page}",
-            token,
-        )
+        data = api_get(f"{base_url}&page={page}", token)
         if not data:
             break
-        batch = [item for item in data if "pull_request" not in item]
-        issues.extend(
-            {
-                "number": item.get("number", ""),
-                "title": item.get("title", ""),
-                "body": item.get("body", ""),
-                "url": item.get("html_url", ""),
-            }
-            for item in batch
-        )
+        issues += [
+            {"number": i.get("number", ""), "title": i.get("title", ""), "body": i.get("body", ""), "url": i.get("html_url", "")}
+            for i in data if "pull_request" not in i
+        ]
         if len(data) < 100:
             break
         page += 1

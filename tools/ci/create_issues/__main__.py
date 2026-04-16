@@ -25,28 +25,25 @@ SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
 MAX_ISSUES = int(os.environ.get("MAX_ISSUES", "0"))
 
 
-def sanitize_issue_text(text: str) -> str:
-    return sanitize_text(text)
+def _entry(job: dict[str, Any], action: str, **kwargs: Any) -> dict[str, Any]:
+    return {"workflow_name": job["workflow_name"], "job": job["job_name"], "action": action, **kwargs}
 
 
 def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> tuple[str, str, str]:
-    title = sanitize_issue_text(
+    title = sanitize_text(
         agent_result.get("issue_title", f"[CI] {job['workflow_name']} / {job['job_name']}")
     )
     signature = agent_result.get("signature", "")
     suggested_owners = agent_result.get("suggested_owners") or []
     body = append_base_markers(
-        sanitize_issue_text(agent_result["issue_body"]),
+        sanitize_text(agent_result["issue_body"]),
         workflow_name=job["workflow_name"],
         job_name=job["job_name"],
-        fingerprint=fingerprint_for(job["workflow_name"], job["job_name"], signature)
-        if signature
-        else "",
+        fingerprint=fingerprint_for(job["workflow_name"], job["job_name"], signature) if signature else "",
         suggested_owners=[str(o) for o in suggested_owners if str(o)],
     )
     issue_url = gh(
-        "issue",
-        "create",
+        "issue", "create",
         f"--repo={ISSUE_REPO}",
         f"--title={title}",
         f"--body={body}",
@@ -79,71 +76,32 @@ def main() -> int:
     created_so_far = 0
     for job in enriched_jobs:
         if MAX_ISSUES and created_so_far >= MAX_ISSUES:
-            summary.append(
-                {
-                    "workflow_name": job["workflow_name"],
-                    "job": job["job_name"],
-                    "action": "limit_reached",
-                }
-            )
+            summary.append(_entry(job, "limit_reached"))
             continue
 
-        agent_result = None
-        if os.environ.get("CURSOR_API_KEY"):
-            log("  Drafting issue via Cursor agent...")
-            agent_result = draft_issue_body(job, job.get("log_paths", []), CURSOR_MODEL, CONSECUTIVE)
-            if agent_result and not agent_result.get("deterministic", False):
-                summary.append(
-                    {
-                        "workflow_name": job["workflow_name"],
-                        "job": job["job_name"],
-                        "action": "agent_skipped",
-                        "reason": agent_result.get("reason", "not deterministic"),
-                    }
-                )
-                continue
+        log("  Drafting issue via Cursor agent...")
+        agent_result = draft_issue_body(job, job.get("log_paths", []), CURSOR_MODEL, CONSECUTIVE)
+        if agent_result and not agent_result.get("deterministic", False):
+            summary.append(_entry(job, "agent_skipped", reason=agent_result.get("reason", "not deterministic")))
+            continue
 
         if not agent_result or not agent_result.get("issue_body"):
-            summary.append(
-                {
-                    "workflow_name": job["workflow_name"],
-                    "job": job["job_name"],
-                    "action": "agent_skipped",
-                    "reason": "no issue body from agent",
-                }
-            )
+            summary.append(_entry(job, "agent_skipped", reason="no issue body from agent"))
             continue
 
         if not CREATE_ISSUES:
-            summary.append(
-                {
-                    "workflow_name": job["workflow_name"],
-                    "job": job["job_name"],
-                    "action": "dry_run",
-                }
-            )
+            summary.append(_entry(job, "dry_run"))
             continue
 
         issue_url, issue_title, issue_body = create_issue(job, agent_result)
         created_so_far += 1
-        issue_number = issue_url.rsplit("/", 1)[-1]
-        open_issues.append(
-            {
-                "number": issue_number,
-                "title": issue_title,
-                "body": issue_body,
-                "url": issue_url,
-            }
-        )
-        summary.append(
-            {
-                "workflow_name": job["workflow_name"],
-                "job": job["job_name"],
-                "action": "created",
-                "issue": issue_url,
-                "signature": agent_result.get("signature", ""),
-            }
-        )
+        open_issues.append({
+            "number": issue_url.rsplit("/", 1)[-1],
+            "title": issue_title,
+            "body": issue_body,
+            "url": issue_url,
+        })
+        summary.append(_entry(job, "created", issue=issue_url, signature=agent_result.get("signature", "")))
 
     markdown = render(summary, open_issues)
     if SUMMARY_OUTPUT:
@@ -152,14 +110,7 @@ def main() -> int:
         print(markdown)
 
     print(
-        json.dumps(
-            {
-                "created": created_so_far,
-                "skipped": len(tracked_pairs),
-                "failures": summary,
-            },
-            indent=2,
-        ),
+        json.dumps({"created": created_so_far, "skipped": len(tracked_pairs), "failures": summary}, indent=2),
         file=sys.stderr,
     )
     return 0
