@@ -22,6 +22,8 @@ PIPELINE_REORG_DIR = Path(os.environ.get("PIPELINE_REORG_DIR", "tt-metal/tests/p
 CODEOWNERS_PATH = Path(os.environ.get("CODEOWNERS_PATH", "tt-metal/.github/CODEOWNERS"))
 SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
 OWNERS_READY_LABEL = "auto-triage:owners-ready"
+TARGET_REPO_ROOT = Path(os.environ.get("TARGET_REPO_ROOT", "tt-metal"))
+GIT_HISTORY_MAX_COMMITS = int(os.environ.get("GIT_HISTORY_MAX_COMMITS", "100"))
 
 
 def render_summary(rows: list[dict[str, Any]]) -> str:
@@ -61,7 +63,6 @@ def main() -> int:
         if not workflow_name or not job_name:
             continue
 
-        agent_suggested = base.get("suggested_owners") or []
         resolved = resolve_owners(
             workflow_name,
             job_name,
@@ -70,7 +71,8 @@ def main() -> int:
             codeowners,
             slack_directory,
             os.environ.get("GITHUB_TOKEN"),
-            agent_suggested=list(agent_suggested),
+            repo_root=TARGET_REPO_ROOT,
+            git_history_max_commits=GIT_HISTORY_MAX_COMMITS,
         )
         github_assignees = resolved["github_assignees"]
         slack_assignees = resolved["slack_assignees"]

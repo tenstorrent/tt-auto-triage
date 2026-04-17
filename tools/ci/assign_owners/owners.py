@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -70,7 +71,7 @@ def load_pipeline_reorg_owners(reorg_dir: Path) -> list[dict[str, Any]]:
         text = yaml_file.read_text()
         current_name: str | None = None
         for line in text.splitlines():
-            name_match = re.match(r'^- name:\s*"(.+)"', line)
+            name_match = re.match(r"^- name:\s*[\"']?(.+?)[\"']?\s*$", line)
             if name_match:
                 current_name = name_match.group(1)
                 continue
@@ -125,6 +126,72 @@ def _codeowners_matches(workflow_name: str, codeowners: dict[str, list[str]]) ->
     return list(dict.fromkeys(matches))
 
 
+def _workflow_file_candidates(workflow_name: str, repo_root: Path) -> list[Path]:
+    workflows_dir = repo_root / ".github" / "workflows"
+    if not workflows_dir.exists():
+        return []
+
+    workflow_norm = _normalize(workflow_name)
+    candidates: list[Path] = []
+    for workflow_file in sorted(workflows_dir.glob("*.y*ml")):
+        stem_norm = _normalize(workflow_file.stem)
+        if not stem_norm:
+            continue
+        if stem_norm in workflow_norm or workflow_norm in stem_norm:
+            candidates.append(workflow_file)
+    return candidates
+
+
+def _extract_github_login(email: str) -> str:
+    match = re.match(r"^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$", email.strip(), re.IGNORECASE)
+    if not match:
+        return ""
+    return match.group(1).strip()
+
+
+def _github_users_from_git_history(
+    workflow_name: str,
+    repo_root: Path,
+    git_history_max_commits: int,
+) -> list[str]:
+    workflow_files = _workflow_file_candidates(workflow_name, repo_root)
+    if not workflow_files:
+        return []
+
+    rel_paths = [str(path.relative_to(repo_root)) for path in workflow_files]
+    cmd = [
+        "git",
+        "-C",
+        str(repo_root),
+        "log",
+        f"-n{git_history_max_commits}",
+        "--pretty=%ae%x09%ce",
+        "--",
+        *rel_paths,
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        log(f"  Warning: git history owner lookup failed for '{workflow_name}': {exc}")
+        return []
+
+    users: list[str] = []
+    seen: set[str] = set()
+    for line in proc.stdout.splitlines():
+        for email in line.split("\t"):
+            login = _extract_github_login(email)
+            if login and login not in seen:
+                seen.add(login)
+                users.append(login)
+    return users
+
+
 def _resolve_github_users(
     github_users: list[str],
     slack_directory: list[dict[str, Any]],
@@ -155,11 +222,13 @@ def resolve_owners(
     codeowners: dict[str, list[str]],
     slack_directory: list[dict[str, Any]],
     github_token: str | None,
-    agent_suggested: list[str] | None = None,
+    repo_root: Path | str = Path("tt-metal"),
+    git_history_max_commits: int = 100,
 ) -> dict[str, object]:
-    """Resolve owners with 4-tier priority: pipeline_reorg > owners.json > CODEOWNERS > agent suggestions."""
+    """Resolve owners with 4-tier priority: pipeline_reorg > owners.json > CODEOWNERS > git history."""
     combined = f"{workflow_name} / {job_name}".lower()
     job_lower = job_name.lower()
+    repo_root_path = Path(repo_root)
 
     for entry in pipeline_owners:
         entry_name = entry["name"].lower()
@@ -197,11 +266,16 @@ def resolve_owners(
             "slack_assignees": slack_ids,
         }
 
-    if agent_suggested:
-        github_users, slack_ids = _resolve_github_users(agent_suggested, slack_directory, github_token)
+    git_history_users = _github_users_from_git_history(
+        workflow_name,
+        repo_root_path,
+        git_history_max_commits,
+    )
+    if git_history_users:
+        github_users, slack_ids = _resolve_github_users(git_history_users, slack_directory, github_token)
         if github_users:
             return {
-                "source": "agent",
+                "source": "git_history",
                 "github_assignees": github_users,
                 "slack_assignees": slack_ids,
             }

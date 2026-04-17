@@ -66,7 +66,6 @@ def parse_base_markers(body: str) -> dict[str, object]:
         "workflow_name": _parse_string(metadata, "Auto-triage-workflow"),
         "job_name": _parse_string(metadata, "Auto-triage-job-name"),
         "fingerprint": _parse_string(metadata, "Auto-triage-fingerprint"),
-        "suggested_owners": _parse_json_list(metadata, "Auto-triage-suggested-owners"),
     }
 
 

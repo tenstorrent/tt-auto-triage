@@ -42,10 +42,12 @@ jobs:
         with:
           repository: ${{ inputs.target-repo }}
           path: tt-metal
+          fetch-depth: 0
           persist-credentials: false
           sparse-checkout: |
             .github/actions/analyze-workflow-data/owners.json
             .github/CODEOWNERS
+            .github/workflows
             tests/pipeline_reorg
           token: ${{ secrets.AGGREGATE_READ_TOKEN }}
 
@@ -59,6 +61,8 @@ jobs:
           OWNERS_JSON_PATH: tt-metal/.github/actions/analyze-workflow-data/owners.json
           PIPELINE_REORG_DIR: tt-metal/tests/pipeline_reorg
           CODEOWNERS_PATH: tt-metal/.github/CODEOWNERS
+          TARGET_REPO_ROOT: tt-metal
+          GIT_HISTORY_MAX_COMMITS: "100"
           SUMMARY_OUTPUT: summary.md
           PYTHONPATH: .
         run: python3 -m tools.ci.assign_owners
