@@ -27,11 +27,9 @@ def _remove_metadata_block(body: str) -> str:
     return cleaned.strip()
 
 
-def append_base_markers(body: str, *, workflow_name: str, job_name: str, fingerprint: str) -> str:
+def append_base_markers(body: str, *, workflow_name: str, job_name: str) -> str:
     cleaned = _remove_metadata_block(body)
     lines = [METADATA_START]
-    if fingerprint:
-        lines.append(f"`Auto-triage-fingerprint: {fingerprint}`")
     lines += [f"`Auto-triage-workflow: {workflow_name}`", f"`Auto-triage-job-name: {job_name}`"]
     lines.append(METADATA_END)
     return "\n\n".join(part for part in (cleaned, "\n".join(lines)) if part).strip()

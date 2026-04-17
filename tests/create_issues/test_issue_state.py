@@ -10,18 +10,16 @@ class CreateIssuesIssueStateTests(unittest.TestCase):
             "Issue body",
             workflow_name="Nightly Workflow",
             job_name="linux / unit",
-            fingerprint="abc123",
         )
 
-        self.assertIn("`Auto-triage-fingerprint: abc123`", body)
         self.assertIn("`Auto-triage-workflow: Nightly Workflow`", body)
         self.assertIn("`Auto-triage-job-name: linux / unit`", body)
+        self.assertNotIn("fingerprint", body)
 
         body_again = append_base_markers(
             body,
             workflow_name="Nightly Workflow",
             job_name="linux / unit",
-            fingerprint="abc123",
         )
 
         self.assertEqual(body, body_again)
@@ -43,7 +41,6 @@ class CreateIssuesIssueStateTests(unittest.TestCase):
                 "body": "\n".join(
                     [
                         "<!-- AUTO-TRIAGE-METADATA-START -->",
-                        "`Auto-triage-fingerprint: fp`",
                         "`Auto-triage-workflow: Workflow B`",
                         "`Auto-triage-job-name: Job B`",
                         "<!-- AUTO-TRIAGE-METADATA-END -->",

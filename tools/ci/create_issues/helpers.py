@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -86,8 +85,3 @@ def sanitize_text(text: str) -> str:
     for pattern, replacement in _REDACTION_RULES:
         sanitized = pattern.sub(replacement, sanitized)
     return sanitized
-
-
-def fingerprint_for(workflow_name: str, job_name: str, signature: str) -> str:
-    raw = f"{workflow_name}\n{job_name}\n{signature.strip().lower()}".encode()
-    return hashlib.sha256(raw).hexdigest()[:16]

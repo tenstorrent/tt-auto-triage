@@ -11,7 +11,7 @@ from typing import Any
 from .detect_failures import download_job_logs, find_failing_jobs
 from .download_data import download_workflow_data
 from .draft_issues import draft_issue_body
-from .helpers import fingerprint_for, gh, log, sanitize_text
+from .helpers import gh, log, sanitize_text
 from .issue_state import AUTO_TRIAGE_LABEL, append_base_markers, tracked_pairs_from_issues
 from .render_summary import load_all_open_issues, render
 
@@ -33,12 +33,10 @@ def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> tuple[str
     title = sanitize_text(
         agent_result.get("issue_title", f"[CI] {job['workflow_name']} / {job['job_name']}")
     )
-    signature = agent_result.get("signature", "")
     body = append_base_markers(
         sanitize_text(agent_result["issue_body"]),
         workflow_name=job["workflow_name"],
         job_name=job["job_name"],
-        fingerprint=fingerprint_for(job["workflow_name"], job["job_name"], signature) if signature else "",
     )
     issue_url = gh(
         "issue", "create",
@@ -99,7 +97,7 @@ def main() -> int:
             "body": issue_body,
             "url": issue_url,
         })
-        summary.append(_entry(job, "created", issue=issue_url, signature=agent_result.get("signature", "")))
+        summary.append(_entry(job, "created", issue=issue_url))
 
     markdown = render(summary, open_issues)
     if SUMMARY_OUTPUT:

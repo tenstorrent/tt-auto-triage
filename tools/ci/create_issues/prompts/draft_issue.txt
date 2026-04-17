@@ -38,4 +38,4 @@ INSTRUCTIONS:
 
 Output the marker below on its own line, followed by compact JSON only:
 $marker
-{"deterministic": true/false, "confidence": "low|medium|high", "signature": "short error signature", "error_excerpt": "key error text", "issue_title": "[CI] ...", "issue_body": "full markdown body"}
+{"deterministic": true/false, "confidence": "low|medium|high", "error_excerpt": "key error text", "issue_title": "[CI] ...", "issue_body": "full markdown body"}

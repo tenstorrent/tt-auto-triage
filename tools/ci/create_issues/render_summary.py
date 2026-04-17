@@ -1,20 +1,9 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
-from .helpers import api_get, paginate_api
+from .helpers import api_get
 from .issue_state import AUTO_TRIAGE_LABEL
-
-
-def _extract_signature_snippet(body: str, max_len: int = 80) -> str:
-    match = re.search(r"Auto-triage-fingerprint:\s*`?([^`\s]+)`?", body)
-    fingerprint = match.group(1) if match else ""
-    for line in body.splitlines():
-        stripped = line.strip()
-        if stripped.startswith(("RuntimeError", "##[error]")) or "TT_FATAL" in stripped:
-            return stripped[:max_len]
-    return fingerprint[:max_len] if fingerprint else ""
 
 
 def load_all_open_issues(issue_repo: str, token: str) -> list[dict[str, Any]]:
@@ -46,9 +35,7 @@ def render(summary: list[dict[str, Any]], open_issues: list[dict[str, Any]]) -> 
     if created:
         lines.append(f"## Created ({len(created)})\n")
         for item in created:
-            signature = item.get("signature", "")
-            sig_display = f" -- `{signature[:60]}`" if signature else ""
-            lines.append(f"- [{item['workflow_name']} / {item['job']}]({item['issue']}){sig_display}")
+            lines.append(f"- [{item['workflow_name']} / {item['job']}]({item['issue']})")
         lines.append("")
 
     if dry_run:
@@ -65,13 +52,11 @@ def render(summary: list[dict[str, Any]], open_issues: list[dict[str, Any]]) -> 
 
     if open_issues:
         lines.append(f"## All Open Tracked Issues ({len(open_issues)})\n")
-        lines.append("| Workflow / Job | Issue | Signature |")
-        lines.append("|----------------|-------|-----------|")
+        lines.append("| Workflow / Job | Issue |")
+        lines.append("|----------------|-------|")
         for issue in open_issues:
-            sig = _extract_signature_snippet(issue.get("body", ""))
-            sig_cell = f"`{sig}`" if sig else ""
             lines.append(
-                f"| {issue.get('title', '')} | [#{issue.get('number', '')}]({issue.get('url', '')}) | {sig_cell} |"
+                f"| {issue.get('title', '')} | [#{issue.get('number', '')}]({issue.get('url', '')}) |"
             )
         lines.append("")
 
