@@ -23,6 +23,8 @@ set -euo pipefail
 #   POLL_INTERVAL     — seconds between status checks (default: 120)
 #   MAX_WAIT_MINUTES  — max wait for runs to complete (default: 120)
 #   OWNER_REPO        — GitHub owner/repo (default: tenstorrent/tt-metal)
+#   CURSOR_API_KEY    — Cursor AI API key for failure classification
+#   EXPECTED_FAILURE_SIG — expected failure signature from the bug escape
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/verify_common.sh"
@@ -38,6 +40,8 @@ GITHUB_TOKEN="${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
 POLL_INTERVAL="${POLL_INTERVAL:-120}"
 MAX_WAIT_MINUTES="${MAX_WAIT_MINUTES:-120}"
 OWNER_REPO="${OWNER_REPO:-tenstorrent/tt-metal}"
+CURSOR_API_KEY="${CURSOR_API_KEY:-}"
+EXPECTED_FAILURE_SIG="${EXPECTED_FAILURE_SIG:-}"
 
 mkdir -p "$VERIFY_OUTPUT_DIR"
 
@@ -291,6 +295,26 @@ if [ "$AFTER_CONCLUSION" = "failure" ]; then
   if check_no_tests_ran "$AFTER_RUN_ID" "$TEST_JOB"; then
     verify_warn "AFTER run: no tests actually ran — marking inconclusive"
     AFTER_CONCLUSION="inconclusive_no_tests"
+  fi
+fi
+
+# ---- Step 9b: AI-based failure classification ----
+# For runs still marked "failure" after the no-tests check, use Cursor AI
+# to determine if the failure is a real test failure or infra/unrelated.
+
+if [ "$BEFORE_CONCLUSION" = "failure" ]; then
+  BEFORE_FAILURE_CLASS=$(check_failure_is_real "$BEFORE_RUN_ID" "$TEST_JOB" "$EXPECTED_FAILURE_SIG" "$CURSOR_API_KEY")
+  if [ "$BEFORE_FAILURE_CLASS" != "real_failure" ]; then
+    verify_warn "BEFORE run: AI classified as $BEFORE_FAILURE_CLASS — marking inconclusive_infra"
+    BEFORE_CONCLUSION="inconclusive_infra"
+  fi
+fi
+
+if [ "$AFTER_CONCLUSION" = "failure" ]; then
+  AFTER_FAILURE_CLASS=$(check_failure_is_real "$AFTER_RUN_ID" "$TEST_JOB" "$EXPECTED_FAILURE_SIG" "$CURSOR_API_KEY")
+  if [ "$AFTER_FAILURE_CLASS" != "real_failure" ]; then
+    verify_warn "AFTER run: AI classified as $AFTER_FAILURE_CLASS — marking inconclusive_infra"
+    AFTER_CONCLUSION="inconclusive_infra"
   fi
 fi
 
