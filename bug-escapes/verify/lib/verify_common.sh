@@ -256,11 +256,25 @@ check_failure_is_real() {
     return 0
   fi
 
-  # Fetch job logs via GitHub API (last 200 lines of the matching job)
-  local log_tail
-  log_tail=$(gh run view "$run_id" --log 2>/dev/null \
-    | grep -F "$test_job" \
-    | tail -200) || true
+  # Fetch job logs via GitHub REST API (no gh CLI dependency)
+  local log_tail job_id
+  job_id=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN:-}" \
+    "https://api.github.com/repos/${OWNER_REPO}/actions/runs/${run_id}/jobs" 2>/dev/null \
+    | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+test_job_name='${test_job}'
+for j in d.get('jobs',[]):
+    if test_job_name in j.get('name',''):
+        print(j['id'])
+        break
+" 2>/dev/null) || true
+
+  if [ -n "$job_id" ]; then
+    log_tail=$(curl -s -L -H "Authorization: Bearer ${GITHUB_TOKEN:-}" \
+      "https://api.github.com/repos/${OWNER_REPO}/actions/jobs/${job_id}/logs" 2>/dev/null \
+      | tail -200) || true
+  fi
 
   if [ -z "$log_tail" ]; then
     verify_warn "check_failure_is_real: could not fetch logs for run $run_id job '$test_job', assuming real_failure"
