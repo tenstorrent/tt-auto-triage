@@ -34,12 +34,8 @@ INSTRUCTIONS:
      (how to reproduce locally based on the job command)
      ### Notes
      (any additional context, e.g. timeout vs assertion failure)
-5. If the errors are NOT semantically identical across all 3 runs, set deterministic to false.
-6. Identify likely owners for this failure from the failing test paths and workflow file.
-   Return their GitHub usernames (without @) in "suggested_owners". These are best-effort
-   hints; a separate workflow does the authoritative owner resolution. If you cannot
-   identify anyone, return an empty list.
+5. If the errors are NOT semantically identical across all $consecutive runs, set deterministic to false.
 
 Output the marker below on its own line, followed by compact JSON only:
 $marker
-{"deterministic": true/false, "confidence": "low|medium|high", "signature": "short error signature", "error_excerpt": "key error text", "issue_title": "[CI] ...", "issue_body": "full markdown body", "suggested_owners": ["github_username1", ...]}
+{"deterministic": true/false, "confidence": "low|medium|high", "signature": "short error signature", "error_excerpt": "key error text", "issue_title": "[CI] ...", "issue_body": "full markdown body"}

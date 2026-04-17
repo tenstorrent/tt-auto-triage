@@ -26,28 +26,6 @@ class CreateIssuesIssueStateTests(unittest.TestCase):
 
         self.assertEqual(body, body_again)
 
-    def test_append_base_markers_includes_suggested_owners(self) -> None:
-        body = append_base_markers(
-            "Issue body",
-            workflow_name="Workflow X",
-            job_name="test / build",
-            fingerprint="fp1",
-            suggested_owners=["alice", "bob"],
-        )
-
-        self.assertIn('`Auto-triage-suggested-owners: ["alice","bob"]`', body)
-
-    def test_append_base_markers_omits_empty_suggested_owners(self) -> None:
-        body = append_base_markers(
-            "Issue body",
-            workflow_name="Workflow X",
-            job_name="test / build",
-            fingerprint="fp1",
-            suggested_owners=[],
-        )
-
-        self.assertNotIn("suggested-owners", body)
-
     def test_tracked_pairs_from_issues_reads_existing_markers(self) -> None:
         issues = [
             {

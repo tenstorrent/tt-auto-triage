@@ -34,13 +34,11 @@ def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> tuple[str
         agent_result.get("issue_title", f"[CI] {job['workflow_name']} / {job['job_name']}")
     )
     signature = agent_result.get("signature", "")
-    suggested_owners = agent_result.get("suggested_owners") or []
     body = append_base_markers(
         sanitize_text(agent_result["issue_body"]),
         workflow_name=job["workflow_name"],
         job_name=job["job_name"],
         fingerprint=fingerprint_for(job["workflow_name"], job["job_name"], signature) if signature else "",
-        suggested_owners=[str(o) for o in suggested_owners if str(o)],
     )
     issue_url = gh(
         "issue", "create",
@@ -81,7 +79,7 @@ def main() -> int:
 
         log("  Drafting issue via Cursor agent...")
         agent_result = draft_issue_body(job, job.get("log_paths", []), CURSOR_MODEL, CONSECUTIVE)
-        if agent_result and not agent_result.get("deterministic", False):
+        if agent_result and agent_result.get("deterministic") is False:
             summary.append(_entry(job, "agent_skipped", reason=agent_result.get("reason", "not deterministic")))
             continue
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
@@ -28,14 +27,12 @@ def _remove_metadata_block(body: str) -> str:
     return cleaned.strip()
 
 
-def append_base_markers(body: str, *, workflow_name: str, job_name: str, fingerprint: str, suggested_owners: list[str] | None = None) -> str:
+def append_base_markers(body: str, *, workflow_name: str, job_name: str, fingerprint: str) -> str:
     cleaned = _remove_metadata_block(body)
     lines = [METADATA_START]
     if fingerprint:
         lines.append(f"`Auto-triage-fingerprint: {fingerprint}`")
     lines += [f"`Auto-triage-workflow: {workflow_name}`", f"`Auto-triage-job-name: {job_name}`"]
-    if suggested_owners:
-        lines.append(f"`Auto-triage-suggested-owners: {json.dumps(suggested_owners, separators=(',', ':'))}`")
     lines.append(METADATA_END)
     return "\n\n".join(part for part in (cleaned, "\n".join(lines)) if part).strip()
 
