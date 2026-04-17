@@ -257,7 +257,7 @@ check_failure_is_real() {
   fi
 
   # Fetch job logs via GitHub REST API (no gh CLI dependency)
-  local log_tail job_id
+  local log_tail="" job_id=""
   job_id=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN:-}" \
     "https://api.github.com/repos/${OWNER_REPO}/actions/runs/${run_id}/jobs" 2>/dev/null \
     | python3 -c "
