@@ -233,6 +233,137 @@ check_no_tests_ran() {
 }
 
 # ---------------------------------------------------------------------------
+# check_failure_is_real RUN_ID TEST_JOB EXPECTED_FAILURE_SIG CURSOR_API_KEY
+#
+# Uses the Cursor AI API to classify a job failure as real vs infra/unrelated.
+# Fetches the last 200 lines of the job log and asks Cursor to analyze them.
+#
+# Returns one of: real_failure, infra_failure, unrelated_failure, inconclusive
+# on stdout.
+#
+# Conservative defaults:
+#   - If CURSOR_API_KEY is empty → returns "real_failure" (skip check)
+#   - If log fetch fails → returns "real_failure" (don't drop real failures)
+#   - If API call fails or response unparseable → returns "inconclusive"
+# ---------------------------------------------------------------------------
+check_failure_is_real() {
+  local run_id="$1" test_job="$2" expected_sig="${3:-}" cursor_api_key="${4:-}"
+
+  # Skip if no API key — conservative: treat as real
+  if [ -z "$cursor_api_key" ]; then
+    verify_info "check_failure_is_real: no CURSOR_API_KEY, assuming real_failure"
+    echo "real_failure"
+    return 0
+  fi
+
+  # Fetch job logs via GitHub API (last 200 lines of the matching job)
+  local log_tail
+  log_tail=$(gh run view "$run_id" --log 2>/dev/null \
+    | grep -F "$test_job" \
+    | tail -200) || true
+
+  if [ -z "$log_tail" ]; then
+    verify_warn "check_failure_is_real: could not fetch logs for run $run_id job '$test_job', assuming real_failure"
+    echo "real_failure"
+    return 0
+  fi
+
+  # Escape the log content for JSON embedding
+  local escaped_logs
+  escaped_logs=$(printf '%s' "$log_tail" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
+
+  local prompt
+  prompt=$(cat <<PROMPT_EOF
+You are analyzing a CI job log to determine if a test failure is a real test failure or an infrastructure/unrelated failure.
+
+**Job name:** ${test_job}
+**Expected failure signature:** ${expected_sig}
+
+**Last 200 lines of job log:**
+${log_tail}
+
+Classify this failure into exactly one category:
+- "real_failure": The test actually ran and failed due to a test assertion, timeout in test code, or a product bug. The failure is related to the expected failure signature.
+- "infra_failure": The failure is caused by CI infrastructure problems — examples: HTTP 503 proxy errors, git clone/submodule failures, Docker pull failures, runner setup errors, pip install failures, network timeouts, disk space issues.
+- "unrelated_failure": The test job failed but for a reason completely unrelated to the expected failure signature — a different test crashed, an import error in unrelated code, a segfault in a different component.
+
+Respond with ONLY a JSON object (no markdown, no explanation outside the JSON):
+{"classification": "real_failure" | "infra_failure" | "unrelated_failure", "reason": "brief one-line explanation"}
+PROMPT_EOF
+)
+
+  # Build the JSON payload for the Cursor API (OpenAI-compatible endpoint)
+  local payload
+  payload=$(python3 -c "
+import json, sys
+prompt = sys.stdin.read()
+print(json.dumps({
+    'model': 'claude-3-5-sonnet',
+    'messages': [{'role': 'user', 'content': prompt}],
+    'max_tokens': 256
+}))
+" <<< "$prompt")
+
+  local response http_code
+  local tmpfile
+  tmpfile=$(mktemp)
+
+  http_code=$(curl -s -o "$tmpfile" -w "%{http_code}" \
+    -X POST "https://api.cursor.sh/v1/chat/completions" \
+    -H "Authorization: Bearer $cursor_api_key" \
+    -H "Content-Type: application/json" \
+    -d "$payload" 2>/dev/null) || true
+
+  if [ "$http_code" != "200" ]; then
+    verify_warn "check_failure_is_real: Cursor API returned HTTP $http_code, returning inconclusive"
+    rm -f "$tmpfile"
+    echo "inconclusive"
+    return 0
+  fi
+
+  # Extract the classification from the response
+  local classification
+  classification=$(python3 -c "
+import json, sys, re
+try:
+    resp = json.load(sys.stdin)
+    content = resp['choices'][0]['message']['content']
+    # Try to parse as JSON directly
+    try:
+        result = json.loads(content)
+    except json.JSONDecodeError:
+        # Strip markdown fences if present
+        cleaned = re.sub(r'^\`\`\`(?:json)?\s*', '', content.strip())
+        cleaned = re.sub(r'\s*\`\`\`$', '', cleaned)
+        result = json.loads(cleaned)
+    c = result.get('classification', '')
+    reason = result.get('reason', 'no reason given')
+    if c in ('real_failure', 'infra_failure', 'unrelated_failure'):
+        print(f'{c}|{reason}', end='')
+    else:
+        print('inconclusive|unexpected classification: ' + c, end='')
+except Exception as e:
+    print('inconclusive|parse error: ' + str(e), end='')
+" < "$tmpfile") || true
+
+  rm -f "$tmpfile"
+
+  if [ -z "$classification" ]; then
+    verify_warn "check_failure_is_real: empty response from parser, returning inconclusive"
+    echo "inconclusive"
+    return 0
+  fi
+
+  local class_value class_reason
+  class_value="${classification%%|*}"
+  class_reason="${classification#*|}"
+
+  verify_info "check_failure_is_real: run=$run_id classification=$class_value reason=$class_reason"
+  echo "$class_value"
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # wait_for_run_to_appear BRANCH WORKFLOW_FILE MAX_ATTEMPTS
 #
 # After dispatching, the run takes a few seconds to appear. Poll until we
