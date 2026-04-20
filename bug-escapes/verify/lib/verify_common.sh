@@ -159,16 +159,32 @@ build_pruned_yaml() {
   local test_job="$1" test_name="$2" entry_json="$3"
 
   python3 -c "
-import json, sys, yaml
+import json, sys, yaml, re
 
 entry = json.loads('''$entry_json''')
 test_name = '''$test_name'''
 
-# Build the pytest command — quote if parametrized (contains brackets)
-if '[' in test_name:
-    cmd = 'pytest \"' + test_name + '\"'
+# Detect if test_name looks like a valid pytest path
+is_pytest_path = ('::' in test_name or
+                  test_name.rstrip(']').endswith('.py'))
+
+if is_pytest_path:
+    # Build the pytest command — quote if parametrized (contains brackets)
+    if '[' in test_name:
+        cmd = 'pytest \"' + test_name + '\"'
+    else:
+        cmd = 'pytest ' + test_name
 else:
-    cmd = 'pytest ' + test_name
+    # Not a pytest path (e.g. ResNet50 perf pipeline name) — use original cmd if available
+    original_cmd = entry.get('cmd', None)
+    if original_cmd:
+        cmd = original_cmd
+    else:
+        # Fallback: generate pytest command anyway for backward compat
+        if '[' in test_name:
+            cmd = 'pytest \"' + test_name + '\"'
+        else:
+            cmd = 'pytest ' + test_name
 
 pruned = {
     'name': entry.get('name', '$test_job'),
@@ -256,9 +272,9 @@ check_failure_is_real() {
     return 0
   fi
 
-  # Fetch job info via GitHub REST API — get both job_id and conclusion
-  local log_tail="" job_id="" job_conclusion="" job_info=""
-  job_info=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN:-}" \
+  # Fetch job logs via GitHub REST API (no gh CLI dependency)
+  local log_tail="" job_id=""
+  job_id=$(curl -s -H "Authorization: Bearer ${GITHUB_TOKEN:-}" \
     "https://api.github.com/repos/${OWNER_REPO}/actions/runs/${run_id}/jobs" 2>/dev/null \
     | python3 -c "
 import sys,json
@@ -267,34 +283,18 @@ test_job_name='${test_job}'
 for j in d.get('jobs',[]):
     if test_job_name in j.get('name',''):
         print(j['id'])
-        print(j.get('conclusion',''))
         break
 " 2>/dev/null) || true
 
-  job_id=$(printf '%s' "$job_info" | sed -n '1p')
-  job_conclusion=$(printf '%s' "$job_info" | sed -n '2p')
-
-  # If the test job was not found, it never ran — infra issue
-  if [ -z "$job_id" ]; then
-    verify_warn "check_failure_is_real: test job '$test_job' not found in run $run_id — classifying as infra_failure"
-    echo "infra_failure"
-    return 0
+  if [ -n "$job_id" ]; then
+    log_tail=$(curl -s -L -H "Authorization: Bearer ${GITHUB_TOKEN:-}" \
+      "https://api.github.com/repos/${OWNER_REPO}/actions/jobs/${job_id}/logs" 2>/dev/null \
+      | tail -200) || true
   fi
-
-  # If the test job did not itself fail (e.g. skipped because build failed), treat as infra
-  if [ "$job_conclusion" != "failure" ]; then
-    verify_warn "check_failure_is_real: test job '$test_job' conclusion='$job_conclusion' (not failure) — classifying as infra_failure"
-    echo "infra_failure"
-    return 0
-  fi
-
-  log_tail=$(curl -s -L -H "Authorization: Bearer ${GITHUB_TOKEN:-}" \
-    "https://api.github.com/repos/${OWNER_REPO}/actions/jobs/${job_id}/logs" 2>/dev/null \
-    | tail -200) || true
 
   if [ -z "$log_tail" ]; then
-    verify_warn "check_failure_is_real: could not fetch logs for run $run_id job '$test_job' — classifying as infra_failure"
-    echo "infra_failure"
+    verify_warn "check_failure_is_real: could not fetch logs for run $run_id job '$test_job', assuming real_failure"
+    echo "real_failure"
     return 0
   fi
 
