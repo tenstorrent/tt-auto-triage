@@ -85,53 +85,77 @@ def _slack_name_for_id(slack_id: str, slack_directory: list[dict[str, Any]]) -> 
 def build_commit_identity_index(
     repo_root: Path | str,
     max_commits: int = 5000,
-) -> dict[str, list[dict[str, str]]]:
-    """Scan the target repo's git log once and build a name/email -> github-login index.
+) -> dict[str, Any]:
+    """Scan the target repo's git history + branches and build identity indexes.
 
-    Uses commits authored by Tenstorrent devs as the authoritative source: the
-    `users.noreply.github.com` email format directly encodes the GitHub login,
-    paired with the author's real name in the commit metadata. This gives us a
-    surefire reverse lookup for anyone who has ever contributed to the target repo.
+    Uses two authoritative sources:
+      1. `git log` commit metadata — `users.noreply.github.com` emails directly
+         encode the GitHub login, paired with the author's real name.
+      2. `git for-each-ref refs/remotes/origin/` — branch names typically begin
+         with the author's handle (e.g. `sadesoye/feature-x`), which captures
+         contributors even when they haven't merged commits on HEAD's history.
 
-    Returns a dict with two keys:
-      - "by_name": {normalized_real_name: [{"login": ..., "name": ..., "email": ...}]}
-      - "by_email": {normalized_email: [{"login": ..., "name": ..., "email": ...}]}
+    Returns a dict with:
+      - "by_name":   {normalized_real_name: [{"login","name","email"}, ...]}
+      - "by_email":  {normalized_email:     [{"login","name","email"}, ...]}
+      - "handles":   set[str] of all known normalized login-handles (commits + branches)
     """
-    index: dict[str, list[dict[str, str]]] = {"by_name": {}, "by_email": {}}
+    index: dict[str, Any] = {"by_name": {}, "by_email": {}, "handles": set()}
     repo_root_path = Path(repo_root)
     if not repo_root_path.exists():
         return index
-    cmd = [
-        "git", "-C", str(repo_root_path), "log",
-        f"-n{max_commits}",
-        "--pretty=%an%x09%ae",
-    ]
+
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root_path), "log",
+             f"-n{max_commits}", "--pretty=%an%x09%ae"],
+            capture_output=True, text=True, check=True, timeout=60,
+        )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         log(f"  Warning: failed to build commit identity index: {exc}")
-        return index
+        proc = None  # type: ignore[assignment]
 
     seen_pairs: set[tuple[str, str, str]] = set()
-    for line in proc.stdout.splitlines():
-        parts = line.split("\t", 1)
-        if len(parts) != 2:
-            continue
-        name, email = parts[0].strip(), parts[1].strip()
-        login = _extract_github_login(email)
-        if not login:
-            continue
-        key = (name.lower(), email.lower(), login.lower())
-        if key in seen_pairs:
-            continue
-        seen_pairs.add(key)
-        record = {"login": login, "name": name, "email": email}
-        name_norm = _normalize(name)
-        if name_norm:
-            index["by_name"].setdefault(name_norm, []).append(record)
-        email_norm = email.lower()
-        if email_norm:
-            index["by_email"].setdefault(email_norm, []).append(record)
+    if proc is not None:
+        for line in proc.stdout.splitlines():
+            parts = line.split("\t", 1)
+            if len(parts) != 2:
+                continue
+            name, email = parts[0].strip(), parts[1].strip()
+            login = _extract_github_login(email)
+            if not login:
+                continue
+            key = (name.lower(), email.lower(), login.lower())
+            if key in seen_pairs:
+                continue
+            seen_pairs.add(key)
+            record = {"login": login, "name": name, "email": email}
+            name_norm = _normalize(name)
+            if name_norm:
+                index["by_name"].setdefault(name_norm, []).append(record)
+            email_norm = email.lower()
+            if email_norm:
+                index["by_email"].setdefault(email_norm, []).append(record)
+            index["handles"].add(login.lower())
+
+    try:
+        br_proc = subprocess.run(
+            ["git", "-C", str(repo_root_path), "for-each-ref",
+             "--format=%(refname:short)", "refs/remotes/origin/"],
+            capture_output=True, text=True, check=True, timeout=30,
+        )
+        for ref in br_proc.stdout.splitlines():
+            # Strip leading "origin/" and take the first path segment.
+            short = ref.strip()
+            if short.startswith("origin/"):
+                short = short[len("origin/"):]
+            if "/" in short:
+                handle = short.split("/", 1)[0].strip().lower()
+                if handle and handle not in {"head", "main", "master"} and len(handle) >= 3:
+                    index["handles"].add(handle)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        log(f"  Warning: failed to enumerate branch handles: {exc}")
+
     return index
 
 
@@ -139,7 +163,7 @@ def _github_from_commit_index(
     *,
     email: str,
     real_name: str,
-    commit_identity_index: dict[str, list[dict[str, str]]],
+    commit_identity_index: dict[str, Any],
 ) -> dict[str, str]:
     """Return {login, name} for an exact/normalized match in the commit identity index."""
     if not commit_identity_index:
@@ -159,33 +183,49 @@ def _github_from_commit_index(
     return {"login": "", "name": ""}
 
 
-def _public_orgs_for(login: str, github_token: str | None) -> set[str]:
-    try:
-        data = api_get(f"https://api.github.com/users/{login}/orgs", github_token)
-        return {str(o.get("login", "")).lower() for o in data if o.get("login")}
-    except Exception:
-        return set()
+_TT_SUFFIXES = ("tt", "-tt", "_tt")
+
+
+def _matches_known_handle(login: str, known_handles: set[str]) -> bool:
+    """Return True if `login` looks like it belongs to one of `known_handles`.
+
+    Accepts exact match and prefix/suffix relationships on lowercased logins,
+    which handles common Tenstorrent variants (e.g. branch author `sadesoye`
+    vs GitHub login `sadesoyeTT`). Requires both sides to be >=3 chars to
+    avoid accidental hits on short strings.
+    """
+    norm = login.lower().strip()
+    if len(norm) < 3 or not known_handles:
+        return False
+    if norm in known_handles:
+        return True
+    for suffix in _TT_SUFFIXES:
+        if norm.endswith(suffix):
+            trimmed = norm[: -len(suffix)]
+            if len(trimmed) >= 3 and trimmed in known_handles:
+                return True
+    for handle in known_handles:
+        if len(handle) < 3:
+            continue
+        if norm.startswith(handle) or handle.startswith(norm):
+            return True
+    return False
 
 
 def _disambiguate_search(
     items: list[dict[str, Any]],
-    target_org: str,
-    github_token: str | None,
+    known_handles: set[str],
 ) -> str:
-    """Pick the single Tenstorrent-affiliated login from a multi-result search.
+    """Pick the single login that looks like a known target-repo contributor.
     Returns "" if ambiguity cannot be resolved."""
     if not items:
         return ""
-    if len(items) == 1:
-        return items[0].get("login", "") or ""
-    # Trim to top 6 to bound API cost.
-    candidates = [it.get("login", "") for it in items[:6] if it.get("login")]
-    org_members = [
-        login for login in candidates
-        if target_org.lower() in _public_orgs_for(login, github_token)
-    ]
-    if len(org_members) == 1:
-        return org_members[0]
+    candidates = [it.get("login", "") for it in items[:10] if it.get("login")]
+    if len(candidates) == 1:
+        return candidates[0]
+    matches = [c for c in candidates if _matches_known_handle(c, known_handles)]
+    if len(matches) == 1:
+        return matches[0]
     return ""
 
 
@@ -194,16 +234,14 @@ def _github_from_identity(
     email: str = "",
     real_name: str = "",
     github_token: str | None = None,
-    commit_identity_index: dict[str, list[dict[str, str]]] | None = None,
-    target_org: str = "tenstorrent",
+    commit_identity_index: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Reverse-lookup: (email, real_name) -> (github login, display name).
 
-    Tries sources in priority order:
+    Priority:
       1. Local commit identity index (offline, authoritative when available).
-      2. GitHub user search by public email.
-      3. GitHub user search by quoted full name + in:fullname.
-    On multi-result searches, disambiguates by public org membership in target_org.
+      2. GitHub user search by public email, disambiguated via known handles.
+      3. GitHub user search by quoted full name, disambiguated via known handles.
     """
 
     if commit_identity_index:
@@ -218,6 +256,10 @@ def _github_from_identity(
     if not github_token:
         return {"login": "", "name": ""}
 
+    known_handles: set[str] = set()
+    if commit_identity_index:
+        known_handles = commit_identity_index.get("handles", set()) or set()
+
     def _accept(login: str) -> dict[str, str]:
         if not login:
             return {"login": "", "name": ""}
@@ -231,7 +273,7 @@ def _github_from_identity(
                 + urllib.parse.quote(f"{email} in:email"),
                 github_token,
             )
-            login = _disambiguate_search(data.get("items", []), target_org, github_token)
+            login = _disambiguate_search(data.get("items", []), known_handles)
             if login:
                 return _accept(login)
         except Exception as exc:  # noqa: BLE001
@@ -244,7 +286,7 @@ def _github_from_identity(
                 + urllib.parse.quote(f'"{real_name}" in:fullname type:user'),
                 github_token,
             )
-            login = _disambiguate_search(data.get("items", []), target_org, github_token)
+            login = _disambiguate_search(data.get("items", []), known_handles)
             if login:
                 return _accept(login)
         except Exception as exc:  # noqa: BLE001

@@ -182,27 +182,23 @@ class AssignOwnersResolverTests(unittest.TestCase):
 
     @patch("tools.ci.assign_owners.owners._github_user_info")
     @patch("tools.ci.assign_owners.owners.api_get")
-    def test_pipeline_reorg_reverse_disambiguates_via_org_membership(
+    def test_pipeline_reorg_reverse_disambiguates_via_known_handles(
         self, mock_api_get, mock_info
     ) -> None:
-        # Search returns 3 candidates; only "samuel-tt" has public tenstorrent org membership.
-        def side_effect(url, *_args, **_kwargs):
-            if "search/users" in url:
-                return {"items": [
-                    {"login": "someone-else"},
-                    {"login": "samuel-tt"},
-                    {"login": "third-party"},
-                ]}
-            if url.endswith("/users/someone-else/orgs"):
-                return [{"login": "other-org"}]
-            if url.endswith("/users/samuel-tt/orgs"):
-                return [{"login": "tenstorrent"}]
-            if url.endswith("/users/third-party/orgs"):
-                return []
-            return {}
-
-        mock_api_get.side_effect = side_effect
+        # Search returns 3 candidates. "samueltt" matches known handle "samuel"
+        # (e.g. from branch prefixes like "samuel/feature-x" on the target repo).
+        mock_api_get.return_value = {"items": [
+            {"login": "someone-else"},
+            {"login": "samueltt"},
+            {"login": "third-party"},
+        ]}
         mock_info.return_value = {"name": "Samuel Example", "email": ""}
+
+        commit_identity_index = {
+            "by_name": {},
+            "by_email": {},
+            "handles": {"samuel"},
+        }
 
         resolved = resolve_owners(
             workflow_name="(triage) Nightly",
@@ -214,9 +210,10 @@ class AssignOwnersResolverTests(unittest.TestCase):
             github_token="token",
             repo_root=Path("."),
             git_history_max_commits=10,
+            commit_identity_index=commit_identity_index,
         )
 
-        self.assertEqual(resolved["github_assignees"], ["samuel-tt"])
+        self.assertEqual(resolved["github_assignees"], ["samueltt"])
         self.assertEqual(resolved["github_names"], ["Samuel Example"])
 
     def test_pipeline_reorg_reverse_uses_commit_identity_index(self) -> None:
@@ -229,6 +226,7 @@ class AssignOwnersResolverTests(unittest.TestCase):
             "by_email": {
                 "1+alice-gh@users.noreply.github.com": [{"login": "alice-gh", "name": "Alice Dev", "email": "1+alice-gh@users.noreply.github.com"}],
             },
+            "handles": {"alice-gh"},
         }
 
         resolved = resolve_owners(
