@@ -159,12 +159,43 @@ def _github_from_commit_index(
     return {"login": "", "name": ""}
 
 
+def _public_orgs_for(login: str, github_token: str | None) -> set[str]:
+    try:
+        data = api_get(f"https://api.github.com/users/{login}/orgs", github_token)
+        return {str(o.get("login", "")).lower() for o in data if o.get("login")}
+    except Exception:
+        return set()
+
+
+def _disambiguate_search(
+    items: list[dict[str, Any]],
+    target_org: str,
+    github_token: str | None,
+) -> str:
+    """Pick the single Tenstorrent-affiliated login from a multi-result search.
+    Returns "" if ambiguity cannot be resolved."""
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0].get("login", "") or ""
+    # Trim to top 6 to bound API cost.
+    candidates = [it.get("login", "") for it in items[:6] if it.get("login")]
+    org_members = [
+        login for login in candidates
+        if target_org.lower() in _public_orgs_for(login, github_token)
+    ]
+    if len(org_members) == 1:
+        return org_members[0]
+    return ""
+
+
 def _github_from_identity(
     *,
     email: str = "",
     real_name: str = "",
     github_token: str | None = None,
     commit_identity_index: dict[str, list[dict[str, str]]] | None = None,
+    target_org: str = "tenstorrent",
 ) -> dict[str, str]:
     """Reverse-lookup: (email, real_name) -> (github login, display name).
 
@@ -172,8 +203,7 @@ def _github_from_identity(
       1. Local commit identity index (offline, authoritative when available).
       2. GitHub user search by public email.
       3. GitHub user search by quoted full name + in:fullname.
-
-    Returns empty strings when no confident match.
+    On multi-result searches, disambiguates by public org membership in target_org.
     """
 
     if commit_identity_index:
@@ -201,9 +231,9 @@ def _github_from_identity(
                 + urllib.parse.quote(f"{email} in:email"),
                 github_token,
             )
-            items = data.get("items", [])
-            if len(items) == 1:
-                return _accept(items[0].get("login", ""))
+            login = _disambiguate_search(data.get("items", []), target_org, github_token)
+            if login:
+                return _accept(login)
         except Exception as exc:  # noqa: BLE001
             log(f"  Warning: GitHub email search failed for {email}: {exc}")
 
@@ -214,9 +244,9 @@ def _github_from_identity(
                 + urllib.parse.quote(f'"{real_name}" in:fullname type:user'),
                 github_token,
             )
-            items = data.get("items", [])
-            if len(items) == 1:
-                return _accept(items[0].get("login", ""))
+            login = _disambiguate_search(data.get("items", []), target_org, github_token)
+            if login:
+                return _accept(login)
         except Exception as exc:  # noqa: BLE001
             log(f"  Warning: GitHub name search failed for '{real_name}': {exc}")
 

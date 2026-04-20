@@ -180,6 +180,45 @@ class AssignOwnersResolverTests(unittest.TestCase):
         self.assertIn("in%3Afullname", second_url)
         self.assertIn("Bob%20Example", second_url)
 
+    @patch("tools.ci.assign_owners.owners._github_user_info")
+    @patch("tools.ci.assign_owners.owners.api_get")
+    def test_pipeline_reorg_reverse_disambiguates_via_org_membership(
+        self, mock_api_get, mock_info
+    ) -> None:
+        # Search returns 3 candidates; only "samuel-tt" has public tenstorrent org membership.
+        def side_effect(url, *_args, **_kwargs):
+            if "search/users" in url:
+                return {"items": [
+                    {"login": "someone-else"},
+                    {"login": "samuel-tt"},
+                    {"login": "third-party"},
+                ]}
+            if url.endswith("/users/someone-else/orgs"):
+                return [{"login": "other-org"}]
+            if url.endswith("/users/samuel-tt/orgs"):
+                return [{"login": "tenstorrent"}]
+            if url.endswith("/users/third-party/orgs"):
+                return []
+            return {}
+
+        mock_api_get.side_effect = side_effect
+        mock_info.return_value = {"name": "Samuel Example", "email": ""}
+
+        resolved = resolve_owners(
+            workflow_name="(triage) Nightly",
+            job_name="some-job",
+            owners_json=[],
+            pipeline_owners=[{"name": "some-job", "id": "U999", "owner_name": "Samuel Example"}],
+            codeowners={},
+            slack_directory=[{"id": "U999", "real_name": "Samuel Example", "email": "s@e.com"}],
+            github_token="token",
+            repo_root=Path("."),
+            git_history_max_commits=10,
+        )
+
+        self.assertEqual(resolved["github_assignees"], ["samuel-tt"])
+        self.assertEqual(resolved["github_names"], ["Samuel Example"])
+
     def test_pipeline_reorg_reverse_uses_commit_identity_index(self) -> None:
         # Surefire path: a dev who has committed to the target repo is looked up
         # offline via the commit identity index — no GitHub API calls required.
