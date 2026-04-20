@@ -119,6 +119,90 @@ class AssignOwnersResolverTests(unittest.TestCase):
         self.assertEqual(resolved["slack_assignees"], ["UEVAN"])
         self.assertEqual(resolved["slack_names"], ["Evan Example"])
 
+    @patch("tools.ci.assign_owners.owners._github_user_info")
+    @patch("tools.ci.assign_owners.owners.api_get")
+    def test_pipeline_reorg_reverse_resolves_github_via_slack_email(
+        self, mock_api_get, mock_info
+    ) -> None:
+        mock_api_get.return_value = {"items": [{"login": "alice-gh"}]}
+        mock_info.return_value = {"name": "Alice Example", "email": ""}
+
+        resolved = resolve_owners(
+            workflow_name="(triage) Nightly",
+            job_name="Galaxy Fabric unit tests",
+            owners_json=[],
+            pipeline_owners=[{"name": "Galaxy Fabric unit tests", "id": "U123", "owner_name": "Alice Example"}],
+            codeowners={},
+            slack_directory=[{"id": "U123", "real_name": "Alice Example", "email": "alice@tenstorrent.com"}],
+            github_token="token",
+            repo_root=Path("."),
+            git_history_max_commits=10,
+        )
+
+        self.assertEqual(resolved["source"], "pipeline_reorg")
+        self.assertEqual(resolved["slack_assignees"], ["U123"])
+        self.assertEqual(resolved["slack_names"], ["Alice Example"])
+        self.assertEqual(resolved["github_assignees"], ["alice-gh"])
+        self.assertEqual(resolved["github_names"], ["Alice Example"])
+        # First call should be the email search.
+        first_url = mock_api_get.call_args_list[0][0][0]
+        self.assertIn("alice%40tenstorrent.com", first_url)
+        self.assertIn("in%3Aemail", first_url)
+
+    @patch("tools.ci.assign_owners.owners._github_user_info")
+    @patch("tools.ci.assign_owners.owners.api_get")
+    def test_pipeline_reorg_reverse_falls_back_to_name_search(
+        self, mock_api_get, mock_info
+    ) -> None:
+        # First call (email search) returns nothing; second call (name search) returns a unique hit.
+        mock_api_get.side_effect = [
+            {"items": []},
+            {"items": [{"login": "bob-gh"}]},
+        ]
+        mock_info.return_value = {"name": "Bob Example", "email": ""}
+
+        resolved = resolve_owners(
+            workflow_name="(triage) Nightly",
+            job_name="Galaxy Fabric unit tests",
+            owners_json=[],
+            pipeline_owners=[{"name": "Galaxy Fabric unit tests", "id": "U777", "owner_name": "Bob Example"}],
+            codeowners={},
+            slack_directory=[{"id": "U777", "real_name": "Bob Example", "email": "bob@example.com"}],
+            github_token="token",
+            repo_root=Path("."),
+            git_history_max_commits=10,
+        )
+
+        self.assertEqual(resolved["github_assignees"], ["bob-gh"])
+        self.assertEqual(resolved["github_names"], ["Bob Example"])
+        self.assertEqual(mock_api_get.call_count, 2)
+        second_url = mock_api_get.call_args_list[1][0][0]
+        self.assertIn("in%3Afullname", second_url)
+        self.assertIn("Bob%20Example", second_url)
+
+    @patch("tools.ci.assign_owners.owners._github_user_info")
+    @patch("tools.ci.assign_owners.owners.api_get")
+    def test_pipeline_reorg_reverse_ambiguous_match_is_dropped(
+        self, mock_api_get, mock_info
+    ) -> None:
+        mock_api_get.return_value = {"items": [{"login": "a"}, {"login": "b"}]}
+        mock_info.return_value = {"name": "", "email": ""}
+
+        resolved = resolve_owners(
+            workflow_name="(triage) Nightly",
+            job_name="Galaxy Fabric unit tests",
+            owners_json=[],
+            pipeline_owners=[{"name": "Galaxy Fabric unit tests", "id": "U123", "owner_name": "Common Name"}],
+            codeowners={},
+            slack_directory=[{"id": "U123", "real_name": "Common Name", "email": "c@c.com"}],
+            github_token="token",
+            repo_root=Path("."),
+            git_history_max_commits=10,
+        )
+
+        self.assertEqual(resolved["github_assignees"], [])
+        self.assertEqual(resolved["slack_assignees"], ["U123"])
+
     @patch("tools.ci.assign_owners.owners._git_history_candidates")
     def test_none_when_no_sources_match(self, mock_history) -> None:
         mock_history.return_value = ([], [])

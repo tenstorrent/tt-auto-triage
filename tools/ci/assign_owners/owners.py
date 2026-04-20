@@ -4,6 +4,7 @@ import fnmatch
 import json
 import re
 import subprocess
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -67,13 +68,98 @@ def lookup_slack_id(query: str, slack_directory: list[dict[str, Any]]) -> str:
     return _slack_user_for(query, slack_directory)["id"]
 
 
-def _slack_name_for_id(slack_id: str, slack_directory: list[dict[str, Any]]) -> str:
+def _slack_user_by_id(slack_id: str, slack_directory: list[dict[str, Any]]) -> dict[str, Any]:
     if not slack_id:
-        return ""
+        return {}
     for user in slack_directory:
         if user.get("id") == slack_id:
-            return user.get("real_name") or user.get("display_name") or ""
-    return ""
+            return user
+    return {}
+
+
+def _slack_name_for_id(slack_id: str, slack_directory: list[dict[str, Any]]) -> str:
+    user = _slack_user_by_id(slack_id, slack_directory)
+    return user.get("real_name") or user.get("display_name") or ""
+
+
+def _github_from_identity(
+    *,
+    email: str = "",
+    real_name: str = "",
+    github_token: str | None = None,
+) -> dict[str, str]:
+    """Reverse-lookup: (email, real_name) -> (github login, display name).
+
+    Tries GitHub's user search by public email first (highest signal),
+    then a quoted full-name + in:fullname search. Accepts only single-result
+    hits to avoid ambiguity. Returns empty strings when no confident match.
+    """
+
+    if not github_token:
+        return {"login": "", "name": ""}
+
+    def _accept(login: str) -> dict[str, str]:
+        if not login:
+            return {"login": "", "name": ""}
+        info = _github_user_info(login, github_token)
+        return {"login": login, "name": info.get("name") or real_name}
+
+    if email and "@" in email:
+        try:
+            data = api_get(
+                "https://api.github.com/search/users?q="
+                + urllib.parse.quote(f"{email} in:email"),
+                github_token,
+            )
+            items = data.get("items", [])
+            if len(items) == 1:
+                return _accept(items[0].get("login", ""))
+        except Exception as exc:  # noqa: BLE001
+            log(f"  Warning: GitHub email search failed for {email}: {exc}")
+
+    if real_name:
+        try:
+            data = api_get(
+                "https://api.github.com/search/users?q="
+                + urllib.parse.quote(f'"{real_name}" in:fullname type:user'),
+                github_token,
+            )
+            items = data.get("items", [])
+            if len(items) == 1:
+                return _accept(items[0].get("login", ""))
+        except Exception as exc:  # noqa: BLE001
+            log(f"  Warning: GitHub name search failed for '{real_name}': {exc}")
+
+    return {"login": "", "name": ""}
+
+
+def _enrich_slack_only_with_github(
+    slack_ids: list[str],
+    slack_names_seed: list[str],
+    slack_directory: list[dict[str, Any]],
+    github_token: str | None,
+) -> tuple[list[str], list[str], list[str]]:
+    """For a slack-only tier (pipeline_reorg / owners_json), resolve GitHub
+    login+name per Slack ID and return (slack_names, github_logins, github_names).
+    slack_names_seed provides authoritative names when available (e.g. pipeline_reorg comment).
+    """
+    slack_names: list[str] = []
+    github_logins: list[str] = []
+    github_names: list[str] = []
+    for idx, sid in enumerate(slack_ids):
+        su = _slack_user_by_id(sid, slack_directory)
+        seeded = slack_names_seed[idx] if idx < len(slack_names_seed) else ""
+        real_name = seeded or su.get("real_name") or su.get("display_name") or ""
+        slack_names.append(real_name)
+        gh_hit = _github_from_identity(
+            email=su.get("email", ""),
+            real_name=real_name,
+            github_token=github_token,
+        )
+        if gh_hit["login"]:
+            github_logins.append(gh_hit["login"])
+            github_names.append(gh_hit["name"])
+    return slack_names, github_logins, github_names
 
 
 def load_owners_json(path: Path) -> list[dict[str, Any]]:
@@ -306,13 +392,18 @@ def resolve_owners(
         entry_name = entry["name"].lower()
         if entry_name in job_lower or job_lower in entry_name:
             slack_id = entry["id"]
-            slack_name = entry.get("owner_name") or _slack_name_for_id(slack_id, slack_directory)
+            if not slack_id:
+                continue
+            slack_name_seed = entry.get("owner_name") or ""
+            slack_names, gh_logins, gh_names = _enrich_slack_only_with_github(
+                [slack_id], [slack_name_seed], slack_directory, github_token,
+            )
             return {
                 "source": "pipeline_reorg",
-                "github_assignees": [],
-                "github_names": [],
-                "slack_assignees": [slack_id] if slack_id else [],
-                "slack_names": [slack_name] if slack_id else [],
+                "github_assignees": gh_logins,
+                "github_names": gh_names,
+                "slack_assignees": [slack_id],
+                "slack_names": slack_names,
             }
 
     for record in owners_json:
@@ -322,17 +413,28 @@ def resolve_owners(
         owner = record.get("owner")
         if isinstance(owner, list):
             slack_ids = [e["id"] for e in owner if e.get("id")]
+            seeded_names = [e.get("name") or "" for e in owner if e.get("id")]
         elif isinstance(owner, dict):
             slack_ids = [owner["id"]] if owner.get("id") else []
+            seeded_names = [owner.get("name") or ""] if owner.get("id") else []
         else:
             slack_ids = []
-        slack_ids = list(dict.fromkeys(slack_ids))
+            seeded_names = []
+        deduped: list[str] = []
+        deduped_names: list[str] = []
+        for sid, sn in zip(slack_ids, seeded_names):
+            if sid not in deduped:
+                deduped.append(sid)
+                deduped_names.append(sn)
+        slack_names, gh_logins, gh_names = _enrich_slack_only_with_github(
+            deduped, deduped_names, slack_directory, github_token,
+        )
         return {
             "source": "owners_json",
-            "github_assignees": [],
-            "github_names": [],
-            "slack_assignees": slack_ids,
-            "slack_names": [_slack_name_for_id(sid, slack_directory) for sid in slack_ids],
+            "github_assignees": gh_logins,
+            "github_names": gh_names,
+            "slack_assignees": deduped,
+            "slack_names": slack_names,
         }
 
     codeowners_users = _codeowners_matches(workflow_name, codeowners, repo_root_path)
