@@ -16,11 +16,11 @@ on:
         type: boolean
         default: false
       issue-repo:
-        description: "Repository to create issues in"
+        description: "Repository containing the CI triage issues"
         type: string
         default: "ebanerjeeTT/issue_dump"
       target-repo:
-        description: "Repository to analyze workflow data from"
+        description: "Repository to read ownership metadata from"
         type: string
         default: "tenstorrent/tt-metal"
       max-issues:
@@ -33,10 +33,13 @@ on:
         default: "C0APK6215B5"
     secrets:
       AGGREGATE_READ_TOKEN:
+        description: "Token with read access to target-repo"
         required: false
       ISSUE_WRITE_TOKEN:
+        description: "Token with write access to issue-repo"
         required: true
       SLACK_BOT_TOKEN:
+        description: "Optional Slack bot token for GitHub-to-Slack resolution"
         required: false
       CURSOR_API_KEY:
         required: false
@@ -54,23 +57,8 @@ jobs:
       ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
 
-  validate-assign-owners:
-    if: ${{ inputs.assign-owners }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate assign-owners secrets
-        env:
-          AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
-        run: |
-          if [ -z "$AGGREGATE_READ_TOKEN" ]; then
-            echo "::error::AGGREGATE_READ_TOKEN is required when assign-owners is enabled"
-            exit 1
-          fi
-
   assign-owners:
-    if: ${{ inputs.assign-owners && needs.validate-assign-owners.result == 'success' }}
-    needs:
-      - validate-assign-owners
+    if: ${{ inputs.assign-owners }}
     uses: ./.github/workflows/triage-assign-owners.yaml
     with:
       issue-repo: ${{ inputs.issue-repo }}

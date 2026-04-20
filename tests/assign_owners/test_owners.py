@@ -1,3 +1,4 @@
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -6,12 +7,12 @@ from tools.ci.assign_owners.owners import resolve_owners
 
 
 class AssignOwnersResolverTests(unittest.TestCase):
-    def test_pipeline_reorg_has_highest_priority(self) -> None:
+    def test_pipeline_reorg_has_highest_priority_and_returns_name(self) -> None:
         resolved = resolve_owners(
             workflow_name="(triage) Nightly",
             job_name="Galaxy Fabric unit tests",
             owners_json=[],
-            pipeline_owners=[{"name": "Galaxy Fabric unit tests", "id": "U123", "owner_name": "Owner"}],
+            pipeline_owners=[{"name": "Galaxy Fabric unit tests", "id": "U123", "owner_name": "Alice"}],
             codeowners={".github/workflows/triage-ci.yaml": ["owner1"]},
             slack_directory=[],
             github_token=None,
@@ -19,95 +20,108 @@ class AssignOwnersResolverTests(unittest.TestCase):
             git_history_max_commits=10,
         )
 
-        self.assertEqual(
-            resolved,
-            {
-                "source": "pipeline_reorg",
-                "github_assignees": [],
-                "slack_assignees": ["U123"],
-            },
-        )
+        self.assertEqual(resolved["source"], "pipeline_reorg")
+        self.assertEqual(resolved["github_assignees"], [])
+        self.assertEqual(resolved["slack_assignees"], ["U123"])
+        self.assertEqual(resolved["slack_names"], ["Alice"])
 
-    def test_owners_json_used_before_codeowners_and_git_history(self) -> None:
+    def test_owners_json_fills_slack_names_from_directory(self) -> None:
         resolved = resolve_owners(
             workflow_name="(triage) Nightly",
             job_name="galaxy-ci / integration / flake",
-            owners_json=[
-                {
-                    "job-name-component": "integration",
-                    "owner": {"id": "U999"},
-                }
-            ],
+            owners_json=[{"job-name-component": "integration", "owner": {"id": "U999"}}],
             pipeline_owners=[],
             codeowners={".github/workflows/triage-ci.yaml": ["codeowner-user"]},
-            slack_directory=[],
+            slack_directory=[{"id": "U999", "real_name": "Betty Example"}],
             github_token=None,
             repo_root=Path("."),
             git_history_max_commits=10,
         )
 
-        self.assertEqual(
-            resolved,
-            {
-                "source": "owners_json",
-                "github_assignees": [],
-                "slack_assignees": ["U999"],
-            },
-        )
+        self.assertEqual(resolved["source"], "owners_json")
+        self.assertEqual(resolved["slack_assignees"], ["U999"])
+        self.assertEqual(resolved["slack_names"], ["Betty Example"])
 
     @patch("tools.ci.assign_owners.owners._resolve_github_users")
-    @patch("tools.ci.assign_owners.owners._github_users_from_git_history")
-    def test_codeowners_beats_git_history(self, mock_git_history, mock_resolve_github_users) -> None:
-        mock_git_history.return_value = ["history-user"]
-        mock_resolve_github_users.return_value = (["codeowner-user"], ["UCODEOWNER"])
+    @patch("tools.ci.assign_owners.owners._git_history_candidates")
+    def test_codeowners_beats_git_history(self, mock_history, mock_resolve) -> None:
+        mock_history.return_value = (["history-user"], [])
+        mock_resolve.return_value = (["codeowner-user"], ["Codeowner User"], ["UCODEOWNER"], ["Codeowner User"])
 
-        resolved = resolve_owners(
-            workflow_name="(triage) ci",
-            job_name="job-x",
-            owners_json=[],
-            pipeline_owners=[],
-            codeowners={".github/workflows/triage-ci.yaml": ["codeowner-user"]},
-            slack_directory=[],
-            github_token="token",
-            repo_root=Path("."),
-            git_history_max_commits=10,
-        )
+        with tempfile.TemporaryDirectory() as repo:
+            repo_root = Path(repo)
+            (repo_root / ".github" / "workflows").mkdir(parents=True)
+            (repo_root / ".github" / "workflows" / "my-example-workflow.yaml").write_text("name: x\n")
+
+            resolved = resolve_owners(
+                workflow_name="My Example Workflow",
+                job_name="job-x",
+                owners_json=[],
+                pipeline_owners=[],
+                codeowners={".github/workflows/my-example-workflow.yaml": ["codeowner-user"]},
+                slack_directory=[],
+                github_token="token",
+                repo_root=repo_root,
+                git_history_max_commits=10,
+            )
 
         self.assertEqual(resolved["source"], "CODEOWNERS")
         self.assertEqual(resolved["github_assignees"], ["codeowner-user"])
-        mock_git_history.assert_not_called()
+        self.assertEqual(resolved["github_names"], ["Codeowner User"])
+        mock_history.assert_not_called()
 
-    @patch("tools.ci.assign_owners.owners._resolve_github_users")
-    @patch("tools.ci.assign_owners.owners._github_users_from_git_history")
-    def test_git_history_used_as_last_fallback(self, mock_git_history, mock_resolve_github_users) -> None:
-        mock_git_history.return_value = ["history-user"]
-        mock_resolve_github_users.return_value = (["history-user"], ["UHISTORY"])
+    def test_codeowners_matches_against_actual_workflow_file_on_disk(self) -> None:
+        # Regression: CODEOWNERS resolution now uses the real workflow file path, not a fuzzy display-name match.
+        with tempfile.TemporaryDirectory() as repo:
+            repo_root = Path(repo)
+            wf_dir = repo_root / ".github" / "workflows"
+            wf_dir.mkdir(parents=True)
+            (wf_dir / "t3000-perf-tests.yaml").write_text("name: perf\n")
 
+            with patch("tools.ci.assign_owners.owners._resolve_github_users") as mock_resolve:
+                mock_resolve.return_value = (["t3k-owner"], ["T3K Owner"], [], [])
+                resolved = resolve_owners(
+                    workflow_name="(T3K) T3000 perf tests",
+                    job_name="some-job",
+                    owners_json=[],
+                    pipeline_owners=[],
+                    codeowners={".github/workflows/t3000-perf-tests.yaml": ["t3k-owner"]},
+                    slack_directory=[],
+                    github_token=None,
+                    repo_root=repo_root,
+                    git_history_max_commits=10,
+                )
+
+        self.assertEqual(resolved["source"], "CODEOWNERS")
+        self.assertEqual(resolved["github_assignees"], ["t3k-owner"])
+
+    @patch("tools.ci.assign_owners.owners._git_history_candidates")
+    @patch("tools.ci.assign_owners.owners._github_user_info")
+    def test_git_history_resolves_real_email_authors_via_slack(self, mock_info, mock_history) -> None:
+        # Regression: non-noreply emails from git history should still match Slack profiles.
+        mock_history.return_value = ([], ["evan@tenstorrent.com"])
+        mock_info.return_value = {"name": "", "email": ""}
+
+        slack_directory = [{"id": "UEVAN", "real_name": "Evan Example", "email": "evan@tenstorrent.com"}]
         resolved = resolve_owners(
             workflow_name="(triage) custom workflow",
             job_name="job-x",
             owners_json=[],
             pipeline_owners=[],
             codeowners={},
-            slack_directory=[],
-            github_token="token",
+            slack_directory=slack_directory,
+            github_token=None,
             repo_root=Path("."),
             git_history_max_commits=10,
         )
 
-        self.assertEqual(
-            resolved,
-            {
-                "source": "git_history",
-                "github_assignees": ["history-user"],
-                "slack_assignees": ["UHISTORY"],
-            },
-        )
-        mock_git_history.assert_called_once()
+        self.assertEqual(resolved["source"], "git_history")
+        self.assertEqual(resolved["slack_assignees"], ["UEVAN"])
+        self.assertEqual(resolved["slack_names"], ["Evan Example"])
 
-    @patch("tools.ci.assign_owners.owners._github_users_from_git_history")
-    def test_none_when_no_sources_match(self, mock_git_history) -> None:
-        mock_git_history.return_value = []
+    @patch("tools.ci.assign_owners.owners._git_history_candidates")
+    def test_none_when_no_sources_match(self, mock_history) -> None:
+        mock_history.return_value = ([], [])
 
         resolved = resolve_owners(
             workflow_name="(triage) unknown",
@@ -121,14 +135,9 @@ class AssignOwnersResolverTests(unittest.TestCase):
             git_history_max_commits=10,
         )
 
-        self.assertEqual(
-            resolved,
-            {
-                "source": "none",
-                "github_assignees": [],
-                "slack_assignees": [],
-            },
-        )
+        self.assertEqual(resolved["source"], "none")
+        self.assertEqual(resolved["github_assignees"], [])
+        self.assertEqual(resolved["slack_assignees"], [])
 
 
 if __name__ == "__main__":

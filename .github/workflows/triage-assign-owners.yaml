@@ -30,6 +30,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Validate required secrets
+        env:
+          AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+          ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+        run: |
+          if [ -z "$ISSUE_WRITE_TOKEN" ]; then
+            echo "::error::ISSUE_WRITE_TOKEN is required"
+            exit 1
+          fi
+          if [ -z "$AGGREGATE_READ_TOKEN" ]; then
+            echo "::error::AGGREGATE_READ_TOKEN is required to read ownership data from target-repo"
+            exit 1
+          fi
+
       - name: Checkout tt-auto-triage
         uses: actions/checkout@v4
         with:

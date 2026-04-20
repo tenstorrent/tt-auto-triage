@@ -26,18 +26,68 @@ TARGET_REPO_ROOT = Path(os.environ.get("TARGET_REPO_ROOT", "tt-metal"))
 GIT_HISTORY_MAX_COMMITS = int(os.environ.get("GIT_HISTORY_MAX_COMMITS", "100"))
 
 
-def render_summary(rows: list[dict[str, Any]]) -> str:
-    lines = ["# Assignee Resolution Summary\n"]
-    if not rows:
-        lines.append("No issues were updated.\n")
-        return "\n".join(lines)
-    for row in rows:
-        github_users = ", ".join(row["github_assignees"]) or "none"
-        slack_ids = ", ".join(row["slack_assignees"]) or "none"
-        lines.append(
-            f"- #{row['number']}: source={row['source']} gh=[{github_users}] slack=[{slack_ids}]"
-        )
+def _format_gh(logins: list[str], names: list[str]) -> str:
+    if not logins:
+        return "_none_"
+    parts: list[str] = []
+    for i, login in enumerate(logins):
+        name = names[i] if i < len(names) else ""
+        parts.append(f"`{login}`" + (f" ({name})" if name else ""))
+    return ", ".join(parts)
+
+
+def _format_slack(ids: list[str], names: list[str]) -> str:
+    if not ids:
+        return "_none_"
+    parts: list[str] = []
+    for i, sid in enumerate(ids):
+        name = names[i] if i < len(names) else ""
+        parts.append((f"{name} (`{sid}`)" if name else f"`{sid}`"))
+    return ", ".join(parts)
+
+
+def render_summary(
+    updated: list[dict[str, Any]],
+    skipped: list[dict[str, Any]],
+    unchanged: list[dict[str, Any]],
+) -> str:
+    lines: list[str] = ["# Assignee Resolution Summary", ""]
+    lines.append(f"- **Updated:** {len(updated)}")
+    lines.append(f"- **Unchanged (idempotent):** {len(unchanged)}")
+    lines.append(f"- **Skipped (missing base metadata):** {len(skipped)}")
     lines.append("")
+
+    if updated:
+        lines.append("## Assigned owners")
+        lines.append("")
+        lines.append("| Issue | Source | GitHub (login + name) | Slack (name + id) |")
+        lines.append("| --- | --- | --- | --- |")
+        for row in updated:
+            lines.append(
+                f"| #{row['number']} | `{row['source']}` | "
+                f"{_format_gh(row['github_assignees'], row['github_names'])} | "
+                f"{_format_slack(row['slack_assignees'], row['slack_names'])} |"
+            )
+        lines.append("")
+
+    if unchanged:
+        lines.append("## Already up-to-date")
+        lines.append("")
+        for row in unchanged:
+            lines.append(f"- #{row['number']} (source: `{row['source']}`)")
+        lines.append("")
+
+    if skipped:
+        lines.append("## Skipped")
+        lines.append("")
+        for row in skipped:
+            lines.append(f"- #{row['number']}: {row['reason']}")
+        lines.append("")
+
+    if not (updated or unchanged or skipped):
+        lines.append("No CI auto-triage issues found in the target repo.")
+        lines.append("")
+
     return "\n".join(lines)
 
 
@@ -56,11 +106,16 @@ def main() -> int:
             log(f"  Warning: failed to download Slack directory: {exc}")
 
     updated: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    unchanged: list[dict[str, Any]] = []
     for issue in issues:
+        number = issue["number"]
         base = parse_base_markers(issue.get("body", ""))
         workflow_name = str(base["workflow_name"])
         job_name = str(base["job_name"])
         if not workflow_name or not job_name:
+            log(f"  #{number}: missing base metadata, skipping")
+            skipped.append({"number": number, "reason": "missing Auto-triage-workflow / Auto-triage-job-name"})
             continue
 
         resolved = resolve_owners(
@@ -74,49 +129,57 @@ def main() -> int:
             repo_root=TARGET_REPO_ROOT,
             git_history_max_commits=GIT_HISTORY_MAX_COMMITS,
         )
-        github_assignees = resolved["github_assignees"]
-        slack_assignees = resolved["slack_assignees"]
+        github_assignees = list(resolved["github_assignees"])  # type: ignore[arg-type]
+        github_names = list(resolved.get("github_names", []))  # type: ignore[arg-type]
+        slack_assignees = list(resolved["slack_assignees"])  # type: ignore[arg-type]
+        slack_names = list(resolved.get("slack_names", []))  # type: ignore[arg-type]
         source = str(resolved["source"])
+
         new_body = upsert_assignee_markers(
             issue.get("body", ""),
-            github_assignees=list(github_assignees),
-            slack_assignees=list(slack_assignees),
+            github_assignees=github_assignees,
+            slack_assignees=slack_assignees,
             source=source,
         )
         existing = parse_assignee_markers(issue.get("body", ""))
         existing_labels = {label.get("name", "") for label in issue.get("labels", [])}
         if (
             existing == {
-                "github_assignees": list(github_assignees),
-                "slack_assignees": list(slack_assignees),
+                "github_assignees": github_assignees,
+                "slack_assignees": slack_assignees,
                 "source": source,
             }
             and OWNERS_READY_LABEL in existing_labels
         ):
+            log(f"  #{number}: assignees unchanged, skipping update")
+            unchanged.append({"number": number, "source": source})
             continue
 
         update_issue(
             ISSUE_REPO,
-            issue["number"],
+            number,
             new_body,
             ISSUE_WRITE_TOKEN,
             add_labels=[OWNERS_READY_LABEL],
         )
         updated.append(
             {
-                "number": issue["number"],
+                "number": number,
                 "source": source,
-                "github_assignees": list(github_assignees),
-                "slack_assignees": list(slack_assignees),
+                "github_assignees": github_assignees,
+                "github_names": github_names,
+                "slack_assignees": slack_assignees,
+                "slack_names": slack_names,
             }
         )
+        log(f"  #{number}: source={source} gh={github_assignees} slack={slack_assignees}")
 
-    summary = render_summary(updated)
+    summary = render_summary(updated, skipped, unchanged)
     if SUMMARY_OUTPUT:
         Path(SUMMARY_OUTPUT).write_text(summary, encoding="utf-8")
     else:
         print(summary)
-    print(json.dumps({"updated": updated}, indent=2), file=sys.stderr)
+    print(json.dumps({"updated": updated, "unchanged": unchanged, "skipped": skipped}, indent=2), file=sys.stderr)
     return 0
 
 

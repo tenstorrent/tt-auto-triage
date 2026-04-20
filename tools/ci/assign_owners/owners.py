@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import subprocess
@@ -30,28 +31,49 @@ def _github_user_info(gh_username: str, token: str | None = None) -> dict[str, s
         return {"name": "", "email": ""}
 
 
-def lookup_slack_id(query: str, slack_directory: list[dict[str, Any]]) -> str:
+def _slack_user_for(query: str, slack_directory: list[dict[str, Any]]) -> dict[str, str]:
+    """Find the best Slack match for `query`; returns id/real_name/display_name or empty strings."""
     query_norm = _normalize(query)
     if not query_norm:
-        return ""
+        return {"id": "", "real_name": "", "display_name": ""}
     best_score = 0.0
-    best_id = ""
+    best: dict[str, str] = {"id": "", "real_name": "", "display_name": ""}
     for user in slack_directory:
         if user.get("deleted") or user.get("is_bot"):
             continue
         for field in ("real_name", "display_name", "email", "username"):
-            value = user.get(field, "")
-            value_norm = _normalize(value)
+            value_norm = _normalize(user.get(field, ""))
             if not value_norm:
                 continue
             if value_norm == query_norm:
-                return user.get("id", "")
+                return {
+                    "id": user.get("id", ""),
+                    "real_name": user.get("real_name", ""),
+                    "display_name": user.get("display_name", ""),
+                }
             if query_norm in value_norm and len(query_norm) >= 3:
                 score = len(query_norm) / len(value_norm)
                 if score > best_score:
                     best_score = score
-                    best_id = user.get("id", "")
-    return best_id if best_score >= 0.5 else ""
+                    best = {
+                        "id": user.get("id", ""),
+                        "real_name": user.get("real_name", ""),
+                        "display_name": user.get("display_name", ""),
+                    }
+    return best if best_score >= 0.5 else {"id": "", "real_name": "", "display_name": ""}
+
+
+def lookup_slack_id(query: str, slack_directory: list[dict[str, Any]]) -> str:
+    return _slack_user_for(query, slack_directory)["id"]
+
+
+def _slack_name_for_id(slack_id: str, slack_directory: list[dict[str, Any]]) -> str:
+    if not slack_id:
+        return ""
+    for user in slack_directory:
+        if user.get("id") == slack_id:
+            return user.get("real_name") or user.get("display_name") or ""
+    return ""
 
 
 def load_owners_json(path: Path) -> list[dict[str, Any]]:
@@ -108,24 +130,6 @@ def load_codeowners(path: Path) -> dict[str, list[str]]:
     return rules
 
 
-def _codeowners_matches(workflow_name: str, codeowners: dict[str, list[str]]) -> list[str]:
-    workflow_lower = workflow_name.lower().replace(" ", "-").replace("(", "").replace(")", "")
-    matches: list[str] = []
-    for pattern, owners in codeowners.items():
-        pattern_lower = pattern.lower()
-        if ".github/workflows/" not in pattern_lower:
-            continue
-        pattern_base = (
-            pattern_lower.rsplit("/", 1)[-1]
-            .replace(".yaml", "")
-            .replace(".yml", "")
-            .replace("*", "")
-        )
-        if pattern_base and pattern_base in workflow_lower:
-            matches.extend(owners)
-    return list(dict.fromkeys(matches))
-
-
 def _workflow_file_candidates(workflow_name: str, repo_root: Path) -> list[Path]:
     workflows_dir = repo_root / ".github" / "workflows"
     if not workflows_dir.exists():
@@ -142,6 +146,35 @@ def _workflow_file_candidates(workflow_name: str, repo_root: Path) -> list[Path]
     return candidates
 
 
+def _codeowners_match(rel_path: str, pattern: str) -> bool:
+    """Minimal CODEOWNERS matcher against a relative file path."""
+    p = pattern.lstrip("/")
+    if p.endswith("/"):
+        return rel_path.startswith(p)
+    if "*" in p or "?" in p:
+        return fnmatch.fnmatch(rel_path, p)
+    return rel_path == p or rel_path.endswith("/" + p)
+
+
+def _codeowners_matches(
+    workflow_name: str,
+    codeowners: dict[str, list[str]],
+    repo_root: Path,
+) -> list[str]:
+    """Resolve CODEOWNERS against the actual workflow file(s) for `workflow_name`."""
+    workflow_files = _workflow_file_candidates(workflow_name, repo_root)
+    if not workflow_files:
+        return []
+    rel_paths = [str(path.relative_to(repo_root)) for path in workflow_files]
+    matches: list[str] = []
+    for pattern, owners in codeowners.items():
+        for rel_path in rel_paths:
+            if _codeowners_match(rel_path, pattern):
+                matches.extend(owners)
+                break
+    return list(dict.fromkeys(matches))
+
+
 def _extract_github_login(email: str) -> str:
     match = re.match(r"^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$", email.strip(), re.IGNORECASE)
     if not match:
@@ -149,69 +182,100 @@ def _extract_github_login(email: str) -> str:
     return match.group(1).strip()
 
 
-def _github_users_from_git_history(
+def _git_history_candidates(
     workflow_name: str,
     repo_root: Path,
     git_history_max_commits: int,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
+    """Return (logins, raw_emails) from recent commits touching the matching workflow file(s)."""
     workflow_files = _workflow_file_candidates(workflow_name, repo_root)
     if not workflow_files:
-        return []
+        return [], []
 
     rel_paths = [str(path.relative_to(repo_root)) for path in workflow_files]
     cmd = [
-        "git",
-        "-C",
-        str(repo_root),
-        "log",
+        "git", "-C", str(repo_root), "log",
         f"-n{git_history_max_commits}",
         "--pretty=%ae%x09%ce",
-        "--",
-        *rel_paths,
+        "--", *rel_paths,
     ]
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=30,
-        )
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         log(f"  Warning: git history owner lookup failed for '{workflow_name}': {exc}")
-        return []
+        return [], []
 
-    users: list[str] = []
-    seen: set[str] = set()
+    logins: list[str] = []
+    emails: list[str] = []
+    seen_logins: set[str] = set()
+    seen_emails: set[str] = set()
     for line in proc.stdout.splitlines():
         for email in line.split("\t"):
+            email = email.strip()
+            if not email:
+                continue
             login = _extract_github_login(email)
-            if login and login not in seen:
-                seen.add(login)
-                users.append(login)
-    return users
+            if login:
+                if login not in seen_logins:
+                    seen_logins.add(login)
+                    logins.append(login)
+            else:
+                if email not in seen_emails:
+                    seen_emails.add(email)
+                    emails.append(email)
+    return logins, emails
 
 
 def _resolve_github_users(
     github_users: list[str],
     slack_directory: list[dict[str, Any]],
     github_token: str | None,
-) -> tuple[list[str], list[str]]:
+    extra_email_queries: list[str] | None = None,
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Resolve github logins into (logins, gh_names, slack_ids, slack_names) aligned by input order.
+
+    extra_email_queries (optional) are raw emails that should also be tried against Slack
+    when no github login produces a match — useful for real-email git-history authors.
+    """
+    gh_names: list[str] = []
     slack_ids: list[str] = []
+    slack_names: list[str] = []
     seen_slack: set[str] = set()
     for github_user in github_users:
-        user_info = _github_user_info(github_user, github_token)
-        slack_id = ""
-        if user_info["name"]:
-            slack_id = lookup_slack_id(user_info["name"], slack_directory)
-        if not slack_id and user_info["email"]:
-            slack_id = lookup_slack_id(user_info["email"], slack_directory)
-        if not slack_id:
-            slack_id = lookup_slack_id(github_user, slack_directory)
-        if slack_id and slack_id not in seen_slack:
-            seen_slack.add(slack_id)
-            slack_ids.append(slack_id)
-    return list(dict.fromkeys(github_users)), slack_ids
+        info = _github_user_info(github_user, github_token)
+        slack_hit: dict[str, str] = {"id": "", "real_name": "", "display_name": ""}
+        for query in (info["name"], info["email"], github_user):
+            if not query:
+                continue
+            slack_hit = _slack_user_for(query, slack_directory)
+            if slack_hit["id"]:
+                break
+        gh_names.append(info["name"])
+        sid = slack_hit["id"]
+        if sid and sid not in seen_slack:
+            seen_slack.add(sid)
+            slack_ids.append(sid)
+            slack_names.append(slack_hit["real_name"] or slack_hit["display_name"])
+
+    for email in extra_email_queries or []:
+        slack_hit = _slack_user_for(email, slack_directory)
+        sid = slack_hit["id"]
+        if sid and sid not in seen_slack:
+            seen_slack.add(sid)
+            slack_ids.append(sid)
+            slack_names.append(slack_hit["real_name"] or slack_hit["display_name"])
+
+    return list(dict.fromkeys(github_users)), gh_names, slack_ids, slack_names
+
+
+def _empty() -> dict[str, object]:
+    return {
+        "source": "none",
+        "github_assignees": [],
+        "github_names": [],
+        "slack_assignees": [],
+        "slack_names": [],
+    }
 
 
 def resolve_owners(
@@ -225,7 +289,15 @@ def resolve_owners(
     repo_root: Path | str = Path("tt-metal"),
     git_history_max_commits: int = 100,
 ) -> dict[str, object]:
-    """Resolve owners with 4-tier priority: pipeline_reorg > owners.json > CODEOWNERS > git history."""
+    """Resolve owners with 4-tier priority: pipeline_reorg > owners.json > CODEOWNERS > git history.
+
+    Returns a dict with:
+      - source: which tier matched ("none" if no match)
+      - github_assignees: list of GitHub logins (may be empty for slack-only sources)
+      - github_names: real names parallel to github_assignees
+      - slack_assignees: list of Slack user ids
+      - slack_names: real names parallel to slack_assignees
+    """
     combined = f"{workflow_name} / {job_name}".lower()
     job_lower = job_name.lower()
     repo_root_path = Path(repo_root)
@@ -234,10 +306,13 @@ def resolve_owners(
         entry_name = entry["name"].lower()
         if entry_name in job_lower or job_lower in entry_name:
             slack_id = entry["id"]
+            slack_name = entry.get("owner_name") or _slack_name_for_id(slack_id, slack_directory)
             return {
                 "source": "pipeline_reorg",
                 "github_assignees": [],
+                "github_names": [],
                 "slack_assignees": [slack_id] if slack_id else [],
+                "slack_names": [slack_name] if slack_id else [],
             }
 
     for record in owners_json:
@@ -246,42 +321,47 @@ def resolve_owners(
             continue
         owner = record.get("owner")
         if isinstance(owner, list):
-            slack_ids = [entry["id"] for entry in owner if entry.get("id")]
+            slack_ids = [e["id"] for e in owner if e.get("id")]
         elif isinstance(owner, dict):
             slack_ids = [owner["id"]] if owner.get("id") else []
         else:
             slack_ids = []
+        slack_ids = list(dict.fromkeys(slack_ids))
         return {
             "source": "owners_json",
             "github_assignees": [],
-            "slack_assignees": list(dict.fromkeys(slack_ids)),
+            "github_names": [],
+            "slack_assignees": slack_ids,
+            "slack_names": [_slack_name_for_id(sid, slack_directory) for sid in slack_ids],
         }
 
-    github_assignees = _codeowners_matches(workflow_name, codeowners)
-    if github_assignees:
-        github_users, slack_ids = _resolve_github_users(github_assignees, slack_directory, github_token)
+    codeowners_users = _codeowners_matches(workflow_name, codeowners, repo_root_path)
+    if codeowners_users:
+        logins, gh_names, slack_ids, slack_names = _resolve_github_users(
+            codeowners_users, slack_directory, github_token
+        )
         return {
             "source": "CODEOWNERS",
-            "github_assignees": github_users,
+            "github_assignees": logins,
+            "github_names": gh_names,
             "slack_assignees": slack_ids,
+            "slack_names": slack_names,
         }
 
-    git_history_users = _github_users_from_git_history(
-        workflow_name,
-        repo_root_path,
-        git_history_max_commits,
+    logins_hist, emails_hist = _git_history_candidates(
+        workflow_name, repo_root_path, git_history_max_commits
     )
-    if git_history_users:
-        github_users, slack_ids = _resolve_github_users(git_history_users, slack_directory, github_token)
-        if github_users:
+    if logins_hist or emails_hist:
+        logins, gh_names, slack_ids, slack_names = _resolve_github_users(
+            logins_hist, slack_directory, github_token, extra_email_queries=emails_hist
+        )
+        if logins or slack_ids:
             return {
                 "source": "git_history",
-                "github_assignees": github_users,
+                "github_assignees": logins,
+                "github_names": gh_names,
                 "slack_assignees": slack_ids,
+                "slack_names": slack_names,
             }
 
-    return {
-        "source": "none",
-        "github_assignees": [],
-        "slack_assignees": [],
-    }
+    return _empty()
