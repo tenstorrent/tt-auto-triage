@@ -180,6 +180,37 @@ class AssignOwnersResolverTests(unittest.TestCase):
         self.assertIn("in%3Afullname", second_url)
         self.assertIn("Bob%20Example", second_url)
 
+    def test_pipeline_reorg_reverse_uses_commit_identity_index(self) -> None:
+        # Surefire path: a dev who has committed to the target repo is looked up
+        # offline via the commit identity index — no GitHub API calls required.
+        commit_identity_index = {
+            "by_name": {
+                "alicedev": [{"login": "alice-gh", "name": "Alice Dev", "email": "1+alice-gh@users.noreply.github.com"}],
+            },
+            "by_email": {
+                "1+alice-gh@users.noreply.github.com": [{"login": "alice-gh", "name": "Alice Dev", "email": "1+alice-gh@users.noreply.github.com"}],
+            },
+        }
+
+        resolved = resolve_owners(
+            workflow_name="(triage) Nightly",
+            job_name="Galaxy Fabric unit tests",
+            owners_json=[],
+            pipeline_owners=[{"name": "Galaxy Fabric unit tests", "id": "U123", "owner_name": "Alice Dev"}],
+            codeowners={},
+            slack_directory=[{"id": "U123", "real_name": "Alice Dev", "email": "alice@corp.com"}],
+            github_token=None,  # no GitHub token required when index hits
+            repo_root=Path("."),
+            git_history_max_commits=10,
+            commit_identity_index=commit_identity_index,
+        )
+
+        self.assertEqual(resolved["source"], "pipeline_reorg")
+        self.assertEqual(resolved["github_assignees"], ["alice-gh"])
+        self.assertEqual(resolved["github_names"], ["Alice Dev"])
+        self.assertEqual(resolved["slack_assignees"], ["U123"])
+        self.assertEqual(resolved["slack_names"], ["Alice Dev"])
+
     @patch("tools.ci.assign_owners.owners._github_user_info")
     @patch("tools.ci.assign_owners.owners.api_get")
     def test_pipeline_reorg_reverse_ambiguous_match_is_dropped(

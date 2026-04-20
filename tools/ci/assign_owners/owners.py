@@ -82,18 +82,108 @@ def _slack_name_for_id(slack_id: str, slack_directory: list[dict[str, Any]]) -> 
     return user.get("real_name") or user.get("display_name") or ""
 
 
+def build_commit_identity_index(
+    repo_root: Path | str,
+    max_commits: int = 5000,
+) -> dict[str, list[dict[str, str]]]:
+    """Scan the target repo's git log once and build a name/email -> github-login index.
+
+    Uses commits authored by Tenstorrent devs as the authoritative source: the
+    `users.noreply.github.com` email format directly encodes the GitHub login,
+    paired with the author's real name in the commit metadata. This gives us a
+    surefire reverse lookup for anyone who has ever contributed to the target repo.
+
+    Returns a dict with two keys:
+      - "by_name": {normalized_real_name: [{"login": ..., "name": ..., "email": ...}]}
+      - "by_email": {normalized_email: [{"login": ..., "name": ..., "email": ...}]}
+    """
+    index: dict[str, list[dict[str, str]]] = {"by_name": {}, "by_email": {}}
+    repo_root_path = Path(repo_root)
+    if not repo_root_path.exists():
+        return index
+    cmd = [
+        "git", "-C", str(repo_root_path), "log",
+        f"-n{max_commits}",
+        "--pretty=%an%x09%ae",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        log(f"  Warning: failed to build commit identity index: {exc}")
+        return index
+
+    seen_pairs: set[tuple[str, str, str]] = set()
+    for line in proc.stdout.splitlines():
+        parts = line.split("\t", 1)
+        if len(parts) != 2:
+            continue
+        name, email = parts[0].strip(), parts[1].strip()
+        login = _extract_github_login(email)
+        if not login:
+            continue
+        key = (name.lower(), email.lower(), login.lower())
+        if key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+        record = {"login": login, "name": name, "email": email}
+        name_norm = _normalize(name)
+        if name_norm:
+            index["by_name"].setdefault(name_norm, []).append(record)
+        email_norm = email.lower()
+        if email_norm:
+            index["by_email"].setdefault(email_norm, []).append(record)
+    return index
+
+
+def _github_from_commit_index(
+    *,
+    email: str,
+    real_name: str,
+    commit_identity_index: dict[str, list[dict[str, str]]],
+) -> dict[str, str]:
+    """Return {login, name} for an exact/normalized match in the commit identity index."""
+    if not commit_identity_index:
+        return {"login": "", "name": ""}
+    if email:
+        hits = commit_identity_index.get("by_email", {}).get(email.lower(), [])
+        logins = {h["login"] for h in hits}
+        if len(logins) == 1:
+            rec = hits[0]
+            return {"login": rec["login"], "name": rec["name"] or real_name}
+    if real_name:
+        hits = commit_identity_index.get("by_name", {}).get(_normalize(real_name), [])
+        logins = {h["login"] for h in hits}
+        if len(logins) == 1:
+            rec = hits[0]
+            return {"login": rec["login"], "name": rec["name"] or real_name}
+    return {"login": "", "name": ""}
+
+
 def _github_from_identity(
     *,
     email: str = "",
     real_name: str = "",
     github_token: str | None = None,
+    commit_identity_index: dict[str, list[dict[str, str]]] | None = None,
 ) -> dict[str, str]:
     """Reverse-lookup: (email, real_name) -> (github login, display name).
 
-    Tries GitHub's user search by public email first (highest signal),
-    then a quoted full-name + in:fullname search. Accepts only single-result
-    hits to avoid ambiguity. Returns empty strings when no confident match.
+    Tries sources in priority order:
+      1. Local commit identity index (offline, authoritative when available).
+      2. GitHub user search by public email.
+      3. GitHub user search by quoted full name + in:fullname.
+
+    Returns empty strings when no confident match.
     """
+
+    if commit_identity_index:
+        hit = _github_from_commit_index(
+            email=email,
+            real_name=real_name,
+            commit_identity_index=commit_identity_index,
+        )
+        if hit["login"]:
+            return hit
 
     if not github_token:
         return {"login": "", "name": ""}
@@ -138,6 +228,7 @@ def _enrich_slack_only_with_github(
     slack_names_seed: list[str],
     slack_directory: list[dict[str, Any]],
     github_token: str | None,
+    commit_identity_index: dict[str, list[dict[str, str]]] | None = None,
 ) -> tuple[list[str], list[str], list[str]]:
     """For a slack-only tier (pipeline_reorg / owners_json), resolve GitHub
     login+name per Slack ID and return (slack_names, github_logins, github_names).
@@ -155,6 +246,7 @@ def _enrich_slack_only_with_github(
             email=su.get("email", ""),
             real_name=real_name,
             github_token=github_token,
+            commit_identity_index=commit_identity_index,
         )
         if gh_hit["login"]:
             github_logins.append(gh_hit["login"])
@@ -374,6 +466,7 @@ def resolve_owners(
     github_token: str | None,
     repo_root: Path | str = Path("tt-metal"),
     git_history_max_commits: int = 100,
+    commit_identity_index: dict[str, list[dict[str, str]]] | None = None,
 ) -> dict[str, object]:
     """Resolve owners with 4-tier priority: pipeline_reorg > owners.json > CODEOWNERS > git history.
 
@@ -397,6 +490,7 @@ def resolve_owners(
             slack_name_seed = entry.get("owner_name") or ""
             slack_names, gh_logins, gh_names = _enrich_slack_only_with_github(
                 [slack_id], [slack_name_seed], slack_directory, github_token,
+                commit_identity_index=commit_identity_index,
             )
             return {
                 "source": "pipeline_reorg",
@@ -428,6 +522,7 @@ def resolve_owners(
                 deduped_names.append(sn)
         slack_names, gh_logins, gh_names = _enrich_slack_only_with_github(
             deduped, deduped_names, slack_directory, github_token,
+            commit_identity_index=commit_identity_index,
         )
         return {
             "source": "owners_json",

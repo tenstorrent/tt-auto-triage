@@ -10,7 +10,13 @@ from typing import Any
 
 from .github import download_slack_directory, list_open_issues, log, update_issue
 from .issue_state import parse_assignee_markers, parse_base_markers, upsert_assignee_markers
-from .owners import load_codeowners, load_owners_json, load_pipeline_reorg_owners, resolve_owners
+from .owners import (
+    build_commit_identity_index,
+    load_codeowners,
+    load_owners_json,
+    load_pipeline_reorg_owners,
+    resolve_owners,
+)
 
 ISSUE_REPO = os.environ.get("ISSUE_REPO", "ebanerjeeTT/issue_dump")
 TARGET_REPO = os.environ.get("TARGET_REPO", "tenstorrent/tt-metal")
@@ -24,6 +30,7 @@ SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
 OWNERS_READY_LABEL = "auto-triage:owners-ready"
 TARGET_REPO_ROOT = Path(os.environ.get("TARGET_REPO_ROOT", "tt-metal"))
 GIT_HISTORY_MAX_COMMITS = int(os.environ.get("GIT_HISTORY_MAX_COMMITS", "100"))
+IDENTITY_INDEX_MAX_COMMITS = int(os.environ.get("IDENTITY_INDEX_MAX_COMMITS", "5000"))
 
 
 def _format_gh(logins: list[str], names: list[str]) -> str:
@@ -116,6 +123,14 @@ def main() -> int:
         except Exception as exc:
             log(f"  Warning: failed to download Slack directory: {exc}")
 
+    commit_identity_index = build_commit_identity_index(
+        TARGET_REPO_ROOT, IDENTITY_INDEX_MAX_COMMITS,
+    )
+    log(
+        f"  Built commit identity index: {len(commit_identity_index.get('by_name', {}))} names, "
+        f"{len(commit_identity_index.get('by_email', {}))} emails"
+    )
+
     updated: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     unchanged: list[dict[str, Any]] = []
@@ -134,6 +149,7 @@ def main() -> int:
             resolved = _process_issue(
                 issue, number, workflow_name, job_name,
                 owners_json, pipeline_owners, codeowners, slack_directory,
+                commit_identity_index,
                 updated, unchanged,
             )
         except Exception as exc:  # noqa: BLE001
@@ -160,6 +176,7 @@ def _process_issue(
     pipeline_owners: list[dict[str, Any]],
     codeowners: dict[str, list[str]],
     slack_directory: list[dict[str, Any]],
+    commit_identity_index: dict[str, list[dict[str, str]]],
     updated: list[dict[str, Any]],
     unchanged: list[dict[str, Any]],
 ) -> dict[str, object]:
@@ -173,6 +190,7 @@ def _process_issue(
         os.environ.get("GITHUB_TOKEN"),
         repo_root=TARGET_REPO_ROOT,
         git_history_max_commits=GIT_HISTORY_MAX_COMMITS,
+        commit_identity_index=commit_identity_index,
     )
     github_assignees = list(resolved["github_assignees"])  # type: ignore[arg-type]
     github_names = list(resolved.get("github_names", []))  # type: ignore[arg-type]
