@@ -6,7 +6,7 @@ import re
 import subprocess
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from .github import api_get, log
 
@@ -14,6 +14,20 @@ IGNORE_CODEOWNERS = {
     "@tenstorrent/codeowner-bypass",
     "@tenstorrent/metalium-developers-infra",
 }
+
+
+class CommitIdentityIndex(TypedDict):
+    """Identity index built from the target repo's git history and branches.
+
+    - by_name:  normalized real-name -> list of {"login", "name", "email"}
+    - by_email: lowercased email      -> list of {"login", "name", "email"}
+    - handles:  set of known lowercased contributor handles (commit logins
+                and branch-prefix handles like `sadesoye` from `sadesoye/feature-x`)
+    """
+
+    by_name: dict[str, list[dict[str, str]]]
+    by_email: dict[str, list[dict[str, str]]]
+    handles: set[str]
 
 
 def _normalize(value: str) -> str:
@@ -85,7 +99,7 @@ def _slack_name_for_id(slack_id: str, slack_directory: list[dict[str, Any]]) -> 
 def build_commit_identity_index(
     repo_root: Path | str,
     max_commits: int = 5000,
-) -> dict[str, Any]:
+) -> CommitIdentityIndex:
     """Scan the target repo's git history + branches and build identity indexes.
 
     Uses two authoritative sources:
@@ -100,7 +114,7 @@ def build_commit_identity_index(
       - "by_email":  {normalized_email:     [{"login","name","email"}, ...]}
       - "handles":   set[str] of all known normalized login-handles (commits + branches)
     """
-    index: dict[str, Any] = {"by_name": {}, "by_email": {}, "handles": set()}
+    index: CommitIdentityIndex = {"by_name": {}, "by_email": {}, "handles": set()}
     repo_root_path = Path(repo_root)
     if not repo_root_path.exists():
         return index
@@ -163,7 +177,7 @@ def _github_from_commit_index(
     *,
     email: str,
     real_name: str,
-    commit_identity_index: dict[str, Any],
+    commit_identity_index: CommitIdentityIndex,
 ) -> dict[str, str]:
     """Return {login, name} for an exact/normalized match in the commit identity index."""
     if not commit_identity_index:
@@ -234,7 +248,7 @@ def _github_from_identity(
     email: str = "",
     real_name: str = "",
     github_token: str | None = None,
-    commit_identity_index: dict[str, Any] | None = None,
+    commit_identity_index: CommitIdentityIndex | None = None,
 ) -> dict[str, str]:
     """Reverse-lookup: (email, real_name) -> (github login, display name).
 
@@ -300,7 +314,7 @@ def _enrich_slack_only_with_github(
     slack_names_seed: list[str],
     slack_directory: list[dict[str, Any]],
     github_token: str | None,
-    commit_identity_index: dict[str, list[dict[str, str]]] | None = None,
+    commit_identity_index: CommitIdentityIndex | None = None,
 ) -> tuple[list[str], list[str], list[str]]:
     """For a slack-only tier (pipeline_reorg / owners_json), resolve GitHub
     login+name per Slack ID and return (slack_names, github_logins, github_names).
@@ -381,19 +395,43 @@ def load_codeowners(path: Path) -> dict[str, list[str]]:
 
 
 def _workflow_file_candidates(workflow_name: str, repo_root: Path) -> list[Path]:
+    """Resolve a failed-job's ``workflow_name`` to concrete workflow file(s).
+
+    Priority:
+      1. Exact stem match (normalized): unambiguous, return just that file.
+      2. Fuzzy substring match: only return when a single file matches; if
+         multiple files' stems are substrings of each other and the workflow
+         name, bail out (return []) rather than paging every partial owner.
+    """
     workflows_dir = repo_root / ".github" / "workflows"
     if not workflows_dir.exists():
         return []
 
     workflow_norm = _normalize(workflow_name)
-    candidates: list[Path] = []
+    if not workflow_norm:
+        return []
+
+    exact: list[Path] = []
+    fuzzy: list[Path] = []
     for workflow_file in sorted(workflows_dir.glob("*.y*ml")):
         stem_norm = _normalize(workflow_file.stem)
         if not stem_norm:
             continue
-        if stem_norm in workflow_norm or workflow_norm in stem_norm:
-            candidates.append(workflow_file)
-    return candidates
+        if stem_norm == workflow_norm:
+            exact.append(workflow_file)
+        elif stem_norm in workflow_norm or workflow_norm in stem_norm:
+            fuzzy.append(workflow_file)
+
+    if exact:
+        return exact
+    if len(fuzzy) == 1:
+        return fuzzy
+    if len(fuzzy) > 1:
+        log(
+            f"  Warning: ambiguous workflow file match for {workflow_name!r}: "
+            f"{[p.name for p in fuzzy]}; falling back to no CODEOWNERS match"
+        )
+    return []
 
 
 def _codeowners_match(rel_path: str, pattern: str) -> bool:
@@ -411,18 +449,28 @@ def _codeowners_matches(
     codeowners: dict[str, list[str]],
     repo_root: Path,
 ) -> list[str]:
-    """Resolve CODEOWNERS against the actual workflow file(s) for `workflow_name`."""
+    """Resolve CODEOWNERS against the workflow file(s) using last-match-wins.
+
+    GitHub's CODEOWNERS semantics: for any given file, the *last* pattern that
+    matches determines the owners. Earlier matches are completely overridden,
+    not merged. Iterating patterns in CODEOWNERS file order (preserved by the
+    dict) and keeping only the final match per file mirrors that contract.
+    """
     workflow_files = _workflow_file_candidates(workflow_name, repo_root)
     if not workflow_files:
         return []
     rel_paths = [str(path.relative_to(repo_root)) for path in workflow_files]
-    matches: list[str] = []
-    for pattern, owners in codeowners.items():
-        for rel_path in rel_paths:
+
+    merged: list[str] = []
+    for rel_path in rel_paths:
+        last_owners: list[str] = []
+        for pattern, owners in codeowners.items():
             if _codeowners_match(rel_path, pattern):
-                matches.extend(owners)
-                break
-    return list(dict.fromkeys(matches))
+                last_owners = owners
+        for owner in last_owners:
+            if owner not in merged:
+                merged.append(owner)
+    return merged
 
 
 def _extract_github_login(email: str) -> str:
@@ -538,7 +586,7 @@ def resolve_owners(
     github_token: str | None,
     repo_root: Path | str = Path("tt-metal"),
     git_history_max_commits: int = 100,
-    commit_identity_index: dict[str, list[dict[str, str]]] | None = None,
+    commit_identity_index: CommitIdentityIndex | None = None,
 ) -> dict[str, object]:
     """Resolve owners with 4-tier priority: pipeline_reorg > owners.json > CODEOWNERS > git history.
 

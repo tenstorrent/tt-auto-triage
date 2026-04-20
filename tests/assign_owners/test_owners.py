@@ -95,6 +95,102 @@ class AssignOwnersResolverTests(unittest.TestCase):
         self.assertEqual(resolved["source"], "CODEOWNERS")
         self.assertEqual(resolved["github_assignees"], ["t3k-owner"])
 
+    def test_codeowners_skips_ambiguous_fuzzy_workflow_match(self) -> None:
+        # Regression: when multiple workflow files' stems overlap with the
+        # incoming workflow_name (e.g. "foo-tests" and "foo-tests-nightly"),
+        # fuzzy matching paged *both* sets of owners. We now bail out instead
+        # of over-paging.
+        with tempfile.TemporaryDirectory() as repo:
+            repo_root = Path(repo)
+            wf_dir = repo_root / ".github" / "workflows"
+            wf_dir.mkdir(parents=True)
+            (wf_dir / "foo-tests.yaml").write_text("name: a\n")
+            (wf_dir / "foo-tests-nightly.yaml").write_text("name: b\n")
+
+            with patch("tools.ci.assign_owners.owners._git_history_candidates") as mock_history, \
+                 patch("tools.ci.assign_owners.owners._resolve_github_users") as mock_resolve:
+                mock_history.return_value = ([], [])
+                mock_resolve.return_value = ([], [], [], [])
+                resolved = resolve_owners(
+                    workflow_name="foo-tests-nightly-extra",
+                    job_name="some-job",
+                    owners_json=[],
+                    pipeline_owners=[],
+                    codeowners={
+                        ".github/workflows/foo-tests.yaml": ["wrong-owner"],
+                        ".github/workflows/foo-tests-nightly.yaml": ["also-wrong"],
+                    },
+                    slack_directory=[],
+                    github_token=None,
+                    repo_root=repo_root,
+                    git_history_max_commits=10,
+                )
+
+        self.assertNotEqual(resolved["source"], "CODEOWNERS")
+        self.assertEqual(resolved["github_assignees"], [])
+
+    def test_codeowners_prefers_exact_stem_over_fuzzy_superstrings(self) -> None:
+        # Regression: exact normalized stem match must win even when a longer
+        # workflow file is a superstring of the incoming workflow_name.
+        with tempfile.TemporaryDirectory() as repo:
+            repo_root = Path(repo)
+            wf_dir = repo_root / ".github" / "workflows"
+            wf_dir.mkdir(parents=True)
+            (wf_dir / "perf-tests.yaml").write_text("name: a\n")
+            (wf_dir / "perf-tests-extended.yaml").write_text("name: b\n")
+
+            with patch("tools.ci.assign_owners.owners._resolve_github_users") as mock_resolve:
+                mock_resolve.return_value = (["perf-owner"], ["Perf Owner"], [], [])
+                resolved = resolve_owners(
+                    workflow_name="perf-tests",
+                    job_name="some-job",
+                    owners_json=[],
+                    pipeline_owners=[],
+                    codeowners={
+                        ".github/workflows/perf-tests.yaml": ["perf-owner"],
+                        ".github/workflows/perf-tests-extended.yaml": ["extended-owner"],
+                    },
+                    slack_directory=[],
+                    github_token=None,
+                    repo_root=repo_root,
+                    git_history_max_commits=10,
+                )
+
+        self.assertEqual(resolved["source"], "CODEOWNERS")
+        self.assertEqual(resolved["github_assignees"], ["perf-owner"])
+
+    def test_codeowners_last_match_wins_overrides_earlier_pattern(self) -> None:
+        # Regression: GitHub CODEOWNERS semantics — the *last* matching pattern
+        # wins per-file. Earlier matches must be fully overridden, not merged.
+        with tempfile.TemporaryDirectory() as repo:
+            repo_root = Path(repo)
+            wf_dir = repo_root / ".github" / "workflows"
+            wf_dir.mkdir(parents=True)
+            (wf_dir / "triage-ci.yaml").write_text("name: t\n")
+
+            with patch("tools.ci.assign_owners.owners._resolve_github_users") as mock_resolve:
+                mock_resolve.return_value = (["specific-owner"], ["Specific Owner"], [], [])
+                resolved = resolve_owners(
+                    workflow_name="triage-ci",
+                    job_name="some-job",
+                    owners_json=[],
+                    pipeline_owners=[],
+                    codeowners={
+                        # Dict preserves insertion order; the broad glob comes
+                        # first, the specific pattern last.
+                        ".github/workflows/*.yaml": ["broad-owner"],
+                        ".github/workflows/triage-ci.yaml": ["specific-owner"],
+                    },
+                    slack_directory=[],
+                    github_token=None,
+                    repo_root=repo_root,
+                    git_history_max_commits=10,
+                )
+
+        self.assertEqual(resolved["source"], "CODEOWNERS")
+        self.assertEqual(resolved["github_assignees"], ["specific-owner"])
+        self.assertNotIn("broad-owner", resolved["github_assignees"])
+
     @patch("tools.ci.assign_owners.owners._git_history_candidates")
     @patch("tools.ci.assign_owners.owners._github_user_info")
     def test_git_history_resolves_real_email_authors_via_slack(self, mock_info, mock_history) -> None:

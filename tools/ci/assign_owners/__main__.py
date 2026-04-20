@@ -11,6 +11,7 @@ from typing import Any
 from .github import download_slack_directory, list_open_issues, log, update_issue
 from .issue_state import parse_assignee_markers, parse_base_markers, upsert_assignee_markers
 from .owners import (
+    CommitIdentityIndex,
     build_commit_identity_index,
     load_codeowners,
     load_owners_json,
@@ -176,7 +177,7 @@ def _process_issue(
     pipeline_owners: list[dict[str, Any]],
     codeowners: dict[str, list[str]],
     slack_directory: list[dict[str, Any]],
-    commit_identity_index: dict[str, list[dict[str, str]]],
+    commit_identity_index: CommitIdentityIndex,
     updated: list[dict[str, Any]],
     unchanged: list[dict[str, Any]],
 ) -> dict[str, object]:
