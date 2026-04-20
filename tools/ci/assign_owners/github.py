@@ -16,20 +16,30 @@ def log(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
-def gh(*args: str, token: str | None = None, timeout: int = 30) -> str:
+_TRANSIENT_MARKERS = ("502", "503", "504", "bad gateway", "service unavailable", "timeout", "i/o timeout")
+
+
+def gh(*args: str, token: str | None = None, timeout: int = 30, retries: int = 3) -> str:
     env = {**os.environ}
     if token:
         env["GITHUB_TOKEN"] = token
-    proc = subprocess.run(
-        ["gh", *args],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        env=env,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"gh {' '.join(args[:4])}... failed: {proc.stderr.strip()}")
-    return proc.stdout
+    last_err = ""
+    for attempt in range(retries):
+        proc = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+        if proc.returncode == 0:
+            return proc.stdout
+        last_err = proc.stderr.strip()
+        if attempt < retries - 1 and any(m in last_err.lower() for m in _TRANSIENT_MARKERS):
+            time.sleep(2 ** (attempt + 1))
+            continue
+        break
+    raise RuntimeError(f"gh {' '.join(args[:4])}... failed: {last_err}")
 
 
 def api_get(url: str, token: str | None = None, retries: int = 3) -> Any:

@@ -50,11 +50,15 @@ def render_summary(
     updated: list[dict[str, Any]],
     skipped: list[dict[str, Any]],
     unchanged: list[dict[str, Any]],
+    failed: list[dict[str, Any]] | None = None,
 ) -> str:
+    failed = failed or []
     lines: list[str] = ["# Assignee Resolution Summary", ""]
     lines.append(f"- **Updated:** {len(updated)}")
     lines.append(f"- **Unchanged (idempotent):** {len(unchanged)}")
     lines.append(f"- **Skipped (missing base metadata):** {len(skipped)}")
+    if failed:
+        lines.append(f"- **Failed:** {len(failed)}")
     lines.append("")
 
     if updated:
@@ -84,7 +88,14 @@ def render_summary(
             lines.append(f"- #{row['number']}: {row['reason']}")
         lines.append("")
 
-    if not (updated or unchanged or skipped):
+    if failed:
+        lines.append("## Failed (transient / unexpected)")
+        lines.append("")
+        for row in failed:
+            lines.append(f"- #{row['number']}: {row['reason']}")
+        lines.append("")
+
+    if not (updated or unchanged or skipped or failed):
         lines.append("No CI auto-triage issues found in the target repo.")
         lines.append("")
 
@@ -108,6 +119,7 @@ def main() -> int:
     updated: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     unchanged: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
     for issue in issues:
         number = issue["number"]
         base = parse_base_markers(issue.get("body", ""))
@@ -118,69 +130,95 @@ def main() -> int:
             skipped.append({"number": number, "reason": "missing Auto-triage-workflow / Auto-triage-job-name"})
             continue
 
-        resolved = resolve_owners(
-            workflow_name,
-            job_name,
-            owners_json,
-            pipeline_owners,
-            codeowners,
-            slack_directory,
-            os.environ.get("GITHUB_TOKEN"),
-            repo_root=TARGET_REPO_ROOT,
-            git_history_max_commits=GIT_HISTORY_MAX_COMMITS,
-        )
-        github_assignees = list(resolved["github_assignees"])  # type: ignore[arg-type]
-        github_names = list(resolved.get("github_names", []))  # type: ignore[arg-type]
-        slack_assignees = list(resolved["slack_assignees"])  # type: ignore[arg-type]
-        slack_names = list(resolved.get("slack_names", []))  # type: ignore[arg-type]
-        source = str(resolved["source"])
+        try:
+            resolved = _process_issue(
+                issue, number, workflow_name, job_name,
+                owners_json, pipeline_owners, codeowners, slack_directory,
+                updated, unchanged,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log(f"  #{number}: failed — {exc}")
+            failed.append({"number": number, "reason": str(exc)})
+        else:
+            del resolved  # return value unused; outcomes recorded in updated/unchanged
 
-        new_body = upsert_assignee_markers(
-            issue.get("body", ""),
-            github_assignees=github_assignees,
-            slack_assignees=slack_assignees,
-            source=source,
-        )
-        existing = parse_assignee_markers(issue.get("body", ""))
-        existing_labels = {label.get("name", "") for label in issue.get("labels", [])}
-        if (
-            existing == {
-                "github_assignees": github_assignees,
-                "slack_assignees": slack_assignees,
-                "source": source,
-            }
-            and OWNERS_READY_LABEL in existing_labels
-        ):
-            log(f"  #{number}: assignees unchanged, skipping update")
-            unchanged.append({"number": number, "source": source})
-            continue
-
-        update_issue(
-            ISSUE_REPO,
-            number,
-            new_body,
-            ISSUE_WRITE_TOKEN,
-            add_labels=[OWNERS_READY_LABEL],
-        )
-        updated.append(
-            {
-                "number": number,
-                "source": source,
-                "github_assignees": github_assignees,
-                "github_names": github_names,
-                "slack_assignees": slack_assignees,
-                "slack_names": slack_names,
-            }
-        )
-        log(f"  #{number}: source={source} gh={github_assignees} slack={slack_assignees}")
-
-    summary = render_summary(updated, skipped, unchanged)
+    summary = render_summary(updated, skipped, unchanged, failed)
     if SUMMARY_OUTPUT:
         Path(SUMMARY_OUTPUT).write_text(summary, encoding="utf-8")
     else:
         print(summary)
-    print(json.dumps({"updated": updated, "unchanged": unchanged, "skipped": skipped}, indent=2), file=sys.stderr)
-    return 0
+    print(json.dumps({"updated": updated, "unchanged": unchanged, "skipped": skipped, "failed": failed}, indent=2), file=sys.stderr)
+    return 1 if failed else 0
+
+
+def _process_issue(
+    issue: dict[str, Any],
+    number: Any,
+    workflow_name: str,
+    job_name: str,
+    owners_json: list[dict[str, Any]],
+    pipeline_owners: list[dict[str, Any]],
+    codeowners: dict[str, list[str]],
+    slack_directory: list[dict[str, Any]],
+    updated: list[dict[str, Any]],
+    unchanged: list[dict[str, Any]],
+) -> dict[str, object]:
+    resolved = resolve_owners(
+        workflow_name,
+        job_name,
+        owners_json,
+        pipeline_owners,
+        codeowners,
+        slack_directory,
+        os.environ.get("GITHUB_TOKEN"),
+        repo_root=TARGET_REPO_ROOT,
+        git_history_max_commits=GIT_HISTORY_MAX_COMMITS,
+    )
+    github_assignees = list(resolved["github_assignees"])  # type: ignore[arg-type]
+    github_names = list(resolved.get("github_names", []))  # type: ignore[arg-type]
+    slack_assignees = list(resolved["slack_assignees"])  # type: ignore[arg-type]
+    slack_names = list(resolved.get("slack_names", []))  # type: ignore[arg-type]
+    source = str(resolved["source"])
+
+    existing = parse_assignee_markers(issue.get("body", ""))
+    existing_labels = {label.get("name", "") for label in issue.get("labels", [])}
+    if (
+        existing == {
+            "github_assignees": github_assignees,
+            "slack_assignees": slack_assignees,
+            "source": source,
+        }
+        and OWNERS_READY_LABEL in existing_labels
+    ):
+        log(f"  #{number}: assignees unchanged, skipping update")
+        unchanged.append({"number": number, "source": source})
+        return resolved
+
+    new_body = upsert_assignee_markers(
+        issue.get("body", ""),
+        github_assignees=github_assignees,
+        slack_assignees=slack_assignees,
+        source=source,
+    )
+    update_issue(
+        ISSUE_REPO,
+        number,
+        new_body,
+        ISSUE_WRITE_TOKEN,
+        add_labels=[OWNERS_READY_LABEL],
+    )
+    updated.append(
+        {
+            "number": number,
+            "source": source,
+            "github_assignees": github_assignees,
+            "github_names": github_names,
+            "slack_assignees": slack_assignees,
+            "slack_names": slack_names,
+        }
+    )
+    log(f"  #{number}: source={source} gh={github_assignees} slack={slack_assignees}")
+    return resolved
 
 
 if __name__ == "__main__":
