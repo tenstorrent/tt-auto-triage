@@ -32,6 +32,10 @@ on:
         description: "How many days back to scan for failures"
         type: string
         default: "14"
+      incremental-days:
+        description: "Only include escapes whose fix transition happened in the last N days. 0 = no filter."
+        type: string
+        default: "0"
     secrets:
       GITHUB_READ_TOKEN:
         description: "Token with read access to target-repo workflow runs"
@@ -89,6 +93,7 @@ jobs:
           MAX_LOG_BYTES: ${{ inputs.max-log-bytes }}
           MAX_ESCAPES: ${{ inputs.max-escapes }}
           LOOKBACK_DAYS: ${{ inputs.lookback-days }}
+          INCREMENTAL_DAYS: ${{ inputs.incremental-days }}
         run: |
           set -euo pipefail
           chmod +x bug-escapes/run.sh

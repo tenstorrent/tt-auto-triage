@@ -228,6 +228,22 @@ for i in $(seq 0 $((num_failures - 1))); do
     continue
   fi
 
+  # ---- Incremental mode: skip old transitions ----
+  if [ -n "$first_passing_run_id" ] && [ "$first_passing_idx" -ge 0 ]; then
+    incremental_days="${INCREMENTAL_DAYS:-0}"
+    if [ "$incremental_days" -gt 0 ] 2>/dev/null; then
+      pass_transition_date=$(echo "$subsequent_runs" | jq -r ".[$first_passing_idx].created_at // empty")
+      if [ -n "$pass_transition_date" ]; then
+        cutoff_epoch=$(date -d "$incremental_days days ago" +%s 2>/dev/null || date -v-${incremental_days}d +%s 2>/dev/null || echo 0)
+        pass_epoch=$(date -d "$pass_transition_date" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%SZ" "$pass_transition_date" +%s 2>/dev/null || echo 0)
+        if [ "$cutoff_epoch" -gt 0 ] && [ "$pass_epoch" -gt 0 ] && [ "$pass_epoch" -lt "$cutoff_epoch" ]; then
+          log_info "    Skipping — pass transition at $pass_transition_date is older than $incremental_days days"
+          continue
+        fi
+      fi
+    fi
+  fi
+
   if [ -z "$first_passing_run_id" ]; then
     log_info "    No passing run found — failure is still active, skipping"
     jq --argjson failure "$entry" \
