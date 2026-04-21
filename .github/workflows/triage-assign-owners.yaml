@@ -11,6 +11,16 @@ on:
         description: "Repository to read ownership metadata from"
         type: string
         default: "tenstorrent/tt-metal"
+      issue-numbers:
+        description: >-
+          OPTIONAL. Restrict this run to a specific set of issues instead of
+          every open "CI auto triage" issue in `issue-repo`. Accepts any mix
+          of bare numbers, `#123`, or full issue URLs separated by commas or
+          whitespace (e.g. "888, https://github.com/ebanerjeeTT/issue_dump/issues/885").
+          Leave empty to process every open CI-triage issue as usual.
+        required: false
+        type: string
+        default: ""
       ex-employees:
         description: >-
           OPTIONAL escape hatch. Comma/whitespace-separated list of Slack IDs and/or
@@ -94,6 +104,7 @@ jobs:
           ISSUE_REPO: ${{ inputs.issue-repo }}
           TARGET_REPO: ${{ inputs.target-repo }}
           EX_EMPLOYEES: ${{ inputs.ex-employees }}
+          ISSUE_NUMBERS: ${{ inputs.issue-numbers }}
           PIPELINE_REORG_DIR: tt-metal/tests/pipeline_reorg
           TARGET_REPO_ROOT: tt-metal
           SLACK_DUMP_PATH: slack_users.json

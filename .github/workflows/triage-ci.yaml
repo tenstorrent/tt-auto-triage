@@ -31,6 +31,13 @@ on:
         description: "Slack channel ID for triage notifications"
         type: string
         default: "C0APK6215B5"
+      issue-numbers:
+        description: >-
+          OPTIONAL. Restrict assign-owners to a specific set of issues. Accepts
+          bare numbers, `#123`, or full issue URLs, separated by commas or
+          whitespace. Leave empty to process every open CI-triage issue.
+        type: string
+        default: ""
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to target-repo"
@@ -43,8 +50,6 @@ on:
         required: false
       SLACK_BOT_TOKEN:
         description: "Optional Slack bot token for Slack-deleted employment check"
-        required: false
-      CURSOR_API_KEY:
         required: false
 
 jobs:
@@ -66,6 +71,7 @@ jobs:
     with:
       issue-repo: ${{ inputs.issue-repo }}
       target-repo: ${{ inputs.target-repo }}
+      issue-numbers: ${{ inputs.issue-numbers }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}

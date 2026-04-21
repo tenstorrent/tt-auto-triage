@@ -15,6 +15,7 @@ from .github import (
     add_issue_labels,
     create_issue_comment,
     download_slack_directory,
+    get_issue,
     list_issue_comments,
     list_open_issues,
     log,
@@ -42,6 +43,31 @@ EX_EMPLOYEES: frozenset[str] = frozenset(
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "resolve_owner.txt"
 _PR_NAME = re.compile(r"^- name:\s*[\"']?(.+?)[\"']?\s*$")
 _PR_OWNER = re.compile(r"^\s+owner_id:\s*(.+)")
+_ISSUE_NUM_RE = re.compile(r"/issues/(\d+)|#?(\d+)")
+
+
+def parse_issue_numbers(raw: str) -> list[int]:
+    """Extract issue numbers from a free-form user input. Accepts bare
+    numbers (`888`), hash-prefixed numbers (`#888`), and full GitHub issue
+    URLs (`https://github.com/owner/repo/issues/888`), mixed and separated
+    by commas and/or whitespace. Returns a deduplicated, order-preserving
+    list of ints. Anything that doesn't contain a number is silently
+    skipped so a stray blank token can't crash the run."""
+    if not raw:
+        return []
+    seen: set[int] = set()
+    out: list[int] = []
+    for tok in re.split(r"[\s,]+", raw.strip()):
+        if not tok:
+            continue
+        m = _ISSUE_NUM_RE.search(tok)
+        if not m:
+            continue
+        num = int(m.group(1) or m.group(2))
+        if num not in seen:
+            seen.add(num)
+            out.append(num)
+    return out
 
 
 def load_pipeline_reorg_owners(reorg_dir: Path) -> list[dict[str, str]]:
@@ -239,7 +265,17 @@ def main() -> int:
         log("ISSUE_WRITE_TOKEN is required."); return 1
     if not os.environ.get("CURSOR_API_KEY"):
         log("CURSOR_API_KEY is required for the agent fallback."); return 1
-    issues = list_open_issues(ISSUE_REPO, ISSUE_WRITE_TOKEN)
+    scoped = parse_issue_numbers(os.environ.get("ISSUE_NUMBERS", ""))
+    if scoped:
+        log(f"  Scoped run: only processing issues {scoped} in {ISSUE_REPO}")
+        issues = []
+        for num in scoped:
+            try:
+                issues.append(get_issue(ISSUE_REPO, num, ISSUE_WRITE_TOKEN))
+            except Exception as exc:  # noqa: BLE001
+                log(f"  Warning: could not fetch #{num} from {ISSUE_REPO}: {exc}")
+    else:
+        issues = list_open_issues(ISSUE_REPO, ISSUE_WRITE_TOKEN)
     pipeline = load_pipeline_reorg_owners(PIPELINE_REORG_DIR)
     log(f"  Loaded {len(pipeline)} pipeline_reorg entries from {PIPELINE_REORG_DIR}")
     slack_dir: list[dict[str, Any]] = []

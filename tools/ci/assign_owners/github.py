@@ -84,6 +84,23 @@ def list_open_issues(issue_repo: str, token: str) -> list[dict[str, Any]]:
         page += 1
 
 
+def get_issue(issue_repo: str, issue_number: str | int, token: str) -> dict[str, Any]:
+    """Fetch a single issue by number. Used for scoped runs where the caller
+    passes an explicit issue list instead of letting us paginate all open ones."""
+    owner, repo = issue_repo.split("/", 1)
+    data = _api_get(f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}", token)
+    if "pull_request" in data:
+        raise RuntimeError(f"#{issue_number} in {issue_repo} is a pull request, not an issue")
+    return {
+        "number": data.get("number", ""),
+        "title": data.get("title", ""),
+        "body": data.get("body", ""),
+        "url": data.get("html_url", ""),
+        "labels": data.get("labels", []),
+        "state": data.get("state", ""),
+    }
+
+
 def update_issue(issue_repo: str, issue_number: str | int, body: str, token: str, add_labels: list[str]) -> None:
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as h:
         h.write(body); body_path = h.name
