@@ -52,7 +52,7 @@ if [ ! -f "$DETECT_FILE" ]; then
   {
     echo "# Bug Escape Detection + Verification Report"
     echo ""
-    echo "_Generated $now_utc_"
+    echo "_Generated ${now_utc}_"
     echo ""
     echo "**Detection artifact was missing.** The detect job did not produce"
     echo "\`bug-escapes-output.json\`. Nothing to verify or report."
