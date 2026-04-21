@@ -11,13 +11,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .check_active import check as _check_employee_status
 from .github import (
     add_issue_labels,
     create_issue_comment,
     download_slack_directory,
     get_issue,
     list_issue_comments,
-    list_open_issues,
     log,
     update_issue,
     update_issue_comment,
@@ -44,6 +44,7 @@ _PROMPT_PATH = Path(__file__).parent / "prompts" / "resolve_owner.txt"
 _PR_NAME = re.compile(r"^- name:\s*[\"']?(.+?)[\"']?\s*$")
 _PR_OWNER = re.compile(r"^\s+owner_id:\s*(.+)")
 _ISSUE_NUM_RE = re.compile(r"/issues/(\d+)|#?(\d+)")
+_FENCE_RE = re.compile(r"```(?:\w+)?\n(.*?)\n```\s*$", re.DOTALL)
 
 
 def parse_issue_numbers(raw: str) -> list[int]:
@@ -70,9 +71,10 @@ def parse_issue_numbers(raw: str) -> list[int]:
     return out
 
 
-def load_pipeline_reorg_owners(reorg_dir: Path) -> list[dict[str, str]]:
-    """Parse `- name: JOB` / `owner_id: SLACK # Real Name` pairs from tt-metal pipeline YAMLs."""
-    out: list[dict[str, str]] = []
+def load_pipeline_reorg_owners(reorg_dir: Path) -> dict[str, dict[str, str]]:
+    """Parse `- name: JOB` / `owner_id: SLACK # Real Name` pairs from tt-metal pipeline YAMLs.
+    Returns a dict keyed by job name for O(1) lookup."""
+    out: dict[str, dict[str, str]] = {}
     if not reorg_dir.exists():
         log(f"  Warning: {reorg_dir} not found")
         return out
@@ -86,7 +88,7 @@ def load_pipeline_reorg_owners(reorg_dir: Path) -> list[dict[str, str]]:
                 rest = m.group(1).strip()
                 sid = rest.split("#")[0].strip().split()[0]
                 name = rest.split("#", 1)[1].strip() if "#" in rest else ""
-                out.append({"name": cur, "id": sid, "owner_name": name})
+                out[cur] = {"name": cur, "id": sid, "owner_name": name}
                 cur = None
     return out
 
@@ -94,7 +96,7 @@ def load_pipeline_reorg_owners(reorg_dir: Path) -> list[dict[str, str]]:
 _active_cache: dict[tuple[str, str], bool] = {}
 
 
-def is_active_employee(slack_id: str, login: str, slack_dir: list[dict[str, Any]], token: str | None) -> bool:
+def is_active_employee(slack_id: str, login: str, slack_dir: list[dict[str, Any]]) -> bool:
     """Return False if ANY signal flags the person as gone:
       * explicit EX_EMPLOYEES override (Slack ID or GitHub login)
       * Slack user flagged `deleted: true`
@@ -111,18 +113,7 @@ def is_active_employee(slack_id: str, login: str, slack_dir: list[dict[str, Any]
     key = (slack_id, login)
     if key in _active_cache:
         return _active_cache[key]
-    reason = ""
-    if slack_id and slack_id in EX_EMPLOYEES:
-        reason = "ex-employees override (slack_id)"
-    elif login and login in EX_EMPLOYEES:
-        reason = "ex-employees override (github login)"
-    if not reason and slack_id:
-        user = next((u for u in slack_dir if u.get("id") == slack_id), None)
-        if slack_dir and user is None:
-            reason = "not present in Slack workspace dump"
-        elif user and user.get("deleted"):
-            reason = "Slack account deactivated"
-    active = not reason
+    active, reason = _check_employee_status(slack_id, login, slack_dir, EX_EMPLOYEES)
     log(f"  active-check: slack_id={slack_id or '-'} login={login or '-'} -> "
         + ("active" if active else f"inactive ({reason})"))
     _active_cache[key] = active
@@ -130,8 +121,7 @@ def is_active_employee(slack_id: str, login: str, slack_dir: list[dict[str, Any]
 
 
 def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
-                       slack_dir: list[dict[str, Any]] | None = None,
-                       token: str | None = None) -> dict[str, Any]:
+                       slack_dir: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     prompt = string.Template(_PROMPT_PATH.read_text()).substitute(
         workflow_name=workflow_name, job_name=job_name,
         ex_owner_note=ex_owner_note or "(no previous owner recorded)",
@@ -164,10 +154,9 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
         if idx < 0:
             raise ValueError(f"Marker {AGENT_MARKER!r} not in agent output")
         payload = text[idx + len(AGENT_MARKER):].strip()
-        if payload.startswith("```"):
-            payload = payload.split("\n", 1)[-1]
-            if payload.rstrip().endswith("```"):
-                payload = payload.rstrip()[:-3]
+        m = _FENCE_RE.match(payload)
+        if m:
+            payload = m.group(1)
         res = json.loads(payload.strip())
     except Exception as exc:  # noqa: BLE001
         log(f"  Agent resolution failed: {exc}")
@@ -176,7 +165,7 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
     sid = str(res.get("slack_id") or "")
     if not (gh_login or sid):
         return empty
-    if not is_active_employee(sid, gh_login, slack_dir or [], token):
+    if not is_active_employee(sid, gh_login, slack_dir or []):
         log(f"  Agent picked an inactive candidate (slack={sid!r}, login={gh_login!r}); dropping.")
         return empty
     return {
@@ -188,21 +177,21 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
     }
 
 
-def resolve_owner(workflow_name: str, job_name: str, pipeline: list[dict[str, str]],
-                  slack_dir: list[dict[str, Any]], token: str | None,
+def resolve_owner(workflow_name: str, job_name: str, pipeline: dict[str, dict[str, str]],
+                  slack_dir: list[dict[str, Any]],
                   identity_index: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
     """Fast path: pipeline_reorg entry. Slow path (no match or ex-employee): agent."""
     bare = job_name.rsplit(" / ", 1)[-1].strip()
-    entry = next((e for e in pipeline if e["name"] in (job_name, bare)), None)
+    entry = pipeline.get(job_name) or pipeline.get(bare)
     if not entry:
-        return _resolve_via_agent(workflow_name, job_name, "", slack_dir, token)
+        return _resolve_via_agent(workflow_name, job_name, "", slack_dir)
     sid = entry["id"]
     user = next((u for u in slack_dir if u.get("id") == sid), {})
     display = entry.get("owner_name") or user.get("real_name") or user.get("display_name") or sid
     ident = (identity_index or {}).get(sid, {})
     gh_login = ident.get("github_login", "")
     gh_name = ident.get("github_name", "")
-    if is_active_employee(sid, gh_login, slack_dir, token):
+    if is_active_employee(sid, gh_login, slack_dir):
         return {
             "source": "pipeline_reorg",
             "github_assignees": [gh_login] if gh_login else [],
@@ -213,7 +202,7 @@ def resolve_owner(workflow_name: str, job_name: str, pipeline: list[dict[str, st
     return _resolve_via_agent(
         workflow_name, job_name,
         f"The previous owner {display} (Slack `{sid}`) has left the company. Find a current replacement.",
-        slack_dir, token,
+        slack_dir,
     )
 
 
@@ -262,9 +251,11 @@ def render_summary(updated: list[dict[str, Any]], skipped: list[dict[str, Any]],
 def main() -> int:
     log("=== Assign Owners (hybrid: pipeline_reorg + agent) ===")
     if not ISSUE_WRITE_TOKEN:
-        log("ISSUE_WRITE_TOKEN is required."); return 1
+        log("ISSUE_WRITE_TOKEN is required.")
+        return 1
     if not os.environ.get("CURSOR_API_KEY"):
-        log("CURSOR_API_KEY is required for the agent fallback."); return 1
+        log("CURSOR_API_KEY is required for the agent fallback.")
+        return 1
     scoped = parse_issue_numbers(os.environ.get("ISSUE_NUMBERS", ""))
     if scoped:
         log(f"  Scoped run: only processing issues {scoped} in {ISSUE_REPO}")
@@ -288,8 +279,10 @@ def main() -> int:
             log(f"  Warning: failed to download Slack directory: {exc}")
     identity_index = build_identity_index(TARGET_REPO_ROOT, slack_dir) if slack_dir else {}
     token = AGGREGATE_READ_TOKEN or None
-    updated: list[dict[str, Any]] = []; skipped: list[dict[str, Any]] = []
-    unchanged: list[dict[str, Any]] = []; failed: list[dict[str, Any]] = []
+    updated: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    unchanged: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
 
     for issue in issues:
         num = issue["number"]
@@ -301,7 +294,7 @@ def main() -> int:
                 log(f"  #{num}: missing base metadata, skipping")
                 skipped.append({"number": num, "reason": "missing Auto-triage-workflow / Auto-triage-job-name"})
                 continue
-            r = resolve_owner(wf, job, pipeline, slack_dir, token, identity_index)
+            r = resolve_owner(wf, job, pipeline, slack_dir, identity_index)
             name = _display_name(r)
             log(f"  #{num}: source={r['source']} owner={name!r} gh={r['github_assignees']} slack={r['slack_assignees']}")
 
