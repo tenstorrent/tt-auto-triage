@@ -29,6 +29,17 @@ on:
           steady state — the Slack `deleted` signal is authoritative on its own.
         type: string
         default: ""
+      skip-assigning-for-issues-that-already-have-owners:
+        description: >-
+          When true (default), any issue that already has a recommended-owner
+          comment is skipped BEFORE any pipeline_reorg load, Slack download,
+          identity-index build, or Cursor agent call. Applies to both the
+          all-open-issues path and a scoped `issue-numbers` run — if you ask
+          for #888 and #888 already has an owner, the workflow does nothing
+          and exits in seconds. Set to false to re-resolve every issue
+          unconditionally (useful when you want to overwrite stale picks).
+        type: boolean
+        default: true
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to target-repo and tenstorrent org"
@@ -105,6 +116,7 @@ jobs:
           TARGET_REPO: ${{ inputs.target-repo }}
           EX_EMPLOYEES: ${{ inputs.ex-employees }}
           ISSUE_NUMBERS: ${{ inputs.issue-numbers }}
+          SKIP_ALREADY_ASSIGNED: ${{ inputs.skip-assigning-for-issues-that-already-have-owners }}
           PIPELINE_REORG_DIR: tt-metal/tests/pipeline_reorg
           TARGET_REPO_ROOT: tt-metal
           SLACK_DUMP_PATH: slack_users.json

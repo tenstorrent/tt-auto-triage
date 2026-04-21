@@ -18,6 +18,7 @@ from .github import (
     download_slack_directory,
     get_issue,
     list_issue_comments,
+    list_open_issues,
     log,
     update_issue,
     update_issue_comment,
@@ -40,6 +41,10 @@ COMMENT_MARKER = "<!-- auto-triage:owner-recommendation -->"
 EX_EMPLOYEES: frozenset[str] = frozenset(
     v.strip() for v in re.split(r"[\s,]+", os.environ.get("EX_EMPLOYEES", "")) if v.strip()
 )
+# `true` / `1` / `yes` (case-insensitive) = skip issues that already have a named owner.
+# Anything else (including unset) = process every issue as usual, which is the legacy behavior.
+SKIP_ALREADY_ASSIGNED = os.environ.get("SKIP_ALREADY_ASSIGNED", "").strip().lower() in {"true", "1", "yes"}
+_UNRESOLVED_OWNER_BODY = "_no current owner could be determined_"
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "resolve_owner.txt"
 _PR_NAME = re.compile(r"^- name:\s*[\"']?(.+?)[\"']?\s*$")
 _PR_OWNER = re.compile(r"^\s+owner_id:\s*(.+)")
@@ -217,7 +222,7 @@ def _display_name(r: dict[str, Any]) -> str:
 
 
 def _render_comment(name: str) -> str:
-    body = name or "_no current owner could be determined_"
+    body = name or _UNRESOLVED_OWNER_BODY
     return f"{COMMENT_MARKER}\n**Recommended owner:** {body}\n"
 
 
@@ -225,10 +230,24 @@ def _find_marker_comment(comments: list[dict[str, Any]]) -> dict[str, Any] | Non
     return next((c for c in comments if COMMENT_MARKER in (c.get("body") or "")), None)
 
 
+def _has_named_owner_comment(comments: list[dict[str, Any]]) -> bool:
+    """A recommendation comment "names an owner" if it carries our marker AND its
+    body is not the unresolved-owner placeholder. This is the signal used by
+    SKIP_ALREADY_ASSIGNED — an issue whose prior run failed to resolve (body is
+    the placeholder) is still fair game for re-resolution on the next pass."""
+    existing = _find_marker_comment(comments)
+    if not existing:
+        return False
+    return _UNRESOLVED_OWNER_BODY not in (existing.get("body") or "")
+
+
 def render_summary(updated: list[dict[str, Any]], skipped: list[dict[str, Any]],
-                   unchanged: list[dict[str, Any]], failed: list[dict[str, Any]]) -> str:
+                   unchanged: list[dict[str, Any]], failed: list[dict[str, Any]],
+                   already_assigned: list[dict[str, Any]] | None = None) -> str:
+    already_assigned = already_assigned or []
     L = ["# Owner Recommendation Summary", "",
          f"- **Updated:** {len(updated)}", f"- **Unchanged (idempotent):** {len(unchanged)}",
+         f"- **Skipped (already assigned):** {len(already_assigned)}",
          f"- **Skipped (missing base metadata):** {len(skipped)}"]
     if failed:
         L.append(f"- **Failed:** {len(failed)}")
@@ -240,10 +259,13 @@ def render_summary(updated: list[dict[str, Any]], skipped: list[dict[str, Any]],
     if unchanged:
         L += ["## Already up-to-date", "",
               *[f"- #{r['number']}: {_display_name(r) or '_unresolved_'}" for r in unchanged], ""]
+    if already_assigned:
+        L += ["## Skipped because an owner was already recommended", "",
+              *[f"- #{r['number']}" for r in already_assigned], ""]
     for title, rows in (("## Skipped", skipped), ("## Failed (transient / unexpected)", failed)):
         if rows:
             L += [title, "", *[f"- #{r['number']}: {r['reason']}" for r in rows], ""]
-    if not (updated or unchanged or skipped or failed):
+    if not (updated or unchanged or skipped or failed or already_assigned):
         L += ["No CI auto-triage issues found.", ""]
     return "\n".join(L)
 
@@ -267,6 +289,51 @@ def main() -> int:
                 log(f"  Warning: could not fetch #{num} from {ISSUE_REPO}: {exc}")
     else:
         issues = list_open_issues(ISSUE_REPO, ISSUE_WRITE_TOKEN)
+
+    updated: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    unchanged: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    already_assigned: list[dict[str, Any]] = []
+
+    # Early skip: drop any issue that already has a named-owner recommendation
+    # comment BEFORE we pay for pipeline_reorg load, Slack dump, identity index,
+    # or — most importantly — any agent call. Done as a pre-pass so that when
+    # every targeted issue is already assigned, the workflow finishes in seconds
+    # and never touches Slack / the agent at all. Honors both the scoped
+    # (user picked specific issue numbers) and unscoped (every open issue) paths.
+    if SKIP_ALREADY_ASSIGNED:
+        pending: list[dict[str, Any]] = []
+        for issue in issues:
+            num = issue["number"]
+            try:
+                if _has_named_owner_comment(list_issue_comments(ISSUE_REPO, num, ISSUE_WRITE_TOKEN)):
+                    log(f"  #{num}: already has a recommended-owner comment, skipping (SKIP_ALREADY_ASSIGNED=true)")
+                    already_assigned.append({"number": num})
+                    continue
+            except Exception as exc:  # noqa: BLE001
+                # If we can't even read the comments, don't silently process the
+                # issue as if unassigned — record it and move on. The main loop
+                # below will not re-attempt it because it's not in `pending`.
+                log(f"  #{num}: failed to read comments for skip-check — {exc}")
+                failed.append({"number": num, "reason": f"comment read failed: {exc}"})
+                continue
+            pending.append(issue)
+        issues = pending
+
+    # Short-circuit: if every issue was already assigned (or there were no issues
+    # in the first place), we skip the expensive setup entirely and emit an empty
+    # summary. This is the "if all issues already have owners, the workflow should
+    # be super fast" requirement.
+    if not issues:
+        summary = render_summary(updated, skipped, unchanged, failed, already_assigned)
+        (Path(SUMMARY_OUTPUT).write_text(summary, encoding="utf-8") if SUMMARY_OUTPUT else print(summary))
+        print(json.dumps({
+            "updated": updated, "unchanged": unchanged, "skipped": skipped,
+            "failed": failed, "already_assigned": already_assigned,
+        }, indent=2), file=sys.stderr)
+        return 1 if failed else 0
+
     pipeline = load_pipeline_reorg_owners(PIPELINE_REORG_DIR)
     log(f"  Loaded {len(pipeline)} pipeline_reorg entries from {PIPELINE_REORG_DIR}")
     slack_dir: list[dict[str, Any]] = []
@@ -279,10 +346,6 @@ def main() -> int:
             log(f"  Warning: failed to download Slack directory: {exc}")
     identity_index = build_identity_index(TARGET_REPO_ROOT, slack_dir) if slack_dir else {}
     token = AGGREGATE_READ_TOKEN or None
-    updated: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-    unchanged: list[dict[str, Any]] = []
-    failed: list[dict[str, Any]] = []
 
     for issue in issues:
         num = issue["number"]
@@ -322,9 +385,12 @@ def main() -> int:
             log(f"  #{num}: failed — {exc}")
             failed.append({"number": num, "reason": str(exc)})
 
-    summary = render_summary(updated, skipped, unchanged, failed)
+    summary = render_summary(updated, skipped, unchanged, failed, already_assigned)
     (Path(SUMMARY_OUTPUT).write_text(summary, encoding="utf-8") if SUMMARY_OUTPUT else print(summary))
-    print(json.dumps({"updated": updated, "unchanged": unchanged, "skipped": skipped, "failed": failed}, indent=2), file=sys.stderr)
+    print(json.dumps({
+        "updated": updated, "unchanged": unchanged, "skipped": skipped,
+        "failed": failed, "already_assigned": already_assigned,
+    }, indent=2), file=sys.stderr)
     return 1 if failed else 0
 
 

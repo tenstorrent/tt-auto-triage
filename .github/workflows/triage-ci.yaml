@@ -38,6 +38,14 @@ on:
           whitespace. Leave empty to process every open CI-triage issue.
         type: string
         default: ""
+      skip-assigning-for-issues-that-already-have-owners:
+        description: >-
+          When true (default), skip any issue that already has a recommended-
+          owner comment before running the resolver. If every targeted issue is
+          already assigned, the workflow exits in seconds. Set to false to
+          re-resolve unconditionally.
+        type: boolean
+        default: true
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to target-repo"
@@ -72,6 +80,7 @@ jobs:
       issue-repo: ${{ inputs.issue-repo }}
       target-repo: ${{ inputs.target-repo }}
       issue-numbers: ${{ inputs.issue-numbers }}
+      skip-assigning-for-issues-that-already-have-owners: ${{ inputs.skip-assigning-for-issues-that-already-have-owners }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}

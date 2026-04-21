@@ -21,7 +21,7 @@ class IdempotencyTests(unittest.TestCase):
 
     def _run_twice(self, issue_cold: dict, issue_warm: dict) -> dict[str, list]:
         slack_dir = [{"id": "U1", "deleted": False, "real_name": "Alice", "display_name": "alice"}]
-        pipeline = [{"name": "Job Alpha", "id": "U1", "owner_name": "Alice"}]
+        pipeline = {"Job Alpha": {"name": "Job Alpha", "id": "U1", "owner_name": "Alice"}}
         env = {"ISSUE_WRITE_TOKEN": "tok", "CURSOR_API_KEY": "ck", "SLACK_BOT_TOKEN": "", "SUMMARY_OUTPUT": ""}
         calls: dict[str, list] = {"create": [], "update_comment": [], "update_issue": [], "add_labels": []}
         # Seed the comment list with what a first-run create would have posted.
