@@ -12,56 +12,95 @@ You are given the target repo sparse-checked out at `$repo_root/`, a Slack user
 dump at `$slack_dump`, and `$$GITHUB_TOKEN` in the environment. Use your file
 reading and shell tools to investigate.
 
-Data sources (in rough order of trust):
-  1. `$repo_root/.github/CODEOWNERS` — match the workflow file path; GitHub
-     applies LAST-match-wins, so a later pattern fully overrides an earlier one.
-  2. `git -C $repo_root log --format='%an%x09%ae' -- .github/workflows/<file>.yaml`
-     — recent committers to the workflow file.
-  3. `$repo_root/.github/actions/analyze-workflow-data/owners.json` — legacy
-     workflow→Slack mapping (useful hints, not authoritative).
-  4. `$repo_root/tests/pipeline_reorg/*.yaml` — you have already been told the
-     pipeline_reorg owner is unusable; only consult this to see nearby owners
-     for similar jobs as a tiebreaker.
+=====================================================================
+Required process — build a SHORTLIST, then iterate
+=====================================================================
+Do not hand back the first candidate you think of. The last two times the
+pipeline_reorg owner was invalid, the agent tried one or two names, found them
+both also-invalid, and returned `source=none`. That is a bug in the agent's
+process, not a legitimate outcome: tt-metal has hundreds of active engineers
+and every single CI workflow in the repo has a reachable current owner.
 
-=====================================================================
-MANDATORY employment check — you MUST run this before returning a pick
-=====================================================================
-Before you output any candidate, validate them with the helper CLI:
+STEP 1 — Assemble a shortlist of AT LEAST 5 DISTINCT candidates before you
+         run any employment check. Pull from all of these sources until the
+         list is full:
+
+  a. `$repo_root/.github/CODEOWNERS` — find the workflow file path; apply
+     LAST-match-wins. Collect every individual login and every team member
+     expansion the matched rule points at.
+  b. `git -C $repo_root log -n200 --format='%an%x09%ae' -- <workflow_file>`
+     — the top committers to the workflow file. Skip bots
+     (`dependabot[bot]`, `github-actions[bot]`, `tenstorrent-bot`, etc.).
+  c. `git -C $repo_root log -n200 --format='%an%x09%ae' -- <job-dir>` —
+     committers to the job's source directory, if you can identify it from
+     the workflow YAML.
+  d. `$repo_root/.github/actions/analyze-workflow-data/owners.json` — legacy
+     workflow→Slack mapping; hints only, not authoritative.
+  e. `$repo_root/tests/pipeline_reorg/*.yaml` — neighbor jobs in the same
+     file as the failing job often share an owner or a small owner pool.
+     The failing job's own entry is unusable (you were told that), but the
+     surrounding entries are fair game as shortlist seeds.
+
+If any source returns fewer names than expected, keep pulling from the next
+source. Never ship a shortlist shorter than 5 unless you have demonstrably
+exhausted every source above.
+
+STEP 2 — Rank the shortlist. Prefer, in order:
+  1. Specific CODEOWNERS pattern matches over broad fallback patterns.
+  2. Authors with recent, substantive commits over drive-by editors.
+  3. People who appear in multiple sources over single-source appearances.
+
+STEP 3 — Walk the ranked shortlist and run the employment check on EACH
+         candidate until one returns ACTIVE:
 
     python3 -m tools.ci.assign_owners.check_active \
         --slack-id <THEIR_SLACK_ID> \
         --login   <THEIR_GITHUB_LOGIN>
 
-(The CLI reads the Slack dump path from the `SLACK_DUMP_PATH` env var; the
-workflow sets it to `$slack_dump` automatically, so you don't pass it.)
+  (The CLI reads the Slack dump path from the `SLACK_DUMP_PATH` env var; the
+  workflow sets it to `$slack_dump` automatically, so you don't pass it.)
 
-stdout will be exactly one of:
-    ACTIVE
-    INACTIVE: <reason>
+  stdout will be exactly one of:
+      ACTIVE
+      INACTIVE: <reason>
 
-If the result is INACTIVE, DO NOT return that candidate. Pick a different one
-and re-run the check. The same check is run server-side on your final answer,
-so returning an inactive candidate is always rejected — save yourself the trip.
+  If a candidate is INACTIVE, record it in your reasoning and MOVE ON to the
+  next shortlist entry. Do NOT return an INACTIVE candidate — the server re-
+  runs the same check on your final answer and rejects inactive picks.
 
-Do not attempt to second-guess the check by reading `$slack_dump` yourself and
-declaring someone active anyway. The CLI is the single source of truth for
-"is this person still at the company".
+  Do NOT second-guess the CLI by reading `$slack_dump` yourself. It is the
+  single source of truth for "is this person still at the company".
 
-The GitHub org membership endpoint (`/orgs/$github_org/members/<login>`) is NOT
-reliable — it returns 404 to any caller that lacks `read:org` scope — so don't
-use it as a rejection signal. A 204 response is positive confirmation only.
+  The GitHub org membership endpoint (`/orgs/$github_org/members/<login>`)
+  is NOT reliable — it returns 404 to any caller that lacks `read:org`
+  scope — so don't use it as a rejection signal. A 204 response is positive
+  confirmation only.
+
+STEP 4 — If the ENTIRE shortlist came back INACTIVE, that is a strong signal
+         you built the shortlist wrong, not that no owner exists. Go back
+         to STEP 1 and widen the search:
+  * Read the workflow YAML itself — look at the `uses:` targets, any
+    `action.yml` files they reference, and the `CODEOWNERS` rules on those.
+  * Read `git log -n500 --format='%an%x09%ae' -- <workflow_file>` with a
+    deeper history window.
+  * Try the team-level CODEOWNERS pattern; team expansions in
+    `$repo_root/.github/CODEOWNERS` sometimes live one directory up.
+
+Only after TWO rounds of shortlist-and-validate have failed is it acceptable
+to fall back to `source=none`. In every other case you must return one ACTIVE
+candidate.
 
 =====================================================================
 Output format
 =====================================================================
-You must return exactly one owner. Prefer people with recent, substantive
-commits to the workflow file or its job definition over people with a single
-drive-by edit. Prefer specific CODEOWNERS patterns over broad fallback patterns.
-
 Output the marker below on its own line, followed by compact JSON only:
 $marker
-{"github_login": "...", "github_name": "...", "slack_id": "...", "slack_name": "...", "source": "agent", "reasoning": "1-2 sentence rationale, including the ACTIVE check result for this candidate"}
+{"github_login": "...", "github_name": "...", "slack_id": "...", "slack_name": "...", "source": "agent", "reasoning": "Shortlist: [A, B, C, ...]. A=INACTIVE (Slack deactivated), B=ACTIVE. Picked B because <reason>."}
 
-If no valid current employee can be resolved from any source, return:
+The `reasoning` field is mandatory and MUST name the candidates you checked
+and the ACTIVE/INACTIVE result for each, so a reviewer can audit the decision
+without re-running the agent.
+
+Only if STEP 4 has also failed, return:
 $marker
-{"github_login": "", "github_name": "", "slack_id": "", "slack_name": "", "source": "none", "reasoning": "why no valid owner was found"}
+{"github_login": "", "github_name": "", "slack_id": "", "slack_name": "", "source": "none", "reasoning": "Tried N candidates across sources X/Y/Z, all INACTIVE: <per-candidate results>. Expanded search failed because <reason>."}
