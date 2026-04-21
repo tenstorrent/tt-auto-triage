@@ -20,8 +20,9 @@ set -euo pipefail
 #   GITHUB_TOKEN      — token with contents:write and actions:write on OWNER_REPO
 #
 # Optional:
-#   POLL_INTERVAL     — seconds between status checks (default: 120)
-#   MAX_WAIT_MINUTES  — max wait for runs to complete (default: 120)
+#   POLL_INTERVAL          — seconds between status checks (default: 120)
+#   MAX_WAIT_START_MINUTES — max wait for runs to leave queued (default: 240)
+#   MAX_WAIT_FINISH_MINUTES — max wait for runs to complete once started (default: 120)
 #   OWNER_REPO        — GitHub owner/repo (default: tenstorrent/tt-metal)
 #   CURSOR_API_KEY    — Cursor AI API key for failure classification
 #   EXPECTED_FAILURE_SIG — expected failure signature from the bug escape
@@ -38,7 +39,8 @@ TEST_NAME="${TEST_NAME:?TEST_NAME is required}"
 REPO_DIR="${REPO_DIR:?REPO_DIR is required}"
 GITHUB_TOKEN="${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
 POLL_INTERVAL="${POLL_INTERVAL:-120}"
-MAX_WAIT_MINUTES="${MAX_WAIT_MINUTES:-120}"
+MAX_WAIT_START_MINUTES="${MAX_WAIT_START_MINUTES:-240}"
+MAX_WAIT_FINISH_MINUTES="${MAX_WAIT_FINISH_MINUTES:-120}"
 OWNER_REPO="${OWNER_REPO:-tenstorrent/tt-metal}"
 CURSOR_API_KEY="${CURSOR_API_KEY:-}"
 EXPECTED_FAILURE_SIG="${EXPECTED_FAILURE_SIG:-}"
@@ -188,6 +190,14 @@ if [ -z "$PARENT_SHA" ]; then
   PARENT_SHA=$(git rev-parse "${FIX_COMMIT_SHA}^" 2>/dev/null || echo "")
 fi
 
+# GitHub API fallback for parent SHA
+if [ -z "$PARENT_SHA" ] || [[ "$PARENT_SHA" == *"^"* ]]; then
+  verify_info "Using GitHub API to resolve parent SHA..."
+  PARENT_SHA=$(curl -sf -H "Authorization: Bearer $GITHUB_TOKEN" \
+    "https://api.github.com/repos/$OWNER_REPO/commits/$FIX_COMMIT_SHA" \
+    | python3 -c "import sys,json; c=json.load(sys.stdin); print(c['parents'][0]['sha'])" 2>/dev/null || echo "")
+fi
+
 if [ -z "$PARENT_SHA" ]; then
   write_result "inconclusive" "Could not resolve parent of $FIX_COMMIT_SHA"
   exit 1
@@ -277,10 +287,35 @@ fi
 verify_info "BEFORE run: $BEFORE_RUN_ID"
 verify_info "AFTER run: $AFTER_RUN_ID"
 
-# ---- Step 8: Poll until both complete ----
+# ---- Step 8a: Wait for runs to start (leave queued) ----
 
-BEFORE_CONCLUSION=$(poll_run_completion "$BEFORE_RUN_ID" "$POLL_INTERVAL" "$MAX_WAIT_MINUTES")
-AFTER_CONCLUSION=$(poll_run_completion "$AFTER_RUN_ID" "$POLL_INTERVAL" "$MAX_WAIT_MINUTES")
+if ! poll_run_start "$BEFORE_RUN_ID" "$MAX_WAIT_START_MINUTES"; then
+  write_result "inconclusive_timeout" "Run $BEFORE_RUN_ID did not start within $MAX_WAIT_START_MINUTES minutes (queued timeout)" \
+    "queued_timeout" "unknown" "$BEFORE_RUN_ID" "$AFTER_RUN_ID"
+  cleanup_branches
+  exit 1
+fi
+
+if ! poll_run_start "$AFTER_RUN_ID" "$MAX_WAIT_START_MINUTES"; then
+  write_result "inconclusive_timeout" "Run $AFTER_RUN_ID did not start within $MAX_WAIT_START_MINUTES minutes (queued timeout)" \
+    "unknown" "queued_timeout" "$BEFORE_RUN_ID" "$AFTER_RUN_ID"
+  cleanup_branches
+  exit 1
+fi
+
+# ---- Step 8b: Poll until both complete ----
+
+BEFORE_CONCLUSION=$(poll_run_completion "$BEFORE_RUN_ID" "$POLL_INTERVAL" "$MAX_WAIT_FINISH_MINUTES")
+AFTER_CONCLUSION=$(poll_run_completion "$AFTER_RUN_ID" "$POLL_INTERVAL" "$MAX_WAIT_FINISH_MINUTES")
+
+# ---- Step 8c: Handle timeouts gracefully ----
+
+if [ "$BEFORE_CONCLUSION" = "timed_out" ] || [ "$AFTER_CONCLUSION" = "timed_out" ]; then
+  write_result "inconclusive" "One or both runs timed out (before=$BEFORE_CONCLUSION, after=$AFTER_CONCLUSION)" \
+    "$BEFORE_CONCLUSION" "$AFTER_CONCLUSION" "${BEFORE_RUN_ID:-0}" "${AFTER_RUN_ID:-0}"
+  cleanup_branches
+  exit 0  # Don't fail the job, just write inconclusive
+fi
 
 # ---- Step 9: Check for "no tests ran" ----
 

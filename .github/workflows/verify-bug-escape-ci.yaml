@@ -29,8 +29,12 @@ on:
         description: "Seconds between run status checks"
         type: string
         default: "120"
-      max-wait-minutes:
-        description: "Max minutes to wait for verification runs"
+      start-wait-minutes:
+        description: "Max minutes to wait for run to start (leave queued)"
+        type: string
+        default: "240"
+      finish-wait-minutes:
+        description: "Max minutes to wait for run to finish once started"
         type: string
         default: "120"
   workflow_call:
@@ -59,8 +63,12 @@ on:
         description: "Seconds between run status checks"
         type: string
         default: "120"
-      max-wait-minutes:
-        description: "Max minutes to wait for verification runs"
+      start-wait-minutes:
+        description: "Max minutes to wait for run to start (leave queued)"
+        type: string
+        default: "240"
+      finish-wait-minutes:
+        description: "Max minutes to wait for run to finish once started"
         type: string
         default: "120"
     secrets:
@@ -109,7 +117,8 @@ jobs:
           EXPECTED_FAILURE_SIG: ${{ inputs.expected-failure-sig }}
           REPO_DIR: ${{ github.workspace }}/tt-metal
           POLL_INTERVAL: ${{ inputs.poll-interval-seconds }}
-          MAX_WAIT_MINUTES: ${{ inputs.max-wait-minutes }}
+          MAX_WAIT_START_MINUTES: ${{ inputs.start-wait-minutes }}
+          MAX_WAIT_FINISH_MINUTES: ${{ inputs.finish-wait-minutes }}
           OWNER_REPO: tenstorrent/tt-metal
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |

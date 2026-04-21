@@ -201,6 +201,34 @@ print(yaml.dump([pruned], default_flow_style=False).rstrip())
 }
 
 # ---------------------------------------------------------------------------
+# poll_run_start RUN_ID START_WAIT_MINUTES
+#
+# Waits for a GitHub Actions run to leave "queued" status (i.e., transition
+# to "in_progress" or "completed"). Polls every 60 seconds.
+# Returns 0 if run started within the deadline, 1 if it timed out.
+# ---------------------------------------------------------------------------
+poll_run_start() {
+  local run_id="$1" start_wait="${2:-240}"
+  local deadline=$((SECONDS + start_wait * 60))
+  local status
+
+  printf '[verify] Waiting for run %s to start (max_wait=%sm)\n' "$run_id" "$start_wait" >&2
+
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    status=$(gh run view "$run_id" --json status --jq '.status' 2>/dev/null || echo "unknown")
+    if [ "$status" != "queued" ]; then
+      printf '[verify] Run %s left queued state: status=%s\n' "$run_id" "$status" >&2
+      return 0
+    fi
+    printf '[verify]   Run %s: still queued (%dm remaining)\n' "$run_id" "$(( (deadline - SECONDS) / 60 ))" >&2
+    sleep 60
+  done
+
+  printf '[verify][WARN] Run %s still queued after %sm\n' "$run_id" "$start_wait" >&2
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # poll_run_completion RUN_ID INTERVAL_SECONDS MAX_WAIT_MINUTES
 #
 # Polls a GitHub Actions run until it completes or times out.

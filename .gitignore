@@ -23,3 +23,6 @@ issue_dump.json
 .github/actions/auto-triage/auto_triage/data/data
 .github/actions/auto-triage/auto_triage/logs
 .github/actions/auto-triage/auto_triage/output
+
+# Bug escape verification output (generated at runtime)
+bug-escapes/verify/output/
