@@ -126,7 +126,8 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str) ->
 def resolve_owner(workflow_name: str, job_name: str, pipeline: list[dict[str, str]],
                   slack_dir: list[dict[str, Any]], token: str | None) -> dict[str, Any]:
     """Fast path: pipeline_reorg entry. Slow path (no match or ex-employee): agent."""
-    entry = next((e for e in pipeline if e["name"] == job_name), None)
+    bare = job_name.rsplit(" / ", 1)[-1].strip()
+    entry = next((e for e in pipeline if e["name"] in (job_name, bare)), None)
     if not entry:
         return _resolve_via_agent(workflow_name, job_name, "")
     sid = entry["id"]
