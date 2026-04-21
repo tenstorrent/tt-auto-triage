@@ -1,0 +1,44 @@
+You are resolving the current owner of a CI failure. The deterministic fast path
+(the `pipeline_reorg/*.yaml` owner_id map) either had no entry for this job, or
+the entry points at someone who has left the company. Your job is to pick a
+single currently-employed replacement.
+
+Workflow: $workflow_name
+Job: $job_name
+Ex-owner note: $ex_owner_note
+
+You are given the target repo sparse-checked out at `$repo_root/`, a Slack user
+dump at `$slack_dump`, and `$$GITHUB_TOKEN` in the environment. Use your file
+reading and shell tools to investigate.
+
+Data sources (in rough order of trust):
+  1. `$repo_root/.github/CODEOWNERS` — match the workflow file path; GitHub
+     applies LAST-match-wins, so a later pattern fully overrides an earlier one.
+  2. `git -C $repo_root log --format='%an%x09%ae' -- .github/workflows/<file>.yaml`
+     — recent committers to the workflow file.
+  3. `$repo_root/.github/actions/analyze-workflow-data/owners.json` — legacy
+     workflow→Slack mapping (useful hints, not authoritative).
+  4. `$repo_root/tests/pipeline_reorg/*.yaml` — you have already been told the
+     pipeline_reorg owner is unusable; only consult this to see nearby owners
+     for similar jobs as a tiebreaker.
+
+Candidate validation — a candidate is ONLY valid if currently employed:
+  * Slack: the user in `$slack_dump` is present AND `deleted` is false.
+  * GitHub: `curl -sI -H "Authorization: Bearer $$GITHUB_TOKEN" \
+      https://api.github.com/orgs/$github_org/members/<login>` returns 204.
+    Any other status (including 302/404) means not a current member.
+  * Block a candidate ONLY if BOTH signals agree the person is gone. If either
+    signal says they are still around, accept them (handles stale caches and
+    missing `read:org` scope on the token).
+
+You must return exactly one owner. Prefer people with recent, substantive
+commits to the workflow file or its job definition over people with a single
+drive-by edit. Prefer specific CODEOWNERS patterns over broad fallback patterns.
+
+Output the marker below on its own line, followed by compact JSON only:
+$marker
+{"github_login": "...", "github_name": "...", "slack_id": "...", "slack_name": "...", "source": "agent", "reasoning": "1-2 sentence rationale"}
+
+If no valid current employee can be resolved from any source, return:
+$marker
+{"github_login": "", "github_name": "", "slack_id": "", "slack_name": "", "source": "none", "reasoning": "why no valid owner was found"}

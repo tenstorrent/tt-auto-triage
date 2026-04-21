@@ -38,8 +38,11 @@ on:
       ISSUE_WRITE_TOKEN:
         description: "Token with write access to issue-repo"
         required: true
+      CURSOR_API_KEY:
+        description: "Cursor API key (required for agent-based owner fallback)"
+        required: false
       SLACK_BOT_TOKEN:
-        description: "Optional Slack bot token for GitHub-to-Slack resolution"
+        description: "Optional Slack bot token for Slack-deleted employment check"
         required: false
       CURSOR_API_KEY:
         required: false
@@ -66,4 +69,5 @@ jobs:
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}

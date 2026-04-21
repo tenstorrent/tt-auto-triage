@@ -13,13 +13,16 @@ on:
         default: "tenstorrent/tt-metal"
     secrets:
       AGGREGATE_READ_TOKEN:
-        description: "Token with read access to target-repo"
+        description: "Token with read access to target-repo and tenstorrent org"
         required: true
       ISSUE_WRITE_TOKEN:
         description: "Token with write access to issue-repo"
         required: true
+      CURSOR_API_KEY:
+        description: "Cursor API key for the agent fallback owner resolver"
+        required: true
       SLACK_BOT_TOKEN:
-        description: "Optional Slack bot token for GitHub-to-Slack resolution"
+        description: "Slack bot token; used to check Slack 'deleted' for employment check"
         required: false
 
 permissions:
@@ -28,21 +31,17 @@ permissions:
 jobs:
   assign-owners:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Validate required secrets
         env:
           AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
           ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
-          if [ -z "$ISSUE_WRITE_TOKEN" ]; then
-            echo "::error::ISSUE_WRITE_TOKEN is required"
-            exit 1
-          fi
-          if [ -z "$AGGREGATE_READ_TOKEN" ]; then
-            echo "::error::AGGREGATE_READ_TOKEN is required to read ownership data from target-repo"
-            exit 1
-          fi
+          [ -n "$ISSUE_WRITE_TOKEN" ] || { echo "::error::ISSUE_WRITE_TOKEN is required"; exit 1; }
+          [ -n "$AGGREGATE_READ_TOKEN" ] || { echo "::error::AGGREGATE_READ_TOKEN is required"; exit 1; }
+          [ -n "$CURSOR_API_KEY" ] || { echo "::error::CURSOR_API_KEY is required"; exit 1; }
 
       - name: Checkout tt-auto-triage
         uses: actions/checkout@v4
@@ -50,6 +49,18 @@ jobs:
           repository: tenstorrent/tt-auto-triage
           ref: ebanerjee/triage-assign-owners
           persist-credentials: false
+
+      - name: Install Cursor CLI
+        run: |
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
 
       - name: Checkout target repo ownership data
         uses: actions/checkout@v4
@@ -68,15 +79,15 @@ jobs:
       - name: Run assignee resolution stage
         env:
           GITHUB_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+          AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
           ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           ISSUE_REPO: ${{ inputs.issue-repo }}
           TARGET_REPO: ${{ inputs.target-repo }}
-          OWNERS_JSON_PATH: tt-metal/.github/actions/analyze-workflow-data/owners.json
           PIPELINE_REORG_DIR: tt-metal/tests/pipeline_reorg
-          CODEOWNERS_PATH: tt-metal/.github/CODEOWNERS
           TARGET_REPO_ROOT: tt-metal
-          GIT_HISTORY_MAX_COMMITS: "100"
+          SLACK_DUMP_PATH: slack_users.json
           SUMMARY_OUTPUT: summary.md
           PYTHONPATH: .
         run: python3 -m tools.ci.assign_owners
