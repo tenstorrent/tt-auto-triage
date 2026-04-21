@@ -101,6 +101,22 @@ for i in $(seq 0 $((num_fixpoints - 1))); do
   ')
 
   fix_sha=$(echo "$fix_commit" | jq -r '.sha // "unknown"')
+
+  # Validate that fix_sha actually exists in the target repo via GitHub API.
+  # This prevents corrupted/truncated SHAs from propagating to verify-commands.sh
+  # and causing verification failures downstream.
+  if [ "$fix_sha" != "unknown" ] && [ "$fix_sha" != "null" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
+    sha_check_status=$(curl -s -o /dev/null -w "%{http_code}" \
+      -H "Authorization: Bearer $GITHUB_TOKEN" \
+      -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/tenstorrent/tt-metal/commits/$fix_sha")
+    if [ "$sha_check_status" != "200" ]; then
+      skip_test=$(echo "$fp" | jq -r '.failure.test_name // "unknown"')
+      log_warn "  [$((i+1))] Invalid fix SHA $fix_sha for $skip_test (HTTP $sha_check_status) — setting to unknown, skipping verification dispatch"
+      fix_sha="unknown"
+    fi
+  fi
+
   fix_layer=$(echo "$fix_commit" | jq -r '.fix_layer // "unknown"')
   fix_message=$(echo "$fix_commit" | jq -r '.message // ""')
   fix_files=$(echo "$fix_commit" | jq -c '.files_changed // []')

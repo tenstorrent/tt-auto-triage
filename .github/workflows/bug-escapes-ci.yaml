@@ -43,6 +43,9 @@ on:
       CURSOR_API_KEY:
         description: "Cursor CLI API key for agent-driven steps"
         required: true
+      GITHUB_WRITE_TOKEN:
+        description: "Token with actions:write on tt-auto-triage for auto-dispatching verification"
+        required: false
 
 permissions:
   contents: read
@@ -107,6 +110,62 @@ jobs:
           path: bug-escapes/output/
           retention-days: 30
           if-no-files-found: warn
+
+      - name: Auto-dispatch verifications
+        if: always()
+        continue-on-error: true
+        env:
+          GITHUB_WRITE_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          OUTPUT_FILE="bug-escapes/output/bug-escapes-output.json"
+
+          if [ ! -f "$OUTPUT_FILE" ]; then
+            echo "No bug-escapes-output.json found — skipping auto-dispatch"
+            exit 0
+          fi
+
+          if [ -z "${GITHUB_WRITE_TOKEN:-}" ]; then
+            echo "GITHUB_WRITE_TOKEN not set — skipping auto-dispatch (detection-only mode)"
+            exit 0
+          fi
+
+          dispatch_count=0
+          skip_count=0
+
+          for row in $(jq -c '.bug_escapes[]' "$OUTPUT_FILE"); do
+            sha=$(echo "$row" | jq -r '.fix_commit_sha')
+            pipeline=$(echo "$row" | jq -r '.test_pipeline')
+            job=$(echo "$row" | jq -r '.test_job')
+            tname=$(echo "$row" | jq -r '.test_name')
+            sig=$(echo "$row" | jq -r '.failure_signature')
+
+            # Skip escapes with invalid/missing SHAs
+            if [ "$sha" = "unknown" ] || [ "$sha" = "null" ] || [ -z "$sha" ]; then
+              echo "Skipping $tname — fix SHA is $sha"
+              skip_count=$((skip_count + 1))
+              continue
+            fi
+
+            echo "Dispatching verification for $tname (fix: ${sha:0:8})"
+            http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+              -H "Authorization: Bearer $GITHUB_WRITE_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/tenstorrent/tt-auto-triage/actions/workflows/verify-bug-escape-ci.yaml/dispatches" \
+              -d "{\"ref\":\"ebanerjee/bug-escapes\",\"inputs\":{\"fix-commit-sha\":\"$sha\",\"test-pipeline\":\"$pipeline\",\"test-job\":\"$job\",\"test-name\":\"$tname\",\"expected-failure-sig\":\"$sig\"}}")
+
+            if [ "$http_code" = "204" ]; then
+              echo "  -> Dispatched successfully (HTTP $http_code)"
+              dispatch_count=$((dispatch_count + 1))
+            else
+              echo "  -> Dispatch failed (HTTP $http_code) — continuing"
+            fi
+
+            # Rate-limit: short sleep between dispatches
+            sleep 2
+          done
+
+          echo "Auto-dispatch complete: $dispatch_count dispatched, $skip_count skipped"
 
       - name: Summary
         if: always()
