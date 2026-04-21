@@ -93,3 +93,53 @@ def update_issue(issue_repo: str, issue_number: str | int, body: str, token: str
     finally:
         try: os.unlink(body_path)
         except FileNotFoundError: pass
+
+
+def add_issue_labels(issue_repo: str, issue_number: str | int, token: str, add_labels: list[str]) -> None:
+    if not add_labels:
+        return
+    args = ["issue", "edit", str(issue_number), f"--repo={issue_repo}", *(f"--add-label={lb}" for lb in add_labels)]
+    _gh(*args, token=token)
+
+
+def list_issue_comments(issue_repo: str, issue_number: str | int, token: str) -> list[dict[str, Any]]:
+    owner, repo = issue_repo.split("/", 1)
+    page, out = 1, []
+    while True:
+        data = _api_get(
+            f"https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}/comments?per_page=100&page={page}",
+            token,
+        )
+        if not data:
+            return out
+        out += [{"id": c.get("id"), "body": c.get("body", "") or ""} for c in data]
+        if len(data) < 100:
+            return out
+        page += 1
+
+
+def _write_json_body(body: str) -> str:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".json") as h:
+        json.dump({"body": body}, h)
+        return h.name
+
+
+def create_issue_comment(issue_repo: str, issue_number: str | int, body: str, token: str) -> dict[str, Any]:
+    path = _write_json_body(body)
+    try:
+        out = _gh("api", f"repos/{issue_repo}/issues/{issue_number}/comments",
+                  "--method", "POST", "--input", path, token=token)
+    finally:
+        try: os.unlink(path)
+        except FileNotFoundError: pass
+    return json.loads(out) if out.strip() else {}
+
+
+def update_issue_comment(issue_repo: str, comment_id: str | int, body: str, token: str) -> None:
+    path = _write_json_body(body)
+    try:
+        _gh("api", f"repos/{issue_repo}/issues/comments/{comment_id}",
+            "--method", "PATCH", "--input", path, token=token)
+    finally:
+        try: os.unlink(path)
+        except FileNotFoundError: pass

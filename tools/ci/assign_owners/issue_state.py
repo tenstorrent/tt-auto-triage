@@ -61,12 +61,19 @@ def parse_assignee_markers(body: str) -> dict[str, object]:
     }
 
 
-def upsert_assignee_markers(body: str, *, github_assignees: list[str], slack_assignees: list[str], source: str) -> str:
-    preserved = _strip_marker_lines(_extract_metadata_block(body), _ASSIGNEE_MARKERS)
-    parts = ([preserved] if preserved else []) + [
-        f"`Auto-triage-assignees-gh: {json.dumps(github_assignees, separators=(',', ':'))}`",
-        f"`Auto-triage-assignees-slack: {json.dumps(slack_assignees, separators=(',', ':'))}`",
-        f"`Auto-triage-assignee-source: {source}`",
-    ]
-    block = "\n".join([METADATA_START, *parts, METADATA_END])
-    return "\n\n".join(p for p in (_remove_metadata_block(body), block) if p).strip()
+def strip_assignee_markers(body: str) -> str:
+    """Remove Auto-triage-assignees-* markers from the sealed block; preserve base markers."""
+    meta = _extract_metadata_block(body)
+    if not meta:
+        return body.strip()
+    preserved = _strip_marker_lines(meta, _ASSIGNEE_MARKERS)
+    without_block = _remove_metadata_block(body)
+    if not preserved:
+        return without_block
+    block = "\n".join([METADATA_START, preserved, METADATA_END])
+    return "\n\n".join(p for p in (without_block, block) if p).strip()
+
+
+def has_assignee_markers(body: str) -> bool:
+    meta = _extract_metadata_block(body)
+    return any(f"`{m}:" in meta for m in _ASSIGNEE_MARKERS)

@@ -13,9 +13,18 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .github import download_slack_directory, list_open_issues, log, update_issue
+from .github import (
+    add_issue_labels,
+    create_issue_comment,
+    download_slack_directory,
+    list_issue_comments,
+    list_open_issues,
+    log,
+    update_issue,
+    update_issue_comment,
+)
 from .identity import build_identity_index
-from .issue_state import parse_assignee_markers, parse_base_markers, upsert_assignee_markers
+from .issue_state import has_assignee_markers, parse_base_markers, strip_assignee_markers
 
 ISSUE_REPO = os.environ.get("ISSUE_REPO", "ebanerjeeTT/issue_dump")
 ISSUE_WRITE_TOKEN = os.environ.get("ISSUE_WRITE_TOKEN", "")
@@ -28,6 +37,7 @@ CURSOR_MODEL = os.environ.get("CURSOR_MODEL", "claude-4-sonnet")
 GITHUB_ORG = os.environ.get("GITHUB_ORG", "tenstorrent")
 OWNERS_READY_LABEL = "auto-triage:owners-ready"
 AGENT_MARKER = "===FINAL==="
+COMMENT_MARKER = "<!-- auto-triage:owner-recommendation -->"
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "resolve_owner.txt"
 _PR_NAME = re.compile(r"^- name:\s*[\"']?(.+?)[\"']?\s*$")
 _PR_OWNER = re.compile(r"^\s+owner_id:\s*(.+)")
@@ -150,34 +160,43 @@ def resolve_owner(workflow_name: str, job_name: str, pipeline: list[dict[str, st
         f"The previous owner {display} (Slack `{sid}`) has left the company. Find a current replacement.")
 
 
-def _fmt_pair(vals: list[str], names: list[str], is_slack: bool) -> str:
-    if not vals:
-        return "_none_"
-    pad = names + [""] * (len(vals) - len(names))
-    if is_slack:
-        return ", ".join(f"{n} (`{v}`)" if n else f"`{v}`" for v, n in zip(vals, pad))
-    return ", ".join(f"`{v}`" + (f" ({n})" if n else "") for v, n in zip(vals, pad))
+def _display_name(r: dict[str, Any]) -> str:
+    """Pick the human-readable name for the summary / comment. Never exposes Slack IDs or GH logins."""
+    for key in ("github_names", "slack_names"):
+        for value in r.get(key) or []:
+            value = (value or "").strip()
+            if value:
+                return value
+    return ""
+
+
+def _render_comment(name: str) -> str:
+    body = name or "_no current owner could be determined_"
+    return f"{COMMENT_MARKER}\n**Recommended owner:** {body}\n"
+
+
+def _find_marker_comment(comments: list[dict[str, Any]]) -> dict[str, Any] | None:
+    return next((c for c in comments if COMMENT_MARKER in (c.get("body") or "")), None)
 
 
 def render_summary(updated: list[dict[str, Any]], skipped: list[dict[str, Any]],
                    unchanged: list[dict[str, Any]], failed: list[dict[str, Any]]) -> str:
-    L = ["# Assignee Resolution Summary", "",
+    L = ["# Owner Recommendation Summary", "",
          f"- **Updated:** {len(updated)}", f"- **Unchanged (idempotent):** {len(unchanged)}",
          f"- **Skipped (missing base metadata):** {len(skipped)}"]
     if failed:
         L.append(f"- **Failed:** {len(failed)}")
     L.append("")
     if updated:
-        L += ["## Assigned owners", "", "| Issue | Source | GitHub (login + name) | Slack (name + id) |", "| --- | --- | --- | --- |"]
-        L += [f"| #{r['number']} | `{r['source']}` | {_fmt_pair(r['github_assignees'], r['github_names'], False)} | {_fmt_pair(r['slack_assignees'], r['slack_names'], True)} |" for r in updated]
+        L += ["## Recommended owners", "", "| Issue | Recommended owner |", "| --- | --- |"]
+        L += [f"| #{r['number']} | {_display_name(r) or '_unresolved_'} |" for r in updated]
         L.append("")
-    for title, rows, fmt in (
-        ("## Already up-to-date", unchanged, lambda r: f"- #{r['number']} (source: `{r['source']}`)"),
-        ("## Skipped", skipped, lambda r: f"- #{r['number']}: {r['reason']}"),
-        ("## Failed (transient / unexpected)", failed, lambda r: f"- #{r['number']}: {r['reason']}"),
-    ):
+    if unchanged:
+        L += ["## Already up-to-date", "",
+              *[f"- #{r['number']}: {_display_name(r) or '_unresolved_'}" for r in unchanged], ""]
+    for title, rows in (("## Skipped", skipped), ("## Failed (transient / unexpected)", failed)):
         if rows:
-            L += [title, "", *[fmt(r) for r in rows], ""]
+            L += [title, "", *[f"- #{r['number']}: {r['reason']}" for r in rows], ""]
     if not (updated or unchanged or skipped or failed):
         L += ["No CI auto-triage issues found.", ""]
     return "\n".join(L)
@@ -208,7 +227,7 @@ def main() -> int:
     for issue in issues:
         num = issue["number"]
         try:
-            body = issue.get("body", "")
+            body = issue.get("body", "") or ""
             base = parse_base_markers(body)
             wf, job = str(base["workflow_name"]), str(base["job_name"])
             if not wf or not job:
@@ -216,17 +235,29 @@ def main() -> int:
                 skipped.append({"number": num, "reason": "missing Auto-triage-workflow / Auto-triage-job-name"})
                 continue
             r = resolve_owner(wf, job, pipeline, slack_dir, token, identity_index)
-            labels = {lb.get("name", "") for lb in issue.get("labels", [])}
-            want = {"github_assignees": r["github_assignees"], "slack_assignees": r["slack_assignees"], "source": r["source"]}
-            if parse_assignee_markers(body) == want and OWNERS_READY_LABEL in labels:
-                log(f"  #{num}: assignees unchanged, skipping update")
-                unchanged.append({"number": num, "source": r["source"]})
+            name = _display_name(r)
+            log(f"  #{num}: source={r['source']} owner={name!r} gh={r['github_assignees']} slack={r['slack_assignees']}")
+
+            # Clean out any stale assignee markers left behind by earlier runs of this stage.
+            if has_assignee_markers(body):
+                update_issue(ISSUE_REPO, num, strip_assignee_markers(body), ISSUE_WRITE_TOKEN, add_labels=[OWNERS_READY_LABEL])
+                log(f"  #{num}: stripped stale assignee markers from issue body")
+            elif OWNERS_READY_LABEL not in {lb.get("name", "") for lb in issue.get("labels", [])}:
+                add_issue_labels(ISSUE_REPO, num, ISSUE_WRITE_TOKEN, [OWNERS_READY_LABEL])
+
+            # Upsert the single marker-gated recommendation comment. Never pings anyone.
+            want_comment = _render_comment(name)
+            existing = _find_marker_comment(list_issue_comments(ISSUE_REPO, num, ISSUE_WRITE_TOKEN))
+            if existing and (existing.get("body") or "").strip() == want_comment.strip():
+                unchanged.append({"number": num, **r})
                 continue
-            new_body = upsert_assignee_markers(body, github_assignees=r["github_assignees"],
-                slack_assignees=r["slack_assignees"], source=r["source"])
-            update_issue(ISSUE_REPO, num, new_body, ISSUE_WRITE_TOKEN, add_labels=[OWNERS_READY_LABEL])
+            if existing:
+                update_issue_comment(ISSUE_REPO, existing["id"], want_comment, ISSUE_WRITE_TOKEN)
+                log(f"  #{num}: updated owner-recommendation comment")
+            else:
+                create_issue_comment(ISSUE_REPO, num, want_comment, ISSUE_WRITE_TOKEN)
+                log(f"  #{num}: created owner-recommendation comment")
             updated.append({"number": num, **r})
-            log(f"  #{num}: source={r['source']} gh={r['github_assignees']} slack={r['slack_assignees']}")
         except Exception as exc:  # noqa: BLE001
             log(f"  #{num}: failed — {exc}")
             failed.append({"number": num, "reason": str(exc)})
