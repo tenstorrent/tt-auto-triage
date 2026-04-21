@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .github import download_slack_directory, list_open_issues, log, update_issue
+from .identity import build_identity_index
 from .issue_state import parse_assignee_markers, parse_base_markers, upsert_assignee_markers
 
 ISSUE_REPO = os.environ.get("ISSUE_REPO", "ebanerjeeTT/issue_dump")
@@ -124,7 +125,8 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str) ->
 
 
 def resolve_owner(workflow_name: str, job_name: str, pipeline: list[dict[str, str]],
-                  slack_dir: list[dict[str, Any]], token: str | None) -> dict[str, Any]:
+                  slack_dir: list[dict[str, Any]], token: str | None,
+                  identity_index: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
     """Fast path: pipeline_reorg entry. Slow path (no match or ex-employee): agent."""
     bare = job_name.rsplit(" / ", 1)[-1].strip()
     entry = next((e for e in pipeline if e["name"] in (job_name, bare)), None)
@@ -133,9 +135,17 @@ def resolve_owner(workflow_name: str, job_name: str, pipeline: list[dict[str, st
     sid = entry["id"]
     user = next((u for u in slack_dir if u.get("id") == sid), {})
     display = entry.get("owner_name") or user.get("real_name") or user.get("display_name") or sid
-    if is_active_employee(sid, "", slack_dir, token):
-        return {"source": "pipeline_reorg", "github_assignees": [], "github_names": [],
-                "slack_assignees": [sid], "slack_names": [display if display != sid else ""]}
+    ident = (identity_index or {}).get(sid, {})
+    gh_login = ident.get("github_login", "")
+    gh_name = ident.get("github_name", "")
+    if is_active_employee(sid, gh_login, slack_dir, token):
+        return {
+            "source": "pipeline_reorg",
+            "github_assignees": [gh_login] if gh_login else [],
+            "github_names": [gh_name] if gh_login else [],
+            "slack_assignees": [sid],
+            "slack_names": [display if display != sid else ""],
+        }
     return _resolve_via_agent(workflow_name, job_name,
         f"The previous owner {display} (Slack `{sid}`) has left the company. Find a current replacement.")
 
@@ -190,6 +200,7 @@ def main() -> int:
             log(f"  Slack directory: {len(slack_dir)} users (dumped to {SLACK_DUMP_PATH})")
         except Exception as exc:  # noqa: BLE001
             log(f"  Warning: failed to download Slack directory: {exc}")
+    identity_index = build_identity_index(TARGET_REPO_ROOT, slack_dir) if slack_dir else {}
     token = AGGREGATE_READ_TOKEN or None
     updated: list[dict[str, Any]] = []; skipped: list[dict[str, Any]] = []
     unchanged: list[dict[str, Any]] = []; failed: list[dict[str, Any]] = []
@@ -204,7 +215,7 @@ def main() -> int:
                 log(f"  #{num}: missing base metadata, skipping")
                 skipped.append({"number": num, "reason": "missing Auto-triage-workflow / Auto-triage-job-name"})
                 continue
-            r = resolve_owner(wf, job, pipeline, slack_dir, token)
+            r = resolve_owner(wf, job, pipeline, slack_dir, token, identity_index)
             labels = {lb.get("name", "") for lb in issue.get("labels", [])}
             want = {"github_assignees": r["github_assignees"], "slack_assignees": r["slack_assignees"], "source": r["source"]}
             if parse_assignee_markers(body) == want and OWNERS_READY_LABEL in labels:

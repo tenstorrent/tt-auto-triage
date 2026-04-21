@@ -25,6 +25,16 @@ class ResolveOwnerTests(unittest.TestCase):
         self.assertEqual(r["slack_names"], ["Alice A."])
         self.assertEqual(r["github_assignees"], [])
 
+    def test_fast_path_enriches_from_identity_index(self) -> None:
+        identity = {"U1": {"github_login": "alice-gh", "github_name": "Alice A."}}
+        with patch.object(mod, "_resolve_via_agent") as agent:
+            r = mod.resolve_owner("WF", "Job Alpha", self.pipeline, self.slack_dir, None, identity)
+        agent.assert_not_called()
+        self.assertEqual(r["source"], "pipeline_reorg")
+        self.assertEqual(r["github_assignees"], ["alice-gh"])
+        self.assertEqual(r["github_names"], ["Alice A."])
+        self.assertEqual(r["slack_assignees"], ["U1"])
+
     def test_slow_path_when_pipeline_owner_left_includes_ex_owner_note(self) -> None:
         captured: dict = {}
 
