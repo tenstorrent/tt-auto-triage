@@ -29,9 +29,11 @@ MANDATORY employment check — you MUST run this before returning a pick
 Before you output any candidate, validate them with the helper CLI:
 
     python3 -m tools.ci.assign_owners.check_active \
-        --slack-dump $slack_dump \
         --slack-id <THEIR_SLACK_ID> \
         --login   <THEIR_GITHUB_LOGIN>
+
+(The CLI reads the Slack dump path from the `SLACK_DUMP_PATH` env var; the
+workflow sets it to `$slack_dump` automatically, so you don't pass it.)
 
 stdout will be exactly one of:
     ACTIVE

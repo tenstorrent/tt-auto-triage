@@ -13,12 +13,15 @@ definition of "active" is centralized and the agent can't drift from the
 deterministic fast-path's validation.
 
 Usage:
-    python3 -m tools.ci.assign_owners.check_active \
-        --slack-dump slack_users.json \
-        --slack-id U05RWH3QUPM
-    python3 -m tools.ci.assign_owners.check_active \
-        --slack-dump slack_users.json \
-        --login sadesoyeTT
+    python3 -m tools.ci.assign_owners.check_active --slack-id U05RWH3QUPM
+    python3 -m tools.ci.assign_owners.check_active --login sadesoyeTT
+
+The path to the Slack dump is read exclusively from the `SLACK_DUMP_PATH`
+env var (set by the reusable workflow to a constant; defaulted to
+`slack_users.json`). It is intentionally *not* a CLI argument — otherwise a
+prompt-injected Cursor agent could pass `--slack-dump /some/other/file`
+and reach a local file-read primitive. SAST tools (Cycode) flag that
+pattern as `Unsanitized user input in file path`, and they're right to.
 """
 from __future__ import annotations
 
@@ -30,10 +33,24 @@ import sys
 from pathlib import Path
 from typing import Any
 
+_DEFAULT_DUMP_NAME = "slack_users.json"
+
 
 def _load_ex_employees() -> frozenset[str]:
     raw = os.environ.get("EX_EMPLOYEES", "")
     return frozenset(v.strip() for v in re.split(r"[\s,]+", raw) if v.strip())
+
+
+def _resolve_dump_path() -> Path:
+    """Return the Slack dump path from the `SLACK_DUMP_PATH` env var.
+
+    Env is writable only by the reusable workflow (we pick a constant
+    relative filename `slack_users.json`), so this value is trusted input.
+    Not taking it from argv ensures the Cursor agent — which is fed
+    arbitrary issue content and is therefore considered untrusted — has no
+    way to redirect the file read elsewhere.
+    """
+    return Path(os.environ.get("SLACK_DUMP_PATH", _DEFAULT_DUMP_NAME))
 
 
 def _load_slack_dump(path: Path) -> list[dict[str, Any]]:
@@ -67,15 +84,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check whether a candidate owner is an active employee.")
     parser.add_argument("--slack-id", default="", help="Slack user ID (e.g. U05RWH3QUPM)")
     parser.add_argument("--login", default="", help="GitHub login (e.g. sadesoyeTT)")
-    parser.add_argument("--slack-dump", default=os.environ.get("SLACK_DUMP_PATH", "slack_users.json"),
-                        help="Path to the downloaded Slack users dump")
     args = parser.parse_args(argv)
 
     if not (args.slack_id or args.login):
         print("ERROR: supply at least one of --slack-id or --login", file=sys.stderr)
         return 2
 
-    slack_dir = _load_slack_dump(Path(args.slack_dump))
+    slack_dir = _load_slack_dump(_resolve_dump_path())
     active, reason = check(args.slack_id, args.login, slack_dir, _load_ex_employees())
     if active:
         print("ACTIVE")
