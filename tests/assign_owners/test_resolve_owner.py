@@ -38,7 +38,8 @@ class ResolveOwnerTests(unittest.TestCase):
     def test_slow_path_when_pipeline_owner_left_includes_ex_owner_note(self) -> None:
         captured: dict = {}
 
-        def fake_agent(wf: str, job: str, note: str, slack_dir=None) -> dict:
+        def fake_agent(wf: str, job: str, note: str, slack_dir=None,
+                       extra_ex=frozenset(), extra_context: str = "") -> dict:
             captured["note"] = note
             return {"source": "agent", "github_assignees": ["replace"],
                     "github_names": ["Replace R."], "slack_assignees": ["UNEW"], "slack_names": ["New N."]}
@@ -55,7 +56,8 @@ class ResolveOwnerTests(unittest.TestCase):
     def test_slow_path_when_pipeline_has_no_entry_passes_empty_note(self) -> None:
         captured: dict = {}
 
-        def fake_agent(wf: str, job: str, note: str, slack_dir=None) -> dict:
+        def fake_agent(wf: str, job: str, note: str, slack_dir=None,
+                       extra_ex=frozenset(), extra_context: str = "") -> dict:
             captured["note"] = note
             return {"source": "agent", "github_assignees": ["picked"],
                     "github_names": ["P."], "slack_assignees": ["UPK"], "slack_names": ["P."]}
@@ -68,7 +70,8 @@ class ResolveOwnerTests(unittest.TestCase):
     def test_ex_employees_override_forces_slow_path_even_when_slack_says_active(self) -> None:
         captured: dict = {}
 
-        def fake_agent(wf: str, job: str, note: str, slack_dir=None) -> dict:
+        def fake_agent(wf: str, job: str, note: str, slack_dir=None,
+                       extra_ex=frozenset(), extra_context: str = "") -> dict:
             captured["note"] = note
             return {"source": "agent", "github_assignees": ["picked"], "github_names": ["P."],
                     "slack_assignees": ["UPK"], "slack_names": ["P."]}

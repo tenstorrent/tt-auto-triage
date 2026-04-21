@@ -216,11 +216,14 @@ class SkipAlreadyAssignedIntegrationTests(unittest.TestCase):
         self.assertIn("already assigned", text)
 
     def test_skip_off_preserves_legacy_behavior(self) -> None:
-        """With the flag off, every issue goes through resolve_owner even if a
-        comment already exists (the pre-feature 'unchanged' path still catches
-        idempotency, but the resolver is invoked)."""
+        """With the flag off (and `refresh-owner-recommendation=true` to satisfy
+        the new "you must state intent" validation), every issue goes through
+        resolve_owner even if a comment already exists (the pre-feature
+        'unchanged' path still catches idempotency, but the resolver is
+        invoked)."""
         with self._base_env(), \
              patch.object(mod, "SKIP_ALREADY_ASSIGNED", False), \
+             patch.object(mod, "REFRESH_OWNER_RECOMMENDATION", True), \
              self._patch_summary(), \
              patch.object(mod, "list_open_issues", return_value=[_issue(888)]), \
              patch.object(mod, "list_issue_comments", return_value=[_named_owner_comment()]), \

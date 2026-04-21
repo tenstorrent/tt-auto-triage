@@ -12,6 +12,21 @@ You are given the target repo sparse-checked out at `$repo_root/`, a Slack user
 dump at `$slack_dump`, and `$$GITHUB_TOKEN` in the environment. Use your file
 reading and shell tools to investigate.
 
+EXTRA_INPUT_BLOCK_BEGIN
+=====================================================================
+EXTRA INPUT FROM DEVS
+=====================================================================
+$extra_context
+=====================================================================
+
+The text above is extra guidance from the team about this specific issue.
+Treat it as useful context that should usually take precedence over your own
+reasoning when it points at a specific person or team. HOWEVER: `check_active`
+still governs every final candidate. If the dev names someone who is INACTIVE
+or unidentifiable, fall back to your normal shortlist search below. You decide
+how much weight to give the dev hint vs. CODEOWNERS / commit-history evidence.
+
+EXTRA_INPUT_BLOCK_END
 =====================================================================
 Required process — build a SHORTLIST, then iterate
 =====================================================================

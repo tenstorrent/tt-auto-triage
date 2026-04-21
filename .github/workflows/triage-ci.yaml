@@ -46,6 +46,27 @@ on:
           re-resolve unconditionally.
         type: boolean
         default: true
+      reassign-to-someone-else:
+        description: >-
+          Re-resolve and EXCLUDE every prior recommendation for the targeted
+          issues, forcing a different pick. Updates comment in growing-history
+          format. Requires `skip-assigning-for-issues-that-already-have-owners=false`.
+        type: boolean
+        default: false
+      refresh-owner-recommendation:
+        description: >-
+          Re-resolve targeted issues without excluding prior owners (use after a
+          `pipeline_reorg` edit). Always rewrites the comment in growing-history
+          format. Requires `skip-assigning-for-issues-that-already-have-owners=false`.
+        type: boolean
+        default: false
+      extra-context-for-agent:
+        description: >-
+          OPTIONAL free-form text appended to the resolver-agent prompt. When
+          set, the deterministic `pipeline_reorg` fast path is bypassed.
+          Requires `skip-assigning-for-issues-that-already-have-owners=false`.
+        type: string
+        default: ""
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to target-repo"
@@ -81,6 +102,9 @@ jobs:
       target-repo: ${{ inputs.target-repo }}
       issue-numbers: ${{ inputs.issue-numbers }}
       skip-assigning-for-issues-that-already-have-owners: ${{ inputs.skip-assigning-for-issues-that-already-have-owners }}
+      reassign-to-someone-else: ${{ inputs.reassign-to-someone-else }}
+      refresh-owner-recommendation: ${{ inputs.refresh-owner-recommendation }}
+      extra-context-for-agent: ${{ inputs.extra-context-for-agent }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}

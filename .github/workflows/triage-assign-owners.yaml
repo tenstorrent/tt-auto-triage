@@ -40,6 +40,35 @@ on:
           unconditionally (useful when you want to overwrite stale picks).
         type: boolean
         default: true
+      reassign-to-someone-else:
+        description: >-
+          Re-resolve every targeted issue and EXCLUDE every prior recommendation
+          (current + history) from the candidate pool, forcing a different pick.
+          Updates the recommendation comment in growing-history format. Requires
+          `skip-assigning-for-issues-that-already-have-owners=false`. Mutually
+          exclusive with `refresh-owner-recommendation`.
+        type: boolean
+        default: false
+      refresh-owner-recommendation:
+        description: >-
+          Re-resolve every targeted issue WITHOUT excluding prior recommendations
+          (use when something upstream — e.g. a `pipeline_reorg` edit — probably
+          changes the answer). Always rewrites the comment in growing-history
+          format, even if the new pick equals the old one. Requires
+          `skip-assigning-for-issues-that-already-have-owners=false`. Mutually
+          exclusive with `reassign-to-someone-else`.
+        type: boolean
+        default: false
+      extra-context-for-agent:
+        description: >-
+          OPTIONAL free-form text appended to the resolver-agent prompt under an
+          `EXTRA INPUT FROM DEVS` header. Use this to paste a Slack discussion
+          like "someone from ttnncore should take this; not sure who". When set,
+          the deterministic `pipeline_reorg` fast path is automatically bypassed
+          for every targeted issue so the hint can actually influence the pick.
+          Requires `skip-assigning-for-issues-that-already-have-owners=false`.
+        type: string
+        default: ""
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to target-repo and tenstorrent org"
@@ -117,6 +146,9 @@ jobs:
           EX_EMPLOYEES: ${{ inputs.ex-employees }}
           ISSUE_NUMBERS: ${{ inputs.issue-numbers }}
           SKIP_ALREADY_ASSIGNED: ${{ inputs.skip-assigning-for-issues-that-already-have-owners }}
+          REASSIGN_TO_SOMEONE_ELSE: ${{ inputs.reassign-to-someone-else }}
+          REFRESH_OWNER_RECOMMENDATION: ${{ inputs.refresh-owner-recommendation }}
+          EXTRA_CONTEXT_FOR_AGENT: ${{ inputs.extra-context-for-agent }}
           PIPELINE_REORG_DIR: tt-metal/tests/pipeline_reorg
           TARGET_REPO_ROOT: tt-metal
           SLACK_DUMP_PATH: slack_users.json

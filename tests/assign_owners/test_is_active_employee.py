@@ -49,7 +49,20 @@ class IsActiveEmployeeTests(unittest.TestCase):
         r1 = mod.is_active_employee("U1", "alice", slack_dir)
         r2 = mod.is_active_employee("U1", "alice", slack_dir)
         self.assertEqual(r1, r2)
-        self.assertIn(("U1", "alice"), mod._active_cache)
+        # The cache key now includes the per-issue extra_ex blacklist, so the
+        # same person can be ACTIVE in one resolution and INACTIVE in another
+        # without cross-contamination.
+        self.assertIn(("U1", "alice", frozenset()), mod._active_cache)
+
+    def test_extra_ex_inactivates_for_one_call_but_not_baseline(self) -> None:
+        slack_dir = [self._slack("U1", deleted=False)]
+        # Baseline (no per-issue blacklist) -> active.
+        self.assertTrue(mod.is_active_employee("U1", "alice", slack_dir))
+        # Same person, with a per-issue blacklist -> inactive, and the cache
+        # entry for the unblacklisted call is still True.
+        self.assertFalse(mod.is_active_employee("U1", "alice", slack_dir, frozenset({"U1"})))
+        self.assertTrue(mod._active_cache[("U1", "alice", frozenset())])
+        self.assertFalse(mod._active_cache[("U1", "alice", frozenset({"U1"}))])
 
 
 if __name__ == "__main__":

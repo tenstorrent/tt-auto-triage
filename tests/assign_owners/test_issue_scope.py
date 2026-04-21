@@ -84,9 +84,10 @@ class ScopedRunIntegrationTests(unittest.TestCase):
 
     def test_scoped_run_uses_get_issue_and_skips_list(self) -> None:
         with self._patch_env(ISSUE_NUMBERS="#888, https://github.com/x/y/issues/885"), \
+             patch.object(mod, "SKIP_ALREADY_ASSIGNED", True), \
              patch.object(mod, "get_issue") as fake_get, \
              patch.object(mod, "list_open_issues") as fake_list, \
-             patch.object(mod, "load_pipeline_reorg_owners", return_value=[]), \
+             patch.object(mod, "load_pipeline_reorg_owners", return_value={}), \
              patch.object(mod, "build_identity_index", return_value={}), \
              patch.object(mod, "resolve_owner", return_value={
                  "source": "agent", "github_assignees": [], "github_names": [],
@@ -109,9 +110,10 @@ class ScopedRunIntegrationTests(unittest.TestCase):
 
     def test_unscoped_run_uses_list_open_issues(self) -> None:
         with self._patch_env(ISSUE_NUMBERS=""), \
+             patch.object(mod, "SKIP_ALREADY_ASSIGNED", True), \
              patch.object(mod, "get_issue") as fake_get, \
              patch.object(mod, "list_open_issues", return_value=[]) as fake_list, \
-             patch.object(mod, "load_pipeline_reorg_owners", return_value=[]), \
+             patch.object(mod, "load_pipeline_reorg_owners", return_value={}), \
              patch.object(mod, "build_identity_index", return_value={}), \
              patch.object(mod, "ISSUE_REPO", "ebanerjeeTT/issue_dump"), \
              patch.object(mod, "ISSUE_WRITE_TOKEN", "tok"):
@@ -123,9 +125,10 @@ class ScopedRunIntegrationTests(unittest.TestCase):
 
     def test_scoped_run_skips_issues_that_fail_to_fetch(self) -> None:
         with self._patch_env(ISSUE_NUMBERS="888 885"), \
+             patch.object(mod, "SKIP_ALREADY_ASSIGNED", True), \
              patch.object(mod, "get_issue") as fake_get, \
              patch.object(mod, "list_open_issues") as fake_list, \
-             patch.object(mod, "load_pipeline_reorg_owners", return_value=[]), \
+             patch.object(mod, "load_pipeline_reorg_owners", return_value={}), \
              patch.object(mod, "build_identity_index", return_value={}), \
              patch.object(mod, "resolve_owner", return_value={
                  "source": "agent", "github_assignees": [], "github_names": [],

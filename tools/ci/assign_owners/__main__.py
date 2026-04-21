@@ -43,13 +43,37 @@ EX_EMPLOYEES: frozenset[str] = frozenset(
 )
 # `true` / `1` / `yes` (case-insensitive) = skip issues that already have a named owner.
 # Anything else (including unset) = process every issue as usual, which is the legacy behavior.
-SKIP_ALREADY_ASSIGNED = os.environ.get("SKIP_ALREADY_ASSIGNED", "").strip().lower() in {"true", "1", "yes"}
+def _bool_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"true", "1", "yes"}
+
+
+SKIP_ALREADY_ASSIGNED = _bool_env("SKIP_ALREADY_ASSIGNED")
+# Re-resolve and EXCLUDE every prior recommendation for this issue from the
+# search. Forces a different pick.
+REASSIGN_TO_SOMEONE_ELSE = _bool_env("REASSIGN_TO_SOMEONE_ELSE")
+# Re-resolve, but do NOT exclude prior owners. Useful when something upstream
+# (e.g. a pipeline_reorg edit) probably changes the answer.
+REFRESH_OWNER_RECOMMENDATION = _bool_env("REFRESH_OWNER_RECOMMENDATION")
+# Free-form dev guidance appended to the agent prompt under an EXTRA INPUT FROM
+# DEVS header. When non-empty, the deterministic pipeline_reorg fast path is
+# bypassed for every issue this run touches and resolution always goes through
+# the agent so the hint can actually influence the pick.
+EXTRA_CONTEXT_FOR_AGENT = os.environ.get("EXTRA_CONTEXT_FOR_AGENT", "").strip()
 _UNRESOLVED_OWNER_BODY = "_no current owner could be determined_"
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "resolve_owner.txt"
 _PR_NAME = re.compile(r"^- name:\s*[\"']?(.+?)[\"']?\s*$")
 _PR_OWNER = re.compile(r"^\s+owner_id:\s*(.+)")
 _ISSUE_NUM_RE = re.compile(r"/issues/(\d+)|#?(\d+)")
 _FENCE_RE = re.compile(r"```(?:\w+)?\n(.*?)\n```\s*$", re.DOTALL)
+# Sentinel pair around the EXTRA INPUT FROM DEVS block in resolve_owner.txt.
+# Matched and stripped (with the bracketed content) when no hint was supplied,
+# or just the sentinel lines themselves are dropped when a hint is present.
+_EXTRA_BLOCK_RE = re.compile(
+    r"^EXTRA_INPUT_BLOCK_BEGIN\n(.*?)^EXTRA_INPUT_BLOCK_END\n",
+    re.DOTALL | re.MULTILINE,
+)
+_RECOMMENDED_RE = re.compile(r"^\*\*Recommended owner:\*\*\s*(.+?)\s*$", re.MULTILINE)
+_PREVIOUS_RE = re.compile(r"^\*\*Previous owners:\*\*\s*(.+?)\s*$", re.MULTILINE)
 
 
 def parse_issue_numbers(raw: str) -> list[int]:
@@ -98,12 +122,14 @@ def load_pipeline_reorg_owners(reorg_dir: Path) -> dict[str, dict[str, str]]:
     return out
 
 
-_active_cache: dict[tuple[str, str], bool] = {}
+_active_cache: dict[tuple[str, str, frozenset[str]], bool] = {}
 
 
-def is_active_employee(slack_id: str, login: str, slack_dir: list[dict[str, Any]]) -> bool:
+def is_active_employee(slack_id: str, login: str, slack_dir: list[dict[str, Any]],
+                       extra_ex: frozenset[str] = frozenset()) -> bool:
     """Return False if ANY signal flags the person as gone:
       * explicit EX_EMPLOYEES override (Slack ID or GitHub login)
+      * per-issue `extra_ex` blacklist (used by reassign-to-someone-else)
       * Slack user flagged `deleted: true`
       * Slack user completely absent from a non-empty dump (Slack admin removed them)
 
@@ -114,42 +140,71 @@ def is_active_employee(slack_id: str, login: str, slack_dir: list[dict[str, Any]
     "truly not a member", so using it would reject real employees (sadesoyeTT,
     cglagovichTT, ...). EX_EMPLOYEES is the designated escape hatch for people
     whose Slack account is still live because HR has not offboarded them yet.
+
+    `extra_ex` is included in the cache key so that the same person can be
+    ACTIVE in one issue's resolution (no per-issue blacklist) and INACTIVE in
+    another (where they're the previous recommendation we want to replace).
     """
-    key = (slack_id, login)
+    key = (slack_id, login, extra_ex)
     if key in _active_cache:
         return _active_cache[key]
-    active, reason = _check_employee_status(slack_id, login, slack_dir, EX_EMPLOYEES)
+    merged = EX_EMPLOYEES | extra_ex
+    active, reason = _check_employee_status(slack_id, login, slack_dir, merged)
     log(f"  active-check: slack_id={slack_id or '-'} login={login or '-'} -> "
         + ("active" if active else f"inactive ({reason})"))
     _active_cache[key] = active
     return active
 
 
-def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
-                       slack_dir: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    prompt = string.Template(_PROMPT_PATH.read_text()).substitute(
+def _build_prompt(workflow_name: str, job_name: str, ex_owner_note: str,
+                  ex_employees_display: str, extra_context: str) -> str:
+    """Substitute prompt vars and either drop or unwrap the EXTRA INPUT FROM DEVS
+    block depending on whether a dev hint was supplied. Sentinel lines around
+    the block are always removed; the block contents are only kept when there's
+    actually something to show the agent."""
+    template = _PROMPT_PATH.read_text()
+    if extra_context:
+        # Keep the inner content, drop just the sentinel lines.
+        template = _EXTRA_BLOCK_RE.sub(lambda m: m.group(1), template)
+    else:
+        # Drop the entire block (sentinels and contents).
+        template = _EXTRA_BLOCK_RE.sub("", template)
+    return string.Template(template).substitute(
         workflow_name=workflow_name, job_name=job_name,
         ex_owner_note=ex_owner_note or "(no previous owner recorded)",
-        ex_employees=", ".join(sorted(EX_EMPLOYEES)) or "(none configured)",
+        ex_employees=ex_employees_display or "(none configured)",
+        extra_context=extra_context or "(no extra input provided)",
         marker=AGENT_MARKER, repo_root=str(TARGET_REPO_ROOT),
         slack_dump=str(SLACK_DUMP_PATH), github_org=GITHUB_ORG,
     )
+
+
+def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
+                       slack_dir: list[dict[str, Any]] | None = None,
+                       extra_ex: frozenset[str] = frozenset(),
+                       extra_context: str = "") -> dict[str, Any]:
+    merged_ex = EX_EMPLOYEES | extra_ex
+    ex_display = ", ".join(sorted(merged_ex))
+    prompt = _build_prompt(workflow_name, job_name, ex_owner_note, ex_display, extra_context)
     empty = {"source": "none", "github_assignees": [], "github_names": [], "slack_assignees": [], "slack_names": []}
     cmd = ["agent", "--trust", "-p", prompt]
     if CURSOR_MODEL != "auto":
         cmd[1:1] = ["--model", CURSOR_MODEL]
-    # Forward everything the agent needs to run `check_active` itself, including
-    # EX_EMPLOYEES and SLACK_DUMP_PATH, so the employment check inside the agent
-    # loop sees the same config as the outer resolver.
+    # Forward everything the agent needs to run `check_active` itself. The
+    # EX_EMPLOYEES env var is OVERRIDDEN here with the merged (global +
+    # per-issue) set so the agent's own check_active calls reject every
+    # blacklisted candidate without needing a separate per-issue arg.
     env = {
         k: os.environ[k]
         for k in (
             "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL",
             "CURSOR_API_KEY", "GITHUB_TOKEN",
-            "EX_EMPLOYEES", "SLACK_DUMP_PATH", "PYTHONPATH",
+            "SLACK_DUMP_PATH", "PYTHONPATH",
         )
         if k in os.environ
     }
+    if merged_ex:
+        env["EX_EMPLOYEES"] = ",".join(sorted(merged_ex))
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
         if proc.returncode != 0:
@@ -170,7 +225,7 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
     sid = str(res.get("slack_id") or "")
     if not (gh_login or sid):
         return empty
-    if not is_active_employee(sid, gh_login, slack_dir or []):
+    if not is_active_employee(sid, gh_login, slack_dir or [], extra_ex):
         log(f"  Agent picked an inactive candidate (slack={sid!r}, login={gh_login!r}); dropping.")
         return empty
     return {
@@ -184,19 +239,33 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
 
 def resolve_owner(workflow_name: str, job_name: str, pipeline: dict[str, dict[str, str]],
                   slack_dir: list[dict[str, Any]],
-                  identity_index: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
-    """Fast path: pipeline_reorg entry. Slow path (no match or ex-employee): agent."""
+                  identity_index: dict[str, dict[str, str]] | None = None,
+                  extra_ex: frozenset[str] = frozenset(),
+                  extra_context: str = "",
+                  skip_fast_path: bool = False) -> dict[str, Any]:
+    """Fast path: pipeline_reorg entry. Slow path (no match, ex-employee, or
+    `skip_fast_path=True` because the caller has dev hint context that should
+    influence the pick): agent.
+
+    `extra_ex` is a per-issue blacklist (Slack IDs and/or GitHub logins) that
+    augments EX_EMPLOYEES for this single resolution. `extra_context` is dev-
+    supplied free-form text that flows into the agent prompt under an EXTRA
+    INPUT FROM DEVS header. `skip_fast_path` forces the agent path even if a
+    deterministic match exists; used whenever `extra_context` is non-empty.
+    """
+    if skip_fast_path:
+        return _resolve_via_agent(workflow_name, job_name, "", slack_dir, extra_ex, extra_context)
     bare = job_name.rsplit(" / ", 1)[-1].strip()
     entry = pipeline.get(job_name) or pipeline.get(bare)
     if not entry:
-        return _resolve_via_agent(workflow_name, job_name, "", slack_dir)
+        return _resolve_via_agent(workflow_name, job_name, "", slack_dir, extra_ex, extra_context)
     sid = entry["id"]
     user = next((u for u in slack_dir if u.get("id") == sid), {})
     display = entry.get("owner_name") or user.get("real_name") or user.get("display_name") or sid
     ident = (identity_index or {}).get(sid, {})
     gh_login = ident.get("github_login", "")
     gh_name = ident.get("github_name", "")
-    if is_active_employee(sid, gh_login, slack_dir):
+    if is_active_employee(sid, gh_login, slack_dir, extra_ex):
         return {
             "source": "pipeline_reorg",
             "github_assignees": [gh_login] if gh_login else [],
@@ -206,8 +275,8 @@ def resolve_owner(workflow_name: str, job_name: str, pipeline: dict[str, dict[st
         }
     return _resolve_via_agent(
         workflow_name, job_name,
-        f"The previous owner {display} (Slack `{sid}`) has left the company. Find a current replacement.",
-        slack_dir,
+        f"The previous owner {display} (Slack `{sid}`) has left the company or is excluded for this run. Find a current replacement.",
+        slack_dir, extra_ex, extra_context,
     )
 
 
@@ -221,9 +290,77 @@ def _display_name(r: dict[str, Any]) -> str:
     return ""
 
 
-def _render_comment(name: str) -> str:
+def _render_comment(name: str, previous: list[str] | None = None) -> str:
+    """Render the marker-gated recommendation comment. With no `previous`, this
+    matches the legacy single-line format; with one or more, prepends a
+    `**Previous owners:**` line that grows over re-resolutions.
+
+    The body deliberately stays plain text — first/last names, no GitHub logins,
+    no Slack IDs, no @ pings. We rely on the unique-first-and-last-name
+    assumption to round-trip the names back through reverse lookup later.
+    """
     body = name or _UNRESOLVED_OWNER_BODY
-    return f"{COMMENT_MARKER}\n**Recommended owner:** {body}\n"
+    lines = [COMMENT_MARKER]
+    if previous:
+        lines.append(f"**Previous owners:** {', '.join(previous)}")
+    lines.append(f"**Recommended owner:** {body}")
+    return "\n".join(lines) + "\n"
+
+
+def _parse_recommendation_comment(body: str) -> tuple[list[str], str]:
+    """Inverse of `_render_comment`. Returns `(previous_owners, current_owner)`.
+
+    Pure regex; no external deps. Handles legacy single-line bodies (no
+    Previous line), full growing-history bodies, the unresolved-placeholder
+    body, and stray whitespace. Returns `("", "")` for anything we can't parse.
+    """
+    if not body:
+        return [], ""
+    cur_match = _RECOMMENDED_RE.search(body)
+    current = (cur_match.group(1).strip() if cur_match else "")
+    if current == _UNRESOLVED_OWNER_BODY:
+        current = ""
+    prev_match = _PREVIOUS_RE.search(body)
+    previous: list[str] = []
+    if prev_match:
+        previous = [p.strip() for p in prev_match.group(1).split(",") if p.strip()]
+    return previous, current
+
+
+def _identifiers_for_name(name: str, slack_dir: list[dict[str, Any]],
+                          identity_index: dict[str, dict[str, str]] | None) -> tuple[str, str]:
+    """Reverse-lookup a real-name string into `(slack_id, github_login)`.
+
+    Matches case-insensitively on `real_name` first, then `display_name` as a
+    fallback inside the Slack directory; matches `github_name` inside the
+    identity index. First hit wins (we accept the unique-first-and-last-name
+    assumption — see _render_comment). Returns `("", "")` and logs a warning if
+    we couldn't resolve the name; the caller then gets a comment update without
+    a corresponding blacklist entry, which is an acceptable failure mode.
+    """
+    needle = (name or "").strip().lower()
+    if not needle:
+        return "", ""
+    sid = ""
+    for u in slack_dir or []:
+        profile = u.get("profile") or {}
+        candidates = (
+            (u.get("real_name") or "").strip().lower(),
+            (profile.get("real_name") or "").strip().lower(),
+            (profile.get("display_name") or "").strip().lower(),
+            (u.get("name") or "").strip().lower(),
+        )
+        if needle in candidates and any(candidates):
+            sid = u.get("id") or ""
+            break
+    login = ""
+    for ident in (identity_index or {}).values():
+        if (ident.get("github_name") or "").strip().lower() == needle:
+            login = ident.get("github_login") or ""
+            break
+    if not (sid or login):
+        log(f"  Could not reverse-lookup '{name}' for blacklist; leaving them out")
+    return sid, login
 
 
 def _find_marker_comment(comments: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -270,6 +407,23 @@ def render_summary(updated: list[dict[str, Any]], skipped: list[dict[str, Any]],
     return "\n".join(L)
 
 
+def _validate_flags() -> str:
+    """Return an error message if the flag combination is illegal, else ''.
+    Forces every caller to state their intent up-front rather than silently
+    no-op'ing or silently doing the wrong thing."""
+    extras_set = REASSIGN_TO_SOMEONE_ELSE or REFRESH_OWNER_RECOMMENDATION or bool(EXTRA_CONTEXT_FOR_AGENT)
+    if SKIP_ALREADY_ASSIGNED and extras_set:
+        return ("skip-assigning-for-issues-that-already-have-owners=true is incompatible with "
+                "reassign-to-someone-else / refresh-owner-recommendation / extra-context-for-agent; "
+                "set skip=false to use them.")
+    if REASSIGN_TO_SOMEONE_ELSE and REFRESH_OWNER_RECOMMENDATION:
+        return "reassign-to-someone-else and refresh-owner-recommendation are mutually exclusive; pick one."
+    if not SKIP_ALREADY_ASSIGNED and not extras_set:
+        return ("skip=false requires at least one of reassign-to-someone-else, refresh-owner-recommendation, "
+                "or extra-context-for-agent. Otherwise set skip=true (the default).")
+    return ""
+
+
 def main() -> int:
     log("=== Assign Owners (hybrid: pipeline_reorg + agent) ===")
     if not ISSUE_WRITE_TOKEN:
@@ -278,6 +432,14 @@ def main() -> int:
     if not os.environ.get("CURSOR_API_KEY"):
         log("CURSOR_API_KEY is required for the agent fallback.")
         return 1
+    err = _validate_flags()
+    if err:
+        log(f"Invalid input combination: {err}")
+        return 1
+    skip_fast_path = bool(EXTRA_CONTEXT_FOR_AGENT)
+    log(f"  Flags: skip={SKIP_ALREADY_ASSIGNED} reassign={REASSIGN_TO_SOMEONE_ELSE} "
+        f"refresh={REFRESH_OWNER_RECOMMENDATION} extra_context={'set' if EXTRA_CONTEXT_FOR_AGENT else 'unset'} "
+        f"(fast-path bypassed: {skip_fast_path})")
     scoped = parse_issue_numbers(os.environ.get("ISSUE_NUMBERS", ""))
     if scoped:
         log(f"  Scoped run: only processing issues {scoped} in {ISSUE_REPO}")
@@ -357,7 +519,34 @@ def main() -> int:
                 log(f"  #{num}: missing base metadata, skipping")
                 skipped.append({"number": num, "reason": "missing Auto-triage-workflow / Auto-triage-job-name"})
                 continue
-            r = resolve_owner(wf, job, pipeline, slack_dir, identity_index)
+
+            # Parse any prior recommendation comment so we can both build the
+            # per-issue blacklist (reassign mode) and grow the Previous owners
+            # history. When SKIP_ALREADY_ASSIGNED is true the pre-pass above
+            # already removed assigned issues from `issues`, so anything still
+            # in this loop with a prior comment is here because the user opted
+            # into reassign / refresh / extra-context.
+            existing_comments = list_issue_comments(ISSUE_REPO, num, ISSUE_WRITE_TOKEN)
+            existing = _find_marker_comment(existing_comments)
+            prev_history, prev_current = _parse_recommendation_comment(existing.get("body") or "" if existing else "")
+
+            extra_ex: frozenset[str] = frozenset()
+            if REASSIGN_TO_SOMEONE_ELSE:
+                blacklist_names = [n for n in (prev_history + ([prev_current] if prev_current else [])) if n]
+                ids: set[str] = set()
+                for nm in blacklist_names:
+                    sid_b, login_b = _identifiers_for_name(nm, slack_dir, identity_index)
+                    if sid_b:
+                        ids.add(sid_b)
+                    if login_b:
+                        ids.add(login_b)
+                extra_ex = frozenset(ids)
+                if blacklist_names:
+                    log(f"  #{num}: reassign blacklist names={blacklist_names} -> ids={sorted(extra_ex)}")
+
+            r = resolve_owner(wf, job, pipeline, slack_dir, identity_index,
+                              extra_ex=extra_ex, extra_context=EXTRA_CONTEXT_FOR_AGENT,
+                              skip_fast_path=skip_fast_path)
             name = _display_name(r)
             log(f"  #{num}: source={r['source']} owner={name!r} gh={r['github_assignees']} slack={r['slack_assignees']}")
 
@@ -368,9 +557,18 @@ def main() -> int:
             elif OWNERS_READY_LABEL not in {lb.get("name", "") for lb in issue.get("labels", [])}:
                 add_issue_labels(ISSUE_REPO, num, ISSUE_WRITE_TOKEN, [OWNERS_READY_LABEL])
 
+            # Build the new growing-history previous list. Move the OLD
+            # recommendation into the previous list iff it's a real name AND
+            # it's different from the new pick (avoid `Previous: Alice ->
+            # Recommended: Alice`, which is just noise on a refresh that
+            # converged on the same answer).
+            new_previous = list(prev_history)
+            if prev_current and prev_current != name:
+                if prev_current not in new_previous:
+                    new_previous.append(prev_current)
+
             # Upsert the single marker-gated recommendation comment. Never pings anyone.
-            want_comment = _render_comment(name)
-            existing = _find_marker_comment(list_issue_comments(ISSUE_REPO, num, ISSUE_WRITE_TOKEN))
+            want_comment = _render_comment(name, new_previous)
             if existing and (existing.get("body") or "").strip() == want_comment.strip():
                 unchanged.append({"number": num, **r})
                 continue
