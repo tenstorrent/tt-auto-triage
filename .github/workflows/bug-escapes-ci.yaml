@@ -1,6 +1,34 @@
 name: "(triage) Bug Escapes"
 
-# Called from tt-metal `.github/workflows/triage-ci.yaml` on branch `ebanerjee/bug-escapes`
+# =============================================================================
+# Reusable workflow for the bug escape pipeline. Called from tt-metal's
+# `.github/workflows/triage-ci.yaml` on branch `ebanerjee/bug-escapes`.
+#
+# Three modes of operation:
+#
+#   1. Detection only (auto-verify=false, default for this workflow):
+#        detect job runs run.sh phases 0-4, emits bug-escapes-output.json,
+#        aggregate job produces a detection-only report. No verifications.
+#
+#   2. Autonomous detect + verify (auto-verify=true):
+#        detect job additionally emits a filtered verify-matrix (vertical +
+#        high-confidence + valid SHA) plus a global deadline. The verify-all
+#        job then runs those legs one at a time (max-parallel=1) under the
+#        deadline; each leg inline-executes verify.sh. Legs that start after
+#        the deadline self-skip with a skipped_deadline marker. The aggregate
+#        job merges everything into a single final report (if: always()).
+#
+#   3. Standalone single verify (unchanged):
+#        verify-bug-escape-ci.yaml is still directly dispatchable from gh CLI
+#        or from triage-ci.yaml's verify job. This file does not touch it.
+#
+# Key user-facing inputs (usually surfaced via triage-ci.yaml):
+#   - incremental-days:    "fixed within the last N days" filter (Phase 3)
+#   - verify-budget-hours: global wall-clock cap for dispatching *new*
+#                          verifications; already-running legs finish cleanly.
+#   - auto-verify:         toggles mode 1 vs mode 2.
+# =============================================================================
+
 on:
   workflow_call:
     inputs:
@@ -36,6 +64,26 @@ on:
         description: "Only include escapes whose fix transition happened in the last N days. 0 = no filter."
         type: string
         default: "0"
+      auto-verify:
+        description: "If 'true', run verify-all matrix after detect. If 'false', detection only."
+        type: string
+        default: "false"
+      verify-budget-hours:
+        description: "Global wall-clock cap (hours) for dispatching new verifications. Only applies when auto-verify=true."
+        type: string
+        default: "6"
+      poll-interval-seconds:
+        description: "Seconds between tt-metal CI run status checks inside verify.sh"
+        type: string
+        default: "120"
+      start-wait-minutes:
+        description: "Max minutes a dispatched tt-metal run may stay queued before verify.sh gives up"
+        type: string
+        default: "90"
+      finish-wait-minutes:
+        description: "Max minutes a running tt-metal run may take after starting before verify.sh gives up"
+        type: string
+        default: "120"
     secrets:
       GITHUB_READ_TOKEN:
         description: "Token with read access to target-repo workflow runs"
@@ -44,7 +92,7 @@ on:
         description: "Cursor CLI API key for agent-driven steps"
         required: true
       GITHUB_WRITE_TOKEN:
-        description: "Token with actions:write on tt-auto-triage for auto-dispatching verification"
+        description: "Token with contents:write + actions:write on tt-metal for verification. Required when auto-verify=true."
         required: false
 
 permissions:
@@ -52,9 +100,18 @@ permissions:
   actions: read
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # detect — runs the full bug escape pipeline (phases 0-4) and, when
+  # auto-verify is enabled, emits the verification matrix + global deadline
+  # for the downstream verify-all job to consume.
+  # ---------------------------------------------------------------------------
   detect:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      verify-matrix: ${{ steps.filter.outputs.verify-matrix }}
+      verify-count: ${{ steps.filter.outputs.verify-count }}
+      verify-deadline: ${{ steps.deadline.outputs.verify-deadline }}
     steps:
       - name: Checkout tt-auto-triage (bug-escapes branch)
         uses: actions/checkout@v4
@@ -111,63 +168,56 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
-      - name: Auto-dispatch verifications
+      # --- Autonomous mode: prepare the verify matrix -----------------------
+      # Emit a JSON array of escapes that qualify for verification: must be
+      # type=vertical with fix_confidence=high and a real fix_commit_sha.
+      # GitHub Actions requires the matrix input to fit on a single line of
+      # $GITHUB_OUTPUT, so we use `jq -c` (compact). An empty matrix is
+      # perfectly valid here; the downstream job is gated on verify-count != 0.
+      - name: Filter for vertical, high-confidence escapes (build verify matrix)
+        id: filter
         if: always()
-        continue-on-error: true
-        env:
-          GITHUB_WRITE_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN }}
         run: |
           set -euo pipefail
-          OUTPUT_FILE="bug-escapes/output/bug-escapes-output.json"
+          OUT="bug-escapes/output/bug-escapes-output.json"
 
-          if [ ! -f "$OUTPUT_FILE" ]; then
-            echo "No bug-escapes-output.json found — skipping auto-dispatch"
+          if [ ! -f "$OUT" ]; then
+            echo "No bug-escapes-output.json — emitting empty matrix"
+            echo "verify-matrix=[]" >> "$GITHUB_OUTPUT"
+            echo "verify-count=0" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if [ -z "${GITHUB_WRITE_TOKEN:-}" ]; then
-            echo "GITHUB_WRITE_TOKEN not set — skipping auto-dispatch (detection-only mode)"
-            exit 0
-          fi
+          jq -c '[
+            .bug_escapes[] | select(
+              .type == "vertical" and
+              .fix_confidence == "high" and
+              .fix_commit_sha != null and
+              .fix_commit_sha != "" and
+              .fix_commit_sha != "unknown"
+            )
+          ]' "$OUT" > verify-matrix.json
 
-          dispatch_count=0
-          skip_count=0
+          count=$(jq 'length' verify-matrix.json)
+          echo "verify-matrix=$(cat verify-matrix.json)" >> "$GITHUB_OUTPUT"
+          echo "verify-count=${count}" >> "$GITHUB_OUTPUT"
+          echo "Qualifying escapes (vertical + high + valid SHA): ${count}"
 
-          for row in $(jq -c '.bug_escapes[]' "$OUTPUT_FILE"); do
-            sha=$(echo "$row" | jq -r '.fix_commit_sha')
-            pipeline=$(echo "$row" | jq -r '.test_pipeline')
-            job=$(echo "$row" | jq -r '.test_job')
-            tname=$(echo "$row" | jq -r '.test_name')
-            sig=$(echo "$row" | jq -r '.failure_signature')
+      # Deadline is a shared epoch-seconds timestamp consumed by every matrix
+      # leg's gate step. Computed once here so all legs agree on "now + budget".
+      - name: Compute global verification deadline
+        id: deadline
+        if: always()
+        run: |
+          set -euo pipefail
+          budget="${{ inputs.verify-budget-hours }}"
+          now_epoch="$(date +%s)"
+          deadline_epoch="$(( now_epoch + budget * 3600 ))"
+          echo "Now:      $(date -u -d @$now_epoch '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u)"
+          echo "Deadline: $(date -u -d @$deadline_epoch '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || echo $deadline_epoch)"
+          echo "verify-deadline=${deadline_epoch}" >> "$GITHUB_OUTPUT"
 
-            # Skip escapes with invalid/missing SHAs
-            if [ "$sha" = "unknown" ] || [ "$sha" = "null" ] || [ -z "$sha" ]; then
-              echo "Skipping $tname — fix SHA is $sha"
-              skip_count=$((skip_count + 1))
-              continue
-            fi
-
-            echo "Dispatching verification for $tname (fix: ${sha:0:8})"
-            http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-              -H "Authorization: Bearer $GITHUB_WRITE_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/tenstorrent/tt-auto-triage/actions/workflows/verify-bug-escape-ci.yaml/dispatches" \
-              -d "{\"ref\":\"ebanerjee/bug-escapes\",\"inputs\":{\"fix-commit-sha\":\"$sha\",\"test-pipeline\":\"$pipeline\",\"test-job\":\"$job\",\"test-name\":\"$tname\",\"expected-failure-sig\":\"$sig\"}}")
-
-            if [ "$http_code" = "204" ]; then
-              echo "  -> Dispatched successfully (HTTP $http_code)"
-              dispatch_count=$((dispatch_count + 1))
-            else
-              echo "  -> Dispatch failed (HTTP $http_code) — continuing"
-            fi
-
-            # Rate-limit: short sleep between dispatches
-            sleep 2
-          done
-
-          echo "Auto-dispatch complete: $dispatch_count dispatched, $skip_count skipped"
-
-      - name: Summary
+      - name: Detect summary
         if: always()
         run: |
           if [ -f bug-escapes/output/bug-escapes-output.json ]; then
@@ -181,6 +231,12 @@ jobs:
               echo "- **max-phase**: ${{ inputs.max-phase }}"
               echo "- **consecutive-runs threshold**: ${{ inputs.consecutive-runs }}"
               echo "- **lookback-days**: ${{ inputs.lookback-days }}"
+              echo "- **incremental-days**: ${{ inputs.incremental-days }}"
+              echo "- **auto-verify**: ${{ inputs.auto-verify }}"
+              if [ "${{ inputs.auto-verify }}" = "true" ]; then
+                echo "- **verify-budget-hours**: ${{ inputs.verify-budget-hours }}"
+                echo "- **verification candidates** (vertical + high): ${{ steps.filter.outputs.verify-count }}"
+              fi
               if [ -n "${{ inputs.test-workflows }}" ]; then
                 echo "- **workflows scanned**: \`${{ inputs.test-workflows }}\`"
               fi
@@ -201,3 +257,172 @@ jobs:
               echo "- **Status**: No final output (max-phase=${{ inputs.max-phase }})"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  # ---------------------------------------------------------------------------
+  # verify-all — serialized verification of every qualifying escape.
+  #
+  # strategy.max-parallel: 1  -> only one matrix leg (one verify.sh) at a time.
+  # strategy.fail-fast: false -> one failing leg does not kill the others.
+  # continue-on-error: true   -> the job itself never poisons the DAG; the
+  #                              aggregate job still runs regardless.
+  # Per-leg timeout-minutes: 330 (5.5h) is a belt-and-suspenders backstop; the
+  #                              shared verify-deadline is the real control.
+  #
+  # Each leg:
+  #   1. gate step checks the shared deadline; sets skipped=true if exhausted.
+  #   2. main step runs verify.sh inline (only if not skipped).
+  #   3. skip-marker step writes a skipped_deadline artifact (only if skipped).
+  #   4. always-upload step publishes the leg's verification-result.json.
+  #
+  # verify.sh itself has an EXIT trap (see bug-escapes/verify/verify.sh) that
+  # writes an inconclusive stub on any unexpected exit, so the uploader always
+  # has something to upload.
+  # ---------------------------------------------------------------------------
+  verify-all:
+    needs: detect
+    if: >-
+      inputs.auto-verify == 'true' &&
+      needs.detect.outputs.verify-count != '0' &&
+      needs.detect.outputs.verify-count != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        escape: ${{ fromJson(needs.detect.outputs.verify-matrix) }}
+    steps:
+      - name: Checkout tt-auto-triage (verify scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-auto-triage
+          ref: ebanerjee/bug-escapes
+          path: triage
+
+      - name: Checkout tt-metal (for YAML discovery)
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-metal
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_WRITE_TOKEN || github.token }}
+          path: tt-metal
+
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+      # Global deadline gate — if the budget is already blown, we self-skip
+      # this leg rather than dispatch yet another pair of tt-metal CI runs.
+      # In-flight leg (if any) completes naturally; only NEW legs are gated.
+      - name: Check global verification deadline
+        id: gate
+        run: |
+          set -euo pipefail
+          now_epoch="$(date +%s)"
+          deadline="${{ needs.detect.outputs.verify-deadline }}"
+          echo "Now:      $now_epoch"
+          echo "Deadline: $deadline"
+          if [ "$now_epoch" -ge "$deadline" ]; then
+            echo "::notice::Global verification budget exhausted — skipping ${{ matrix.escape.test_name }}"
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+          else
+            remaining=$(( deadline - now_epoch ))
+            echo "Remaining budget: ${remaining}s (~$(( remaining / 60 ))m)"
+            echo "skipped=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run verification
+        if: steps.gate.outputs.skipped != 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN || github.token }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          FIX_COMMIT_SHA: ${{ matrix.escape.fix_commit_sha }}
+          TEST_PIPELINE: ${{ matrix.escape.test_pipeline }}
+          TEST_JOB: ${{ matrix.escape.test_job }}
+          TEST_NAME: ${{ matrix.escape.test_name }}
+          EXPECTED_FAILURE_SIG: ${{ matrix.escape.failure_signature }}
+          REPO_DIR: ${{ github.workspace }}/tt-metal
+          OWNER_REPO: tenstorrent/tt-metal
+          POLL_INTERVAL: ${{ inputs.poll-interval-seconds }}
+          MAX_WAIT_START_MINUTES: ${{ inputs.start-wait-minutes }}
+          MAX_WAIT_FINISH_MINUTES: ${{ inputs.finish-wait-minutes }}
+        run: |
+          set -euo pipefail
+          chmod +x triage/bug-escapes/verify/verify.sh
+          triage/bug-escapes/verify/verify.sh
+
+      - name: Write skipped-deadline marker
+        if: steps.gate.outputs.skipped == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p triage/bug-escapes/verify/output
+          jq -n \
+            --arg fix  "${{ matrix.escape.fix_commit_sha }}" \
+            --arg pipe "${{ matrix.escape.test_pipeline }}" \
+            --arg job  "${{ matrix.escape.test_job }}" \
+            --arg test "${{ matrix.escape.test_name }}" \
+            --arg ts   "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+            '{
+              fix_commit: $fix,
+              test_pipeline: $pipe,
+              test_job: $job,
+              test_name: $test,
+              verdict: "skipped_deadline",
+              reason: "Global verification budget (verify-budget-hours) exhausted before this leg started",
+              timestamp: $ts
+            }' > triage/bug-escapes/verify/output/verification-result.json
+          echo "Wrote skipped_deadline marker for ${{ matrix.escape.test_name }}"
+
+      # Always upload whatever this leg produced — whether a real verdict, a
+      # stub from the EXIT trap, or a skipped_deadline marker. The matrix
+      # index disambiguates artifact names; the aggregator globs them all.
+      - name: Upload verification result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-result-${{ strategy.job-index }}
+          path: triage/bug-escapes/verify/output/
+          retention-days: 30
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # aggregate — always runs. Downloads every artifact in the run and emits one
+  # combined final report (JSON + markdown + step summary). Survives every
+  # failure mode: detect crashed, verify-all partially ran, user cancelled.
+  # ---------------------------------------------------------------------------
+  aggregate:
+    needs: [detect, verify-all]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout tt-auto-triage (aggregate script)
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-auto-triage
+          ref: ebanerjee/bug-escapes
+          path: triage
+
+      - name: Download all artifacts from this run
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Aggregate detection + verification results
+        env:
+          AUTO_VERIFY: ${{ inputs.auto-verify }}
+          VERIFY_COUNT: ${{ needs.detect.outputs.verify-count }}
+        run: |
+          set -uo pipefail
+          chmod +x triage/bug-escapes/aggregate_report.sh
+          bash triage/bug-escapes/aggregate_report.sh
+
+      - name: Upload final report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bug-escapes-final-report
+          path: triage/bug-escapes/output/bug-escapes-final-report.*
+          retention-days: 30
+          if-no-files-found: warn

@@ -173,6 +173,43 @@ write_result() {
   fi
 }
 
+# ---- Fault-tolerance: guarantee an artifact on any exit path ----
+# If verify.sh dies from set -euo pipefail (or any unexpected error) before
+# write_result is called, the matrix leg still needs to upload a stub so the
+# aggregator doesn't see a gap. This trap writes a minimal inconclusive
+# verification-result.json if one doesn't already exist and attempts branch
+# cleanup. All referenced helpers (write_result, cleanup_branches) are
+# defined above this point. Runs on every exit path (clean or error).
+_verify_exit_trap() {
+  local rc=$?
+  if [ "$rc" -ne 0 ] && [ ! -f "$VERIFY_OUTPUT_DIR/verification-result.json" ]; then
+    if ! write_result "inconclusive" "verify.sh exited unexpectedly (rc=$rc) before a verdict was written" 2>/dev/null; then
+      jq -n \
+        --arg fix  "${FIX_COMMIT_SHA:-unknown}" \
+        --arg pipe "${TEST_PIPELINE:-unknown}" \
+        --arg job  "${TEST_JOB:-unknown}" \
+        --arg test "${TEST_NAME:-unknown}" \
+        --arg rc   "$rc" \
+        --arg ts   "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+        '{
+          fix_commit: $fix,
+          test_pipeline: $pipe,
+          test_job: $job,
+          test_name: $test,
+          before_run_id: 0,
+          before_conclusion: "unknown",
+          after_run_id: 0,
+          after_conclusion: "unknown",
+          verdict: "inconclusive",
+          reason: ("verify.sh exited unexpectedly (rc=" + $rc + ") before write_result"),
+          timestamp: $ts
+        }' > "$VERIFY_OUTPUT_DIR/verification-result.json" 2>/dev/null || true
+    fi
+  fi
+  cleanup_branches 2>/dev/null || true
+}
+trap _verify_exit_trap EXIT
+
 # ---- Step 1: Resolve parent commit ----
 
 verify_info "=== Bug Escape Verification ==="
