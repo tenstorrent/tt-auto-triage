@@ -45,13 +45,12 @@ def _normalize(name: str) -> str:
     return " ".join(name.lower().split())
 
 
-def _collect_git_authors(repo_root: Path) -> tuple[dict[str, set[str]], dict[str, set[str]], dict[str, str]]:
-    """Return (email->names, normalized_name->emails, login->display_name_seen)."""
+def _collect_git_authors(repo_root: Path) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Return (email->names, normalized_name->emails)."""
     email_to_names: dict[str, set[str]] = {}
     name_to_emails: dict[str, set[str]] = {}
-    login_display: dict[str, str] = {}
     if not repo_root.exists():
-        return email_to_names, name_to_emails, login_display
+        return email_to_names, name_to_emails
     try:
         proc = subprocess.run(
             ["git", "-C", str(repo_root), "log", "--all", f"-n{_GIT_LOG_LIMIT}",
@@ -60,10 +59,10 @@ def _collect_git_authors(repo_root: Path) -> tuple[dict[str, set[str]], dict[str
         )
     except (OSError, subprocess.SubprocessError) as exc:
         log(f"  Warning: git log for identity index failed: {exc}")
-        return email_to_names, name_to_emails, login_display
+        return email_to_names, name_to_emails
     if proc.returncode != 0:
         log(f"  Warning: git log exited {proc.returncode}: {proc.stderr[:200]}")
-        return email_to_names, name_to_emails, login_display
+        return email_to_names, name_to_emails
     for line in proc.stdout.splitlines():
         name, _, email = line.partition("\t")
         name = name.strip()
@@ -73,12 +72,7 @@ def _collect_git_authors(repo_root: Path) -> tuple[dict[str, set[str]], dict[str
         email_key = email.lower()
         email_to_names.setdefault(email_key, set()).add(name)
         name_to_emails.setdefault(_normalize(name), set()).add(email)
-        m = _NORE_EMAIL.match(email)
-        if m:
-            login = m.group(1)
-            if login.lower() not in _BOT_LOGINS:
-                login_display.setdefault(login, name)
-    return email_to_names, name_to_emails, login_display
+    return email_to_names, name_to_emails
 
 
 def _slack_name_keys(user: dict[str, Any]) -> list[str]:
@@ -87,8 +81,8 @@ def _slack_name_keys(user: dict[str, Any]) -> list[str]:
         value = user.get(field) or ""
         if value:
             keys.append(_normalize(value))
-    profile = user.get("profile") if isinstance(user.get("profile"), dict) else None
-    if profile:
+    profile = user.get("profile")
+    if isinstance(profile, dict):
         profile_real = profile.get("real_name") or ""
         if profile_real:
             keys.append(_normalize(profile_real))
@@ -135,7 +129,7 @@ def _best_login_for_slack_user(
 
 def build_identity_index(repo_root: Path, slack_directory: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
     """Return ``{slack_id: {github_login, github_name}}`` for Slack users we could resolve."""
-    email_to_names, name_to_emails, _ = _collect_git_authors(repo_root)
+    email_to_names, name_to_emails = _collect_git_authors(repo_root)
     if not name_to_emails:
         return {}
     index: dict[str, dict[str, str]] = {}
