@@ -28,10 +28,12 @@ Candidate validation — reject the candidate if ANY of the following is true:
   * Their Slack ID or GitHub login appears in the "Known ex-employees" list above.
   * They are completely missing from `$slack_dump`.
   * Their `$slack_dump` entry has `deleted: true`.
-  * `curl -sI -H "Authorization: Bearer $$GITHUB_TOKEN" \
-      https://api.github.com/orgs/$github_org/members/<login>` returns 404 or 302.
-  401/403 responses (or a failing request) mean the token lacks `read:org`; treat
-  those as "unknown" and do NOT use them to reject someone.
+
+The GitHub org membership endpoint (`/orgs/$github_org/members/<login>`) is NOT
+reliable for rejection with this token: it returns 404 to any caller that lacks
+`read:org` scope for private memberships, and the token running you probably
+does. You MAY use a 204 response as positive confirmation someone is a member,
+but do NOT treat 302/404/other non-204 responses as evidence they have left.
 
 You must return exactly one owner. Prefer people with recent, substantive
 commits to the workflow file or its job definition over people with a single

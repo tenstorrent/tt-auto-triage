@@ -8,8 +8,6 @@ import re
 import string
 import subprocess
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -75,9 +73,14 @@ def is_active_employee(slack_id: str, login: str, slack_dir: list[dict[str, Any]
       * explicit EX_EMPLOYEES override (Slack ID or GitHub login)
       * Slack user flagged `deleted: true`
       * Slack user completely absent from a non-empty dump (Slack admin removed them)
-      * GitHub org membership returns 404 or 302
-    Network errors and missing `read:org` scope are treated as "unknown" so we don't
-    produce false positives from infra hiccups.
+
+    We deliberately do NOT use GitHub org membership as a rejection signal. The
+    `/orgs/{org}/members/{login}` endpoint returns 404 to any caller that lacks
+    `read:org` scope for private memberships, which is what our AGGREGATE_READ_TOKEN
+    typically looks like. A 404 under those conditions is indistinguishable from
+    "truly not a member", so using it would reject real employees (sadesoyeTT,
+    cglagovichTT, ...). EX_EMPLOYEES is the designated escape hatch for people
+    whose Slack account is still live because HR has not offboarded them yet.
     """
     key = (slack_id, login)
     if key in _active_cache:
@@ -93,21 +96,6 @@ def is_active_employee(slack_id: str, login: str, slack_dir: list[dict[str, Any]
             reason = "not present in Slack workspace dump"
         elif user and user.get("deleted"):
             reason = "Slack account deactivated"
-    if not reason and login and token:
-        try:
-            req = urllib.request.Request(
-                f"https://api.github.com/orgs/{GITHUB_ORG}/members/{login}",
-                headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}"},
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                if not (200 <= resp.status < 300):
-                    reason = f"GitHub org membership returned {resp.status}"
-        except urllib.error.HTTPError as exc:
-            if exc.code in (302, 404):
-                reason = f"GitHub org membership returned {exc.code}"
-            # else: 401/403 -> scope issue, treat as unknown
-        except urllib.error.URLError:
-            pass  # network hiccup, treat as unknown
     active = not reason
     log(f"  active-check: slack_id={slack_id or '-'} login={login or '-'} -> "
         + ("active" if active else f"inactive ({reason})"))
