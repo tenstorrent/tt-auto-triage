@@ -11,6 +11,14 @@ on:
         description: "Repository to read ownership metadata from"
         type: string
         default: "tenstorrent/tt-metal"
+      ex-employees:
+        description: >-
+          Comma/whitespace-separated list of Slack IDs and/or GitHub logins for people who
+          have left the company but whose Slack or GitHub org entries haven't been cleaned
+          up yet. Any owner resolving to one of these IDs is rejected by the employment
+          check and pushed to the agent fallback. Update this list when someone leaves.
+        type: string
+        default: "U05RWH3QUPM"  # Salar Hosseini (left 2026-04 per @ebanerjeeTT)
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to target-repo and tenstorrent org"
@@ -85,6 +93,7 @@ jobs:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           ISSUE_REPO: ${{ inputs.issue-repo }}
           TARGET_REPO: ${{ inputs.target-repo }}
+          EX_EMPLOYEES: ${{ inputs.ex-employees }}
           PIPELINE_REORG_DIR: tt-metal/tests/pipeline_reorg
           TARGET_REPO_ROOT: tt-metal
           SLACK_DUMP_PATH: slack_users.json

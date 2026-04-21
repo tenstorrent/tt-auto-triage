@@ -6,6 +6,8 @@ single currently-employed replacement.
 Workflow: $workflow_name
 Job: $job_name
 Ex-owner note: $ex_owner_note
+Known ex-employees (do NOT pick any of these — they are known gone even when
+Slack/GitHub data says otherwise): $ex_employees
 
 You are given the target repo sparse-checked out at `$repo_root/`, a Slack user
 dump at `$slack_dump`, and `$$GITHUB_TOKEN` in the environment. Use your file
@@ -22,14 +24,14 @@ Data sources (in rough order of trust):
      pipeline_reorg owner is unusable; only consult this to see nearby owners
      for similar jobs as a tiebreaker.
 
-Candidate validation — a candidate is ONLY valid if currently employed:
-  * Slack: the user in `$slack_dump` is present AND `deleted` is false.
-  * GitHub: `curl -sI -H "Authorization: Bearer $$GITHUB_TOKEN" \
-      https://api.github.com/orgs/$github_org/members/<login>` returns 204.
-    Any other status (including 302/404) means not a current member.
-  * Block a candidate ONLY if BOTH signals agree the person is gone. If either
-    signal says they are still around, accept them (handles stale caches and
-    missing `read:org` scope on the token).
+Candidate validation — reject the candidate if ANY of the following is true:
+  * Their Slack ID or GitHub login appears in the "Known ex-employees" list above.
+  * They are completely missing from `$slack_dump`.
+  * Their `$slack_dump` entry has `deleted: true`.
+  * `curl -sI -H "Authorization: Bearer $$GITHUB_TOKEN" \
+      https://api.github.com/orgs/$github_org/members/<login>` returns 404 or 302.
+  401/403 responses (or a failing request) mean the token lacks `read:org`; treat
+  those as "unknown" and do NOT use them to reject someone.
 
 You must return exactly one owner. Prefer people with recent, substantive
 commits to the workflow file or its job definition over people with a single

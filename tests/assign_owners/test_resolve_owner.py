@@ -38,24 +38,15 @@ class ResolveOwnerTests(unittest.TestCase):
     def test_slow_path_when_pipeline_owner_left_includes_ex_owner_note(self) -> None:
         captured: dict = {}
 
-        def fake_agent(wf: str, job: str, note: str) -> dict:
+        def fake_agent(wf: str, job: str, note: str, slack_dir=None, token=None) -> dict:
             captured["note"] = note
             return {"source": "agent", "github_assignees": ["replace"],
                     "github_names": ["Replace R."], "slack_assignees": ["UNEW"], "slack_names": ["New N."]}
 
-        # Force Slack-deleted AND GitHub-missing -> ex-employee.
-        import urllib.error
-        with patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError(
-            "url", 404, "Not Found", hdrs=None, fp=None  # type: ignore[arg-type]
-        )):
-            with patch.object(mod, "_resolve_via_agent", side_effect=fake_agent):
-                # Need GH login argument in is_active_employee — but resolve_owner passes "" for login.
-                # So in the slow path we rely on Slack-deleted alone; but is_active_employee blocks
-                # only when BOTH signals agree. With login="" the GH signal is skipped (treated
-                # as "present"), so Slack-only would NOT trigger slow path. Patch _active_cache
-                # directly to simulate a confirmed ex-employee.
-                mod._active_cache[("U2", "")] = False
-                r = mod.resolve_owner("WF", "Job Beta", self.pipeline, self.slack_dir, "tok")
+        # Job Beta -> U2, whose Slack entry has deleted=True. Under the tightened rule,
+        # Slack-deleted alone is enough to fail is_active_employee and fall through to the agent.
+        with patch.object(mod, "_resolve_via_agent", side_effect=fake_agent):
+            r = mod.resolve_owner("WF", "Job Beta", self.pipeline, self.slack_dir, "tok")
         self.assertEqual(r["source"], "agent")
         self.assertIn("Old Oleg", captured["note"])
         self.assertIn("U2", captured["note"])
@@ -64,7 +55,7 @@ class ResolveOwnerTests(unittest.TestCase):
     def test_slow_path_when_pipeline_has_no_entry_passes_empty_note(self) -> None:
         captured: dict = {}
 
-        def fake_agent(wf: str, job: str, note: str) -> dict:
+        def fake_agent(wf: str, job: str, note: str, slack_dir=None, token=None) -> dict:
             captured["note"] = note
             return {"source": "agent", "github_assignees": ["picked"],
                     "github_names": ["P."], "slack_assignees": ["UPK"], "slack_names": ["P."]}
@@ -73,6 +64,23 @@ class ResolveOwnerTests(unittest.TestCase):
             r = mod.resolve_owner("WF", "Unknown Job", self.pipeline, self.slack_dir, "tok")
         self.assertEqual(captured["note"], "")
         self.assertEqual(r["source"], "agent")
+
+    def test_ex_employees_override_forces_slow_path_even_when_slack_says_active(self) -> None:
+        captured: dict = {}
+
+        def fake_agent(wf: str, job: str, note: str, slack_dir=None, token=None) -> dict:
+            captured["note"] = note
+            return {"source": "agent", "github_assignees": ["picked"], "github_names": ["P."],
+                    "slack_assignees": ["UPK"], "slack_names": ["P."]}
+
+        # U1 is NOT deleted in Slack, but we put them on the ex-employees list anyway
+        # (mirrors the real-world Salar case where Slack admin hasn't deactivated yet).
+        with patch.object(mod, "EX_EMPLOYEES", frozenset({"U1"})), \
+             patch.object(mod, "_resolve_via_agent", side_effect=fake_agent):
+            r = mod.resolve_owner("WF", "Job Alpha", self.pipeline, self.slack_dir, "tok")
+        self.assertEqual(r["source"], "agent")
+        self.assertIn("Alice A.", captured["note"])
+        self.assertIn("U1", captured["note"])
 
     def test_agent_none_response_propagates(self) -> None:
         empty = {"source": "none", "github_assignees": [], "github_names": [],

@@ -38,6 +38,9 @@ GITHUB_ORG = os.environ.get("GITHUB_ORG", "tenstorrent")
 OWNERS_READY_LABEL = "auto-triage:owners-ready"
 AGENT_MARKER = "===FINAL==="
 COMMENT_MARKER = "<!-- auto-triage:owner-recommendation -->"
+EX_EMPLOYEES: frozenset[str] = frozenset(
+    v.strip() for v in re.split(r"[\s,]+", os.environ.get("EX_EMPLOYEES", "")) if v.strip()
+)
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "resolve_owner.txt"
 _PR_NAME = re.compile(r"^- name:\s*[\"']?(.+?)[\"']?\s*$")
 _PR_OWNER = re.compile(r"^\s+owner_id:\s*(.+)")
@@ -68,34 +71,57 @@ _active_cache: dict[tuple[str, str], bool] = {}
 
 
 def is_active_employee(slack_id: str, login: str, slack_dir: list[dict[str, Any]], token: str | None) -> bool:
-    """Block only when BOTH signals agree gone: Slack deleted AND not in tenstorrent GH org."""
+    """Return False if ANY signal flags the person as gone:
+      * explicit EX_EMPLOYEES override (Slack ID or GitHub login)
+      * Slack user flagged `deleted: true`
+      * Slack user completely absent from a non-empty dump (Slack admin removed them)
+      * GitHub org membership returns 404 or 302
+    Network errors and missing `read:org` scope are treated as "unknown" so we don't
+    produce false positives from infra hiccups.
+    """
     key = (slack_id, login)
     if key in _active_cache:
         return _active_cache[key]
-    user = next((u for u in slack_dir if u.get("id") == slack_id), {}) if slack_id else {}
-    slack_gone = bool(user and user.get("deleted"))
-    gh_gone = False
-    if login and token:
+    reason = ""
+    if slack_id and slack_id in EX_EMPLOYEES:
+        reason = "ex-employees override (slack_id)"
+    elif login and login in EX_EMPLOYEES:
+        reason = "ex-employees override (github login)"
+    if not reason and slack_id:
+        user = next((u for u in slack_dir if u.get("id") == slack_id), None)
+        if slack_dir and user is None:
+            reason = "not present in Slack workspace dump"
+        elif user and user.get("deleted"):
+            reason = "Slack account deactivated"
+    if not reason and login and token:
         try:
             req = urllib.request.Request(
                 f"https://api.github.com/orgs/{GITHUB_ORG}/members/{login}",
                 headers={"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}"},
             )
             with urllib.request.urlopen(req, timeout=30) as resp:
-                gh_gone = not (200 <= resp.status < 300)
-        except urllib.error.HTTPError:
-            gh_gone = True
+                if not (200 <= resp.status < 300):
+                    reason = f"GitHub org membership returned {resp.status}"
+        except urllib.error.HTTPError as exc:
+            if exc.code in (302, 404):
+                reason = f"GitHub org membership returned {exc.code}"
+            # else: 401/403 -> scope issue, treat as unknown
         except urllib.error.URLError:
-            pass
-    result = not (slack_gone and gh_gone)
-    _active_cache[key] = result
-    return result
+            pass  # network hiccup, treat as unknown
+    active = not reason
+    log(f"  active-check: slack_id={slack_id or '-'} login={login or '-'} -> "
+        + ("active" if active else f"inactive ({reason})"))
+    _active_cache[key] = active
+    return active
 
 
-def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str) -> dict[str, Any]:
+def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
+                       slack_dir: list[dict[str, Any]] | None = None,
+                       token: str | None = None) -> dict[str, Any]:
     prompt = string.Template(_PROMPT_PATH.read_text()).substitute(
         workflow_name=workflow_name, job_name=job_name,
         ex_owner_note=ex_owner_note or "(no previous owner recorded)",
+        ex_employees=", ".join(sorted(EX_EMPLOYEES)) or "(none configured)",
         marker=AGENT_MARKER, repo_root=str(TARGET_REPO_ROOT),
         slack_dump=str(SLACK_DUMP_PATH), github_org=GITHUB_ORG,
     )
@@ -125,6 +151,9 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str) ->
     sid = str(res.get("slack_id") or "")
     if not (gh_login or sid):
         return empty
+    if not is_active_employee(sid, gh_login, slack_dir or [], token):
+        log(f"  Agent picked an inactive candidate (slack={sid!r}, login={gh_login!r}); dropping.")
+        return empty
     return {
         "source": "agent",
         "github_assignees": [gh_login] if gh_login else [],
@@ -141,7 +170,7 @@ def resolve_owner(workflow_name: str, job_name: str, pipeline: list[dict[str, st
     bare = job_name.rsplit(" / ", 1)[-1].strip()
     entry = next((e for e in pipeline if e["name"] in (job_name, bare)), None)
     if not entry:
-        return _resolve_via_agent(workflow_name, job_name, "")
+        return _resolve_via_agent(workflow_name, job_name, "", slack_dir, token)
     sid = entry["id"]
     user = next((u for u in slack_dir if u.get("id") == sid), {})
     display = entry.get("owner_name") or user.get("real_name") or user.get("display_name") or sid
@@ -156,8 +185,11 @@ def resolve_owner(workflow_name: str, job_name: str, pipeline: list[dict[str, st
             "slack_assignees": [sid],
             "slack_names": [display if display != sid else ""],
         }
-    return _resolve_via_agent(workflow_name, job_name,
-        f"The previous owner {display} (Slack `{sid}`) has left the company. Find a current replacement.")
+    return _resolve_via_agent(
+        workflow_name, job_name,
+        f"The previous owner {display} (Slack `{sid}`) has left the company. Find a current replacement.",
+        slack_dir, token,
+    )
 
 
 def _display_name(r: dict[str, Any]) -> str:
