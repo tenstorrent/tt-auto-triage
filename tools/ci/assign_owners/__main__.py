@@ -117,7 +117,18 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
     cmd = ["agent", "--trust", "-p", prompt]
     if CURSOR_MODEL != "auto":
         cmd[1:1] = ["--model", CURSOR_MODEL]
-    env = {k: os.environ[k] for k in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "CURSOR_API_KEY", "GITHUB_TOKEN") if k in os.environ}
+    # Forward everything the agent needs to run `check_active` itself, including
+    # EX_EMPLOYEES and SLACK_DUMP_PATH, so the employment check inside the agent
+    # loop sees the same config as the outer resolver.
+    env = {
+        k: os.environ[k]
+        for k in (
+            "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL",
+            "CURSOR_API_KEY", "GITHUB_TOKEN",
+            "EX_EMPLOYEES", "SLACK_DUMP_PATH", "PYTHONPATH",
+        )
+        if k in os.environ
+    }
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
         if proc.returncode != 0:

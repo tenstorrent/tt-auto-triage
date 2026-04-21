@@ -13,12 +13,12 @@ on:
         default: "tenstorrent/tt-metal"
       ex-employees:
         description: >-
-          Comma/whitespace-separated list of Slack IDs and/or GitHub logins for people who
-          have left the company but whose Slack or GitHub org entries haven't been cleaned
-          up yet. Any owner resolving to one of these IDs is rejected by the employment
-          check and pushed to the agent fallback. Update this list when someone leaves.
+          OPTIONAL escape hatch. Comma/whitespace-separated list of Slack IDs and/or
+          GitHub logins. Only use this for emergencies where Slack's `deleted` flag
+          hasn't been set yet (e.g., offboarding is still in flight). Leave empty in
+          steady state — the Slack `deleted` signal is authoritative on its own.
         type: string
-        default: "U05RWH3QUPM"  # Salar Hosseini (left 2026-04 per @ebanerjeeTT)
+        default: ""
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to target-repo and tenstorrent org"
