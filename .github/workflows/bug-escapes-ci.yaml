@@ -111,7 +111,7 @@ jobs:
   # ---------------------------------------------------------------------------
   detect:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     outputs:
       verify-matrix: ${{ steps.filter.outputs.verify-matrix }}
       verify-count: ${{ steps.filter.outputs.verify-count }}
