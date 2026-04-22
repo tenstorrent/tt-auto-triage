@@ -187,9 +187,7 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
     ex_display = ", ".join(sorted(merged_ex))
     prompt = _build_prompt(workflow_name, job_name, ex_owner_note, ex_display, extra_context)
     empty = {"source": "none", "github_assignees": [], "github_names": [], "slack_assignees": [], "slack_names": []}
-    cmd = ["agent", "--trust", "-p", prompt]
-    if CURSOR_MODEL != "auto":
-        cmd[1:1] = ["--model", CURSOR_MODEL]
+    cmd = ["agent", "--trust", "--model", CURSOR_MODEL, "-p", prompt]
     # Forward everything the agent needs to run `check_active` itself. The
     # EX_EMPLOYEES env var is OVERRIDDEN here with the merged (global +
     # per-issue) set so the agent's own check_active calls reject every
