@@ -13,8 +13,8 @@ on:
         default: "tenstorrent/tt-metal"
       max-issues:
         description: "Maximum number of issues to create (0 = unlimited)"
-        type: string
-        default: "0"
+        type: number
+        default: 0
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to workflow runs and artifacts"
