@@ -72,6 +72,10 @@ on:
         description: "Global wall-clock cap (hours) for dispatching new verifications. Only applies when auto-verify=true."
         type: string
         default: "6"
+      mock-verify:
+        description: "If 'true', verify.sh writes a mock confirmed result without dispatching real CI runs. For testing only."
+        type: string
+        default: "false"
       poll-interval-seconds:
         description: "Seconds between tt-metal CI run status checks inside verify.sh"
         type: string
@@ -347,6 +351,7 @@ jobs:
           POLL_INTERVAL: ${{ inputs.poll-interval-seconds }}
           MAX_WAIT_START_MINUTES: ${{ inputs.start-wait-minutes }}
           MAX_WAIT_FINISH_MINUTES: ${{ inputs.finish-wait-minutes }}
+          MOCK_VERIFY: ${{ inputs.mock-verify }}
         run: |
           set -euo pipefail
           chmod +x triage/bug-escapes/verify/verify.sh
