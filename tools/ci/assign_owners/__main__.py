@@ -204,7 +204,7 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
     if merged_ex:
         env["EX_EMPLOYEES"] = ",".join(sorted(merged_ex))
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env=env)
         if proc.returncode != 0:
             raise RuntimeError(f"Cursor agent exited {proc.returncode}: {proc.stderr[:200]}")
         text = proc.stdout or ""
