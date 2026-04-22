@@ -45,6 +45,16 @@ OWNER_REPO="${OWNER_REPO:-tenstorrent/tt-metal}"
 CURSOR_API_KEY="${CURSOR_API_KEY:-}"
 EXPECTED_FAILURE_SIG="${EXPECTED_FAILURE_SIG:-}"
 
+MOCK_VERIFY="${MOCK_VERIFY:-false}"
+
+# ---- Mock mode (no hardware dispatches) ----
+if [ "$MOCK_VERIFY" = "true" ]; then
+  mkdir -p "$VERIFY_OUTPUT_DIR"
+  verify_info "MOCK_VERIFY=true — skipping actual CI dispatch, writing mock confirmed result"
+  write_result "confirmed" "mock verification (MOCK_VERIFY=true — no hardware runs dispatched)"     "failure" "success" 0 0
+  exit 0
+fi
+
 mkdir -p "$VERIFY_OUTPUT_DIR"
 
 SHORT_SHA="${FIX_COMMIT_SHA:0:8}"
