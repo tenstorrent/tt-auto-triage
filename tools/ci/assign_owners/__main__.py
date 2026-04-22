@@ -33,7 +33,7 @@ PIPELINE_REORG_DIR = Path(os.environ.get("PIPELINE_REORG_DIR", "tt-metal/tests/p
 TARGET_REPO_ROOT = Path(os.environ.get("TARGET_REPO_ROOT", "tt-metal"))
 SLACK_DUMP_PATH = Path(os.environ.get("SLACK_DUMP_PATH", "slack_users.json"))
 SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
-CURSOR_MODEL = os.environ.get("CURSOR_MODEL", "claude-4-sonnet")
+CURSOR_MODEL = os.environ.get("CURSOR_MODEL", "auto")
 GITHUB_ORG = os.environ.get("GITHUB_ORG", "tenstorrent")
 OWNERS_READY_LABEL = "auto-triage:owners-ready"
 AGENT_MARKER = "===FINAL==="
