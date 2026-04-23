@@ -90,10 +90,29 @@ def draft_issue_body(
     job_name = job["job_name"]
     job_urls = job.get("job_urls", [])
     run_urls = job.get("run_urls", [])
+    grouped_jobs: list[dict[str, Any]] = job.get("grouped_jobs", [])
 
     log_sections: list[str] = []
     for index, (url, path) in enumerate(zip(job_urls, log_paths), start=1):
         log_sections.append(f"Run {index} job URL: {url}\nRun {index} local log path: {path}")
+
+    # Extra log paths from grouped jobs (beyond what job_urls covers)
+    extra_log_paths = log_paths[len(job_urls):]
+    for index, path in enumerate(extra_log_paths, start=len(job_urls) + 1):
+        log_sections.append(f"Grouped job log {index} local log path: {path}")
+
+    if grouped_jobs:
+        grouped_jobs_section = (
+            "\n\nIMPORTANT: This issue covers multiple CI jobs that all share the same root cause.\n"
+            "All of the following jobs are affected and MUST be listed in the issue body under\n"
+            "an '### Affected jobs' section:\n"
+            + "\n".join(
+                f"  - Workflow: {j['workflow_name']} / Job: {j['job_name']}"
+                for j in grouped_jobs
+            )
+        )
+    else:
+        grouped_jobs_section = ""
 
     prompt = _PROMPT_TEMPLATE.substitute(
         workflow_name=workflow_name,
@@ -103,6 +122,7 @@ def draft_issue_body(
         consecutive=consecutive,
         log_sections="\n".join(f"- {section}" for section in log_sections),
         marker=MARKER,
+        grouped_jobs_section=grouped_jobs_section,
     )
     backend = os.environ.get("LLM_BACKEND", _DEFAULT_BACKEND)
     try:
