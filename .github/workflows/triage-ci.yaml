@@ -19,12 +19,18 @@ on:
         description: "Maximum number of issues to create (0 = unlimited)"
         type: number
         default: 0
+      llm-backend:
+        description: "LLM backend for issue drafting: 'cursor' (default) or 'copilot'"
+        type: string
+        default: "cursor"
     secrets:
       AGGREGATE_READ_TOKEN:
         required: false
       ISSUE_WRITE_TOKEN:
         required: true
       CURSOR_API_KEY:
+        required: false
+      COPILOT_PAT:
         required: false
 
 jobs:
@@ -35,7 +41,9 @@ jobs:
       issue-repo: ${{ inputs.issue-repo }}
       target-repo: ${{ inputs.target-repo }}
       max-issues: ${{ inputs.max-issues }}
+      llm-backend: ${{ inputs.llm-backend }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
