@@ -23,6 +23,10 @@ on:
         description: "LLM backend for issue drafting: 'cursor' (default) or 'copilot'"
         type: string
         default: "cursor"
+      workflow-filter:
+        description: "Only analyze workflows whose name contains this string (empty = all)"
+        type: string
+        default: ""
     secrets:
       AGGREGATE_READ_TOKEN:
         required: false
@@ -42,6 +46,7 @@ jobs:
       target-repo: ${{ inputs.target-repo }}
       max-issues: ${{ inputs.max-issues }}
       llm-backend: ${{ inputs.llm-backend }}
+      workflow-filter: ${{ inputs.workflow-filter }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
