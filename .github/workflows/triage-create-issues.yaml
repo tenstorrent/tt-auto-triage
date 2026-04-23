@@ -15,6 +15,10 @@ on:
         description: "Maximum number of issues to create (0 = unlimited)"
         type: number
         default: 0
+      llm-backend:
+        description: "LLM backend for issue drafting: 'cursor' (default) or 'copilot'"
+        type: string
+        default: "cursor"
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to workflow runs and artifacts"
@@ -23,8 +27,11 @@ on:
         description: "Token with write access to the issue repository"
         required: true
       CURSOR_API_KEY:
-        description: "Cursor API key for issue drafting"
-        required: true
+        description: "Cursor API key for issue drafting (required when llm-backend=cursor)"
+        required: false
+      COPILOT_PAT:
+        description: "GitHub PAT for Copilot CLI auth (required when llm-backend=copilot)"
+        required: false
 
 permissions:
   contents: read
@@ -39,10 +46,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/tt-auto-triage
-          ref: ebanerjee/triage-create-issues
           persist-credentials: false
 
       - name: Install Cursor CLI
+        if: inputs.llm-backend == 'cursor'
         run: |
           set -euo pipefail
           install_script="$(mktemp)"
@@ -54,19 +61,34 @@ jobs:
           rm -f "$install_script"
           echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
 
+      - name: Install GitHub Copilot CLI
+        if: inputs.llm-backend == 'copilot'
+        run: |
+          set -euo pipefail
+          npm install -g @github/copilot
+          copilot --version || { echo "::error::Copilot CLI installation failed"; exit 1; }
+
       - name: Validate secrets
         env:
           AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
+          LLM_BACKEND: ${{ inputs.llm-backend }}
         run: |
           [ -n "$AGGREGATE_READ_TOKEN" ] || { echo "::error::AGGREGATE_READ_TOKEN is required"; exit 1; }
-          [ -n "$CURSOR_API_KEY" ] || { echo "::error::CURSOR_API_KEY is required"; exit 1; }
+          if [ "$LLM_BACKEND" = "copilot" ]; then
+            [ -n "$COPILOT_PAT" ] || { echo "::error::COPILOT_PAT is required when llm-backend=copilot"; exit 1; }
+          else
+            [ -n "$CURSOR_API_KEY" ] || { echo "::error::CURSOR_API_KEY is required when llm-backend=cursor"; exit 1; }
+          fi
 
       - name: Run issue creation stage
         env:
           GITHUB_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
           ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
+          LLM_BACKEND: ${{ inputs.llm-backend }}
           CREATE_ISSUES: "true"
           ISSUE_REPO: ${{ inputs.issue-repo }}
           TARGET_REPO: ${{ inputs.target-repo }}
