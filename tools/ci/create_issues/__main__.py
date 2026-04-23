@@ -23,6 +23,8 @@ ISSUE_WRITE_TOKEN = os.environ.get("ISSUE_WRITE_TOKEN", "")
 CURSOR_MODEL = os.environ.get("CURSOR_MODEL", "claude-4-sonnet")
 SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
 MAX_ISSUES = int(os.environ.get("MAX_ISSUES", "0"))
+WORKFLOW_FILTER = os.environ.get("WORKFLOW_FILTER", "")
+LLM_BACKEND = os.environ.get("LLM_BACKEND", "cursor")
 
 
 def _entry(job: dict[str, Any], action: str, **kwargs: Any) -> dict[str, Any]:
@@ -52,8 +54,11 @@ def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> tuple[str
 
 def main() -> int:
     log("=== Create Issues ===")
-    if not os.environ.get("CURSOR_API_KEY"):
-        log("CURSOR_API_KEY is required for the create-issues stage.")
+    if LLM_BACKEND == "copilot" and not os.environ.get("COPILOT_GITHUB_TOKEN"):
+        log("COPILOT_GITHUB_TOKEN is required when LLM_BACKEND=copilot.")
+        return 1
+    if LLM_BACKEND != "copilot" and not os.environ.get("CURSOR_API_KEY"):
+        log("CURSOR_API_KEY is required when LLM_BACKEND=cursor.")
         return 1
     workflow_data = download_workflow_data(TARGET_REPO)
     open_issues = load_all_open_issues(ISSUE_REPO, ISSUE_WRITE_TOKEN)
@@ -65,6 +70,14 @@ def main() -> int:
         print(json.dumps({"created": 0, "skipped": len(tracked_pairs), "failures": []}))
         return 0
 
+    if WORKFLOW_FILTER:
+        before = len(failing_jobs)
+        failing_jobs = [j for j in failing_jobs if WORKFLOW_FILTER.lower() in j["workflow_name"].lower()]
+        log(f"  Workflow filter '{WORKFLOW_FILTER}': {len(failing_jobs)}/{before} jobs kept")
+        if not failing_jobs:
+            log("  No jobs match filter. Done.")
+            return 0
+
     logs_dir = Path("build_ci/create_issues/logs")
     enriched_jobs = download_job_logs(failing_jobs, TARGET_REPO, logs_dir)
 
@@ -75,7 +88,7 @@ def main() -> int:
             summary.append(_entry(job, "limit_reached"))
             continue
 
-        log("  Drafting issue via Cursor agent...")
+        log(f"  Drafting issue via {LLM_BACKEND} agent...")
         agent_result = draft_issue_body(job, job.get("log_paths", []), CURSOR_MODEL, CONSECUTIVE)
         if agent_result and agent_result.get("deterministic") is False:
             summary.append(_entry(job, "agent_skipped", reason=agent_result.get("reason", "not deterministic")))
