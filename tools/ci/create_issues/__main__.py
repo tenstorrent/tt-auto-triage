@@ -61,6 +61,11 @@ def main() -> int:
         log("CURSOR_API_KEY is required when LLM_BACKEND=cursor.")
         return 1
     workflow_data = download_workflow_data(TARGET_REPO)
+    if WORKFLOW_FILTER:
+        orig_count = len(workflow_data)
+        workflow_data = [(name, runs) for name, runs in workflow_data
+                         if WORKFLOW_FILTER.lower() in str(name).lower()]
+        log(f"  Workflow filter '{WORKFLOW_FILTER}': {len(workflow_data)}/{orig_count} workflows")
     open_issues = load_all_open_issues(ISSUE_REPO, ISSUE_WRITE_TOKEN)
     tracked_pairs = tracked_pairs_from_issues(open_issues)
     failing_jobs = find_failing_jobs(workflow_data, TARGET_REPO, CONSECUTIVE, tracked_pairs)
@@ -70,13 +75,6 @@ def main() -> int:
         print(json.dumps({"created": 0, "skipped": len(tracked_pairs), "failures": []}))
         return 0
 
-    if WORKFLOW_FILTER:
-        before = len(failing_jobs)
-        failing_jobs = [j for j in failing_jobs if WORKFLOW_FILTER.lower() in j["workflow_name"].lower()]
-        log(f"  Workflow filter '{WORKFLOW_FILTER}': {len(failing_jobs)}/{before} jobs kept")
-        if not failing_jobs:
-            log("  No jobs match filter. Done.")
-            return 0
 
     logs_dir = Path("build_ci/create_issues/logs")
     enriched_jobs = download_job_logs(failing_jobs, TARGET_REPO, logs_dir)
