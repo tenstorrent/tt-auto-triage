@@ -152,6 +152,9 @@ def download_job_logs(
 # ---------------------------------------------------------------------------
 import difflib as _difflib
 
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+_TIMESTAMP_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z\s*", re.MULTILINE)
+
 _ERROR_PATTERNS: tuple[re.Pattern, ...] = tuple(
     re.compile(p, re.MULTILINE)
     for p in (
@@ -160,21 +163,40 @@ _ERROR_PATTERNS: tuple[re.Pattern, ...] = tuple(
         r"Segmentation fault[^\n]{0,200}",
         r"AssertionError:[^\n]{0,200}",
         r"RuntimeError:[^\n]{0,200}",
-        r"FAILED\s+[^\n]{0,200}",
+        # pytest: "FAILED path::test - ErrorType: message"
+        r"FAILED\s+\S+::[^\n]{0,200}",
+        # pytest short: standalone "FAILED" line followed by error class
+        r"(?:^|\s)FAILED\s+[^\n]{5,200}",
+        # Python exceptions
+        r"(?:TypeError|ValueError|KeyError|AttributeError|ImportError|OSError|IOError):[^\n]{0,200}",
+        # Performance regression
+        r"(?:performance|regression|exceeded|threshold|inference.?time)[^\n]{0,200}",
+        # Generic "Error: ..." at start of content
+        r"Error:[^\n]{0,200}",
     )
 )
 
 
 def _extract_error_signature(log_text: str) -> str:
-    """Extract and normalise the key error line from a log (no third-party deps)."""
+    """Extract and normalise the key error line from a log (no third-party deps).
+
+    Strips ANSI escape codes and GitHub Actions timestamp prefixes before matching.
+    """
+    # Strip ANSI colour codes (pytest wraps FAILED/PASSED in colour sequences)
+    clean = _ANSI_ESCAPE.sub("", log_text)
+    # Strip GitHub Actions per-line timestamps
+    clean = _TIMESTAMP_PREFIX.sub("", clean)
+
     for pat in _ERROR_PATTERNS:
-        m = pat.search(log_text)
+        m = pat.search(clean)
         if m:
             sig = m.group(0)
             # Strip volatile parts: file paths, line numbers, function names
             sig = re.sub(r"\S+\.(cpp|h|py|cc|cxx|hpp|c):\d+", "", sig)
             sig = re.sub(r" @ \S+", "", sig)
             sig = re.sub(r" in \w+:", "", sig)
+            # Strip test node IDs (path::test[params]) to keep the error type
+            sig = re.sub(r"\S+::\S+\[[^\]]*\]", "", sig)
             sig = re.sub(r"\s+", " ", sig).strip()
             return sig
     return ""
