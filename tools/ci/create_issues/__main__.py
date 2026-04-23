@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .detect_failures import download_job_logs, find_failing_jobs
+from .detect_failures import download_job_logs, find_failing_jobs, group_similar_jobs
 from .download_data import download_workflow_data
 from .draft_issues import draft_issue_body
 from .helpers import gh, log, sanitize_text
@@ -31,7 +31,11 @@ def _entry(job: dict[str, Any], action: str, **kwargs: Any) -> dict[str, Any]:
     return {"workflow_name": job["workflow_name"], "job": job["job_name"], "action": action, **kwargs}
 
 
-def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> tuple[str, str, str]:
+def create_issue(
+    job: dict[str, Any],
+    agent_result: dict[str, Any],
+    extra_jobs: list[tuple[str, str]] | None = None,
+) -> tuple[str, str, str]:
     title = sanitize_text(
         agent_result.get("issue_title", f"[CI] {job['workflow_name']} / {job['job_name']}")
     )
@@ -39,6 +43,7 @@ def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> tuple[str
         sanitize_text(agent_result["issue_body"]),
         workflow_name=job["workflow_name"],
         job_name=job["job_name"],
+        extra_jobs=extra_jobs,
     )
     issue_url = gh(
         "issue", "create",
@@ -76,32 +81,50 @@ def main() -> int:
         print(json.dumps({"created": 0, "skipped": len(tracked_pairs), "failures": []}))
         return 0
 
-
     logs_dir = Path("build_ci/create_issues/logs")
     enriched_jobs = download_job_logs(failing_jobs, TARGET_REPO, logs_dir)
 
+    # Group jobs with similar errors to avoid filing near-duplicate issues
+    job_groups = group_similar_jobs(enriched_jobs)
+    log(f"  {len(enriched_jobs)} failing job(s) → {len(job_groups)} issue group(s) after deduplication")
+
     summary: list[dict[str, Any]] = []
     created_so_far = 0
-    for job in enriched_jobs:
+    for group in job_groups:
+        primary_job = group[0]
+
         if MAX_ISSUES and created_so_far >= MAX_ISSUES:
-            summary.append(_entry(job, "limit_reached"))
+            for job in group:
+                summary.append(_entry(job, "limit_reached"))
             continue
 
+        # Merge log paths from all jobs in the group for the LLM
+        all_log_paths = [p for job in group for p in job.get("log_paths", [])]
+        merged_job = {**primary_job, "log_paths": all_log_paths}
+        if len(group) > 1:
+            merged_job["grouped_jobs"] = group[1:]
+
         log(f"  Drafting issue via {LLM_BACKEND} agent...")
-        agent_result = draft_issue_body(job, job.get("log_paths", []), CURSOR_MODEL, CONSECUTIVE)
+        agent_result = draft_issue_body(merged_job, all_log_paths, CURSOR_MODEL, CONSECUTIVE)
         if agent_result and agent_result.get("deterministic") is False:
-            summary.append(_entry(job, "agent_skipped", reason=agent_result.get("reason", "not deterministic")))
+            for job in group:
+                summary.append(_entry(job, "agent_skipped", reason=agent_result.get("reason", "not deterministic")))
             continue
 
         if not agent_result or not agent_result.get("issue_body"):
-            summary.append(_entry(job, "agent_skipped", reason="no issue body from agent"))
+            for job in group:
+                summary.append(_entry(job, "agent_skipped", reason="no issue body from agent"))
             continue
 
         if not CREATE_ISSUES:
-            summary.append(_entry(job, "dry_run"))
+            for job in group:
+                summary.append(_entry(job, "dry_run"))
             continue
 
-        issue_url, issue_title, issue_body = create_issue(job, agent_result)
+        extra_jobs = [(j["workflow_name"], j["job_name"]) for j in group[1:]]
+        issue_url, issue_title, issue_body = create_issue(
+            primary_job, agent_result, extra_jobs=extra_jobs or None
+        )
         created_so_far += 1
         open_issues.append({
             "number": issue_url.rsplit("/", 1)[-1],
@@ -109,7 +132,8 @@ def main() -> int:
             "body": issue_body,
             "url": issue_url,
         })
-        summary.append(_entry(job, "created", issue=issue_url))
+        for job in group:
+            summary.append(_entry(job, "created", issue=issue_url))
 
     markdown = render(summary, open_issues)
     if SUMMARY_OUTPUT:
