@@ -144,3 +144,94 @@ def download_job_logs(
         log(f"  Downloaded {len(log_paths)} logs for {job['job_name']}")
 
     return enriched
+
+
+
+# ---------------------------------------------------------------------------
+# Deduplication: group jobs with similar error signatures
+# ---------------------------------------------------------------------------
+import difflib as _difflib
+
+_ERROR_PATTERNS: tuple[re.Pattern, ...] = tuple(
+    re.compile(p, re.MULTILINE)
+    for p in (
+        r"TT_FATAL\b[^\n]{0,300}",
+        r"SIGABRT[^\n]{0,200}",
+        r"Segmentation fault[^\n]{0,200}",
+        r"AssertionError:[^\n]{0,200}",
+        r"RuntimeError:[^\n]{0,200}",
+        r"FAILED\s+[^\n]{0,200}",
+    )
+)
+
+
+def _extract_error_signature(log_text: str) -> str:
+    """Extract and normalise the key error line from a log (no third-party deps)."""
+    for pat in _ERROR_PATTERNS:
+        m = pat.search(log_text)
+        if m:
+            sig = m.group(0)
+            # Strip volatile parts: file paths, line numbers, function names
+            sig = re.sub(r"\S+\.(cpp|h|py|cc|cxx|hpp|c):\d+", "", sig)
+            sig = re.sub(r" @ \S+", "", sig)
+            sig = re.sub(r" in \w+:", "", sig)
+            sig = re.sub(r"\s+", " ", sig).strip()
+            return sig
+    return ""
+
+
+def _error_similarity(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    return _difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+
+def group_similar_jobs(
+    jobs: list[dict[str, Any]],
+    threshold: float = 0.65,
+) -> list[list[dict[str, Any]]]:
+    """Group jobs with similar error signatures to avoid filing duplicate issues.
+
+    Uses stdlib ``difflib`` only — no third-party dependencies.
+    Returns a list of groups; each group is a non-empty list of job dicts.
+    The first entry in each group is the *primary* job (drives issue creation).
+    """
+    signatures: list[str] = []
+    for job in jobs:
+        sig = ""
+        for log_path in job.get("log_paths", []):
+            try:
+                text = Path(log_path).read_text(errors="replace")[:100_000]
+                sig = _extract_error_signature(text)
+                if sig:
+                    break
+            except Exception:
+                pass
+        signatures.append(sig)
+        short = sig[:80] if sig else "(no signature)"
+        log(f"    Sig [{job['job_name']!r:.40}]: {short}")
+
+    visited: set[int] = set()
+    groups: list[list[dict[str, Any]]] = []
+    for i in range(len(jobs)):
+        if i in visited:
+            continue
+        group = [i]
+        visited.add(i)
+        if signatures[i]:
+            for j in range(i + 1, len(jobs)):
+                if j in visited:
+                    continue
+                if _error_similarity(signatures[i], signatures[j]) >= threshold:
+                    group.append(j)
+                    visited.add(j)
+        groups.append([jobs[k] for k in group])
+
+    merged_count = sum(1 for g in groups if len(g) > 1)
+    saved_count = sum(len(g) - 1 for g in groups if len(g) > 1)
+    if saved_count:
+        log(
+            f"  Similarity grouping: {merged_count} multi-job group(s), "
+            f"{saved_count} duplicate issue(s) suppressed"
+        )
+    return groups
