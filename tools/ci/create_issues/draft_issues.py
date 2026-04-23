@@ -14,7 +14,8 @@ _PROMPT_TEMPLATE = string.Template(
 )
 
 MARKER = "===FINAL_REVIEW==="
-_DEFAULT_MODEL = "claude-4-sonnet"
+_DEFAULT_MODEL = os.environ.get("CURSOR_MODEL", "claude-4-sonnet")
+_DEFAULT_BACKEND = os.environ.get("LLM_BACKEND", "cursor")
 _AGENT_TIMEOUT = 300
 
 
@@ -39,6 +40,32 @@ def _run_cursor_agent(prompt: str, model: str = _DEFAULT_MODEL) -> str:
             f"Cursor agent exited with code {proc.returncode}: {proc.stderr[:200]}"
         )
     return proc.stdout or ""
+
+
+def _run_copilot_agent(prompt: str) -> str:
+    safe_env = {
+        key: os.environ[key]
+        for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "COPILOT_GITHUB_TOKEN")
+        if key in os.environ
+    }
+    proc = subprocess.run(
+        ["copilot", "-p", prompt, "--allow-all-tools"],
+        capture_output=True,
+        text=True,
+        timeout=_AGENT_TIMEOUT,
+        env=safe_env,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"Copilot agent exited with code {proc.returncode}: {proc.stderr[:200]}"
+        )
+    return proc.stdout or ""
+
+
+def _run_llm_agent(prompt: str, model: str = _DEFAULT_MODEL, backend: str = _DEFAULT_BACKEND) -> str:
+    if backend == "copilot":
+        return _run_copilot_agent(prompt)
+    return _run_cursor_agent(prompt, model)
 
 
 def _parse_agent_json(text: str) -> dict[str, Any]:
@@ -77,15 +104,16 @@ def draft_issue_body(
         log_sections="\n".join(f"- {section}" for section in log_sections),
         marker=MARKER,
     )
+    backend = os.environ.get("LLM_BACKEND", _DEFAULT_BACKEND)
     try:
-        output = _run_cursor_agent(prompt, model)
+        output = _run_llm_agent(prompt, model, backend)
         result = _parse_agent_json(output)
         if not isinstance(result, dict):
             log("  Agent returned non-dict JSON, skipping")
             return None
         return result
     except subprocess.TimeoutExpired:
-        log(f"  Cursor agent timed out after {_AGENT_TIMEOUT}s")
+        log(f"  LLM agent timed out after {_AGENT_TIMEOUT}s")
         return None
     except Exception as exc:
         log(f"  Agent drafting failed ({type(exc).__name__}): {exc}")
