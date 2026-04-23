@@ -223,7 +223,9 @@ def group_similar_jobs(
         sig = ""
         for log_path in job.get("log_paths", []):
             try:
-                text = Path(log_path).read_text(errors="replace")[:100_000]
+                text = Path(log_path).read_text(errors="replace")
+                # Read from the tail — errors appear near the end of long logs
+                text = text[-100_000:]
                 sig = _extract_error_signature(text)
                 if sig:
                     break
