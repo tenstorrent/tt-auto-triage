@@ -2,7 +2,7 @@ You are reviewing a CI failure for deterministic issue creation.
 
 Workflow: $workflow_name
 Job: $job_name
-
+$grouped_jobs_section
 Failing run URLs:
 $run_url_list
 
@@ -26,6 +26,8 @@ INSTRUCTIONS:
      **Job:** ...
      ### Failing job URLs (last $consecutive runs)
      - (list each job URL)
+     ### Affected jobs
+     - (list ALL affected jobs — primary job AND any grouped jobs listed above)
      ### Failing test path(s)
      - (identify which test files/commands are failing, from log content)
      ### Error excerpt (terminal failure from logs)
