@@ -24,6 +24,7 @@ LOOKBACK_DAYS="${LOOKBACK_DAYS:-14}"
 MAX_CANDIDATES="${MAX_CANDIDATES:-999}"
 MAX_LOG_BYTES="${MAX_LOG_BYTES:-100000}"
 MAX_RUNS_PER_WORKFLOW="${MAX_RUNS_PER_WORKFLOW:-50}"
+PHASE2_CHUNK_SIZE="${PHASE2_CHUNK_SIZE:-20}"
 
 mkdir -p "$LOGS_DIR"
 
@@ -225,7 +226,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
 
   # Download logs and build candidate list for the agent.
   # The agent will search the log files itself — no excerpt extraction needed.
-  candidates_summary=""
+  candidates_summaries=()
   candidates_meta=()
   included=0
 
@@ -256,12 +257,12 @@ for i in $(seq 0 $((num_workflows - 1))); do
       continue
     fi
 
-    candidates_summary="${candidates_summary}
+    candidates_summaries+=("
 === CANDIDATE $((included + 1)): ${job_name} ===
 Failing run IDs: $(echo "$failing_runs_arr" | jq -r '[.[].run_id | tostring] | join(", ")')
 Log directory: ${log_dir_found}
 
-"
+")
     candidates_meta+=("$(echo "$candidate" | jq -c '.')")
     included=$((included + 1))
   done
@@ -271,95 +272,118 @@ Log directory: ${log_dir_found}
     continue
   fi
 
-  log_info "    Sending $included candidates to ${LLM_BACKEND:-cursor} agent for batch classification"
+  # Split candidates into chunks to avoid LLM timeouts on large batches
+  num_chunks=$(( (included + PHASE2_CHUNK_SIZE - 1) / PHASE2_CHUNK_SIZE ))
+  log_info "    Sending $included candidates to ${LLM_BACKEND:-cursor} agent in $num_chunks chunk(s) of up to $PHASE2_CHUNK_SIZE"
 
-  # Single agent call for this workflow
-  agent_output="$(mktemp)"
-  if cursor_agent_from_template "$PROMPT_TEMPLATE" "$agent_output" \
-       "WORKFLOW_PATH=$wf_path" \
-       "TEST_LAYER=$test_layer" \
-       "CONSECUTIVE_RUNS=$CONSECUTIVE_RUNS" \
-       "CANDIDATES_SUMMARY=$candidates_summary"; then
+  phase2_early_exit=false
+  for chunk_idx in $(seq 0 $((num_chunks - 1))); do
+    chunk_start=$((chunk_idx * PHASE2_CHUNK_SIZE))
+    chunk_end=$(( chunk_start + PHASE2_CHUNK_SIZE - 1 ))
+    if [ "$chunk_end" -ge "$included" ]; then
+      chunk_end=$((included - 1))
+    fi
 
-    # The agent returns a JSON array. Iterate and match back by job name.
-    num_results=$(jq 'if type == "array" then length else 0 end' "$agent_output" 2>/dev/null || echo 0)
-    log_info "    ${LLM_BACKEND:-cursor} agent returned $num_results classifications"
+    # Build summary string for this chunk
+    chunk_summary=""
+    for ci in $(seq "$chunk_start" "$chunk_end"); do
+      chunk_summary="${chunk_summary}${candidates_summaries[$ci]}"
+    done
 
-    for idx in $(seq 0 $((num_results - 1))); do
-      result=$(jq -c ".[$idx]" "$agent_output" 2>/dev/null || echo "{}")
+    log_info "    Chunk $((chunk_idx+1))/$num_chunks: candidates $((chunk_start+1))-$((chunk_end+1))"
+    agent_output="$(mktemp)"
+    if cursor_agent_from_template "$PROMPT_TEMPLATE" "$agent_output" \
+         "WORKFLOW_PATH=$wf_path" \
+         "TEST_LAYER=$test_layer" \
+         "CONSECUTIVE_RUNS=$CONSECUTIVE_RUNS" \
+         "CANDIDATES_SUMMARY=$chunk_summary"; then
 
-      is_test_fail=$(echo "$result" | jq -r 'if .is_test_failure == null then false else .is_test_failure end' 2>/dev/null || echo "false")
-      is_infra=$(echo "$result" | jq -r 'if .is_infrastructure_noise == null then true else .is_infrastructure_noise end' 2>/dev/null || echo "true")
+      # The agent returns a JSON array. Iterate and match back by job name.
+      num_results=$(jq 'if type == "array" then length else 0 end' "$agent_output" 2>/dev/null || echo 0)
+      log_info "    ${LLM_BACKEND:-cursor} agent returned $num_results classifications"
 
-      if [ "$is_test_fail" != "true" ] || [ "$is_infra" = "true" ]; then
-        continue
-      fi
+      for idx in $(seq 0 $((num_results - 1))); do
+        result=$(jq -c ".[$idx]" "$agent_output" 2>/dev/null || echo "{}")
 
-      agent_job=$(echo "$result" | jq -r '.job // ""' 2>/dev/null || echo "")
-      test_name=$(echo "$result" | jq -r '.test_name // "null"' 2>/dev/null || echo "null")
-      failure_sig=$(echo "$result" | jq -r '.failure_signature // "unknown"' 2>/dev/null || echo "unknown")
-      confidence=$(echo "$result" | jq -r '.confidence // "low"' 2>/dev/null || echo "low")
-      reasoning=$(echo "$result" | jq -r '.reasoning // ""' 2>/dev/null || echo "")
+        is_test_fail=$(echo "$result" | jq -r 'if .is_test_failure == null then false else .is_test_failure end' 2>/dev/null || echo "false")
+        is_infra=$(echo "$result" | jq -r 'if .is_infrastructure_noise == null then true else .is_infrastructure_noise end' 2>/dev/null || echo "true")
 
-      if [ "$test_name" = "null" ] || [ "$test_name" = "unknown" ] || [ -z "$test_name" ]; then
-        log_info "      Skipping '$agent_job': agent confirmed failure but couldn't identify the test name"
-        continue
-      fi
+        if [ "$is_test_fail" != "true" ] || [ "$is_infra" = "true" ]; then
+          continue
+        fi
 
-      # Match back to candidate metadata to get failing_run_ids
-      matched_meta=""
-      for m in "${candidates_meta[@]}"; do
-        meta_job=$(echo "$m" | jq -r '.job')
-        if [ "$meta_job" = "$agent_job" ]; then
-          matched_meta="$m"
+        agent_job=$(echo "$result" | jq -r '.job // ""' 2>/dev/null || echo "")
+        test_name=$(echo "$result" | jq -r '.test_name // "null"' 2>/dev/null || echo "null")
+        failure_sig=$(echo "$result" | jq -r '.failure_signature // "unknown"' 2>/dev/null || echo "unknown")
+        confidence=$(echo "$result" | jq -r '.confidence // "low"' 2>/dev/null || echo "low")
+        reasoning=$(echo "$result" | jq -r '.reasoning // ""' 2>/dev/null || echo "")
+
+        if [ "$test_name" = "null" ] || [ "$test_name" = "unknown" ] || [ -z "$test_name" ]; then
+          log_info "      Skipping '$agent_job': agent confirmed failure but couldn't identify the test name"
+          continue
+        fi
+
+        # Match back to candidate metadata to get failing_run_ids
+        matched_meta=""
+        for m in "${candidates_meta[@]}"; do
+          meta_job=$(echo "$m" | jq -r '.job')
+          if [ "$meta_job" = "$agent_job" ]; then
+            matched_meta="$m"
+            break
+          fi
+        done
+
+        if [ -z "$matched_meta" ]; then
+          log_warn "      Agent returned job '$agent_job' not found in candidates — skipping"
+          continue
+        fi
+
+        failing_run_ids=$(echo "$matched_meta" | jq -c '.failing_runs')
+        is_flaky=$(echo "$matched_meta" | jq -r '.likely_flaky // false')
+        flake_score=$(echo "$matched_meta" | jq -r '.flake_score // 0')
+
+        # Refine test_layer from the test path when possible (more specific than workflow-level)
+        effective_test_layer="$test_layer"
+        test_file_path="${test_name%%::*}"
+        refined_layer=$(be_file_to_layer "$test_file_path" 2>/dev/null || echo "unknown")
+        if [ "$refined_layer" != "unknown" ] && [ -n "$refined_layer" ]; then
+          effective_test_layer="$refined_layer"
+        fi
+
+        log_info "      CONFIRMED: $test_name ($agent_job, confidence=$confidence, flaky=$is_flaky, layer=$effective_test_layer)"
+
+        jq --arg wf "$wf_path" \
+           --arg job "$agent_job" \
+           --arg tn "$test_name" \
+           --arg fs "$failure_sig" \
+           --argjson frid "$failing_run_ids" \
+           --arg tl "$effective_test_layer" \
+           --arg conf "$confidence" \
+           --arg notes "$reasoning" \
+           --argjson flaky "$is_flaky" \
+           --argjson fscore "$flake_score" \
+           '. += [{"workflow": $wf, "job": $job, "test_name": $tn, "failure_signature": $fs, "failing_run_ids": $frid, "test_layer": $tl, "agent_confidence": $conf, "agent_notes": $notes, "likely_flaky": $flaky, "flake_score": $fscore}]' \
+           "$FAILURES_OUTPUT" > "${FAILURES_OUTPUT}.tmp" && mv "${FAILURES_OUTPUT}.tmp" "$FAILURES_OUTPUT"
+
+        total_confirmed=$(jq 'length' "$FAILURES_OUTPUT")
+        if [ "$total_confirmed" -ge "$MAX_CANDIDATES" ]; then
+          log_info "      Reached MAX_CANDIDATES=$MAX_CANDIDATES — stopping Phase 2 early"
+          phase2_early_exit=true
           break
         fi
       done
+    else
+      log_warn "    Agent call failed for chunk $((chunk_idx+1)) of $wf_path — skipping chunk"
+    fi
 
-      if [ -z "$matched_meta" ]; then
-        log_warn "      Agent returned job '$agent_job' not found in candidates — skipping"
-        continue
-      fi
-
-      failing_run_ids=$(echo "$matched_meta" | jq -c '.failing_runs')
-      is_flaky=$(echo "$matched_meta" | jq -r '.likely_flaky // false')
-      flake_score=$(echo "$matched_meta" | jq -r '.flake_score // 0')
-
-      # Refine test_layer from the test path when possible (more specific than workflow-level)
-      effective_test_layer="$test_layer"
-      test_file_path="${test_name%%::*}"
-      refined_layer=$(be_file_to_layer "$test_file_path" 2>/dev/null || echo "unknown")
-      if [ "$refined_layer" != "unknown" ] && [ -n "$refined_layer" ]; then
-        effective_test_layer="$refined_layer"
-      fi
-
-      log_info "      CONFIRMED: $test_name ($agent_job, confidence=$confidence, flaky=$is_flaky, layer=$effective_test_layer)"
-
-      jq --arg wf "$wf_path" \
-         --arg job "$agent_job" \
-         --arg tn "$test_name" \
-         --arg fs "$failure_sig" \
-         --argjson frid "$failing_run_ids" \
-         --arg tl "$effective_test_layer" \
-         --arg conf "$confidence" \
-         --arg notes "$reasoning" \
-         --argjson flaky "$is_flaky" \
-         --argjson fscore "$flake_score" \
-         '. += [{"workflow": $wf, "job": $job, "test_name": $tn, "failure_signature": $fs, "failing_run_ids": $frid, "test_layer": $tl, "agent_confidence": $conf, "agent_notes": $notes, "likely_flaky": $flaky, "flake_score": $fscore}]' \
-         "$FAILURES_OUTPUT" > "${FAILURES_OUTPUT}.tmp" && mv "${FAILURES_OUTPUT}.tmp" "$FAILURES_OUTPUT"
-
-      total_confirmed=$(jq 'length' "$FAILURES_OUTPUT")
-      if [ "$total_confirmed" -ge "$MAX_CANDIDATES" ]; then
-        log_info "      Reached MAX_CANDIDATES=$MAX_CANDIDATES — stopping Phase 2 early"
-        rm -f "$agent_output"
-        break 2
-      fi
-    done
-  else
-    log_warn "    Agent call failed for workflow $wf_path — skipping"
+    rm -f "$agent_output"
+    if [ "$phase2_early_exit" = "true" ]; then
+      break
+    fi
+  done
+  if [ "$phase2_early_exit" = "true" ]; then
+    break
   fi
-
-  rm -f "$agent_output"
 done
 
 total_failures=$(jq 'length' "$FAILURES_OUTPUT")
