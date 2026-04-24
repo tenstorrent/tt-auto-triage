@@ -150,13 +150,145 @@ print(' '.join(skus.keys()))
 }
 
 # ---------------------------------------------------------------------------
+# _build_pruned_yaml_agent TEST_JOB TEST_NAME ENTRY_JSON
+#
+# Agent-based pruned YAML generation. Calls the LLM API directly to produce
+# a correct single-entry YAML that preserves ALL fields from the original
+# entry and adjusts the cmd to run only the specific test.
+# Returns YAML on stdout. Returns 1 if agent unavailable or call failed.
+# ---------------------------------------------------------------------------
+_build_pruned_yaml_agent() {
+  local test_job="$1" test_name="$2" entry_json="$3"
+  local llm_backend="${LLM_BACKEND:-cursor}"
+  local active_key=""
+
+  if [ "$llm_backend" = "copilot" ]; then
+    active_key="${COPILOT_GITHUB_TOKEN:-}"
+  else
+    active_key="${CURSOR_API_KEY:-}"
+  fi
+
+  if [ -z "$active_key" ]; then
+    return 1
+  fi
+
+  # Build prompt — use a temp file to avoid ARG_MAX issues with large JSON
+  local prompt_file
+  prompt_file=$(mktemp)
+  cat > "$prompt_file" <<'PROMPT_DELIM'
+You are generating a pruned test matrix YAML for CI verification of a bug escape.
+
+Original test entry (JSON):
+PROMPT_DELIM
+  echo "$entry_json" >> "$prompt_file"
+  cat >> "$prompt_file" <<PROMPT_DELIM
+
+Test job display name: ${test_job}
+Specific test to run: ${test_name}
+
+Generate a single-entry YAML list that:
+1. Preserves ALL fields from the original entry exactly (name, cmd, skus, owner_id, team, model-name, and any other fields present).
+2. Modifies ONLY the 'cmd' field:
+   - If the test name contains '::' or ends in '.py' (a pytest path), replace cmd with:
+       pytest "${test_name}"
+     (quote the test name with double-quotes since it may contain brackets)
+   - If the test name does NOT look like a pytest path, keep the original cmd unchanged.
+
+Output ONLY valid YAML — no markdown fences, no explanation.
+Start with exactly this comment line, then the YAML list:
+# Pruned to single test for bug escape verification
+PROMPT_DELIM
+  # Substitute shell variables in prompt
+  sed -i "s|\${test_job}|$test_job|g; s|\${test_name}|$test_name|g" "$prompt_file"
+
+  local prompt
+  prompt=$(<"$prompt_file")
+  rm -f "$prompt_file"
+
+  # Build JSON payload
+  local payload tmpfile http_code
+  tmpfile=$(mktemp)
+  payload=$(python3 -c "
+import json, sys
+prompt = sys.stdin.read()
+print(json.dumps({
+    'model': 'claude-3-5-sonnet',
+    'messages': [{'role': 'user', 'content': prompt}],
+    'max_tokens': 512
+}))
+" <<< "$prompt")
+
+  if [ "$llm_backend" = "copilot" ]; then
+    http_code=$(curl -s -o "$tmpfile" -w "%{http_code}" \
+      -X POST "https://models.inference.ai.azure.com/chat/completions" \
+      -H "Authorization: Bearer $active_key" \
+      -H "Content-Type: application/json" \
+      -d "$payload" 2>/dev/null) || true
+  else
+    http_code=$(curl -s -o "$tmpfile" -w "%{http_code}" \
+      -X POST "https://api.cursor.sh/v1/chat/completions" \
+      -H "Authorization: Bearer $active_key" \
+      -H "Content-Type: application/json" \
+      -d "$payload" 2>/dev/null) || true
+  fi
+
+  if [ "$http_code" != "200" ]; then
+    verify_warn "_build_pruned_yaml_agent: ${llm_backend} API returned HTTP $http_code"
+    rm -f "$tmpfile"
+    return 1
+  fi
+
+  # Extract and validate YAML from LLM response
+  local yaml_content
+  yaml_content=$(python3 -c "
+import json, sys, re, yaml
+try:
+    resp = json.load(sys.stdin)
+    content = resp['choices'][0]['message']['content'].strip()
+    # Strip markdown fences if present
+    content = re.sub(r'^\x60\x60\x60(?:yaml)?\s*', '', content)
+    content = re.sub(r'\s*\x60\x60\x60\s*$', '', content)
+    content = content.strip()
+    # Validate: must contain a YAML list with cmd field
+    yaml_part = '\n'.join(l for l in content.splitlines() if not l.startswith('#'))
+    parsed = yaml.safe_load(yaml_part)
+    if not isinstance(parsed, list) or len(parsed) == 0 or 'cmd' not in parsed[0]:
+        raise ValueError('invalid YAML structure')
+    print(content)
+except Exception as e:
+    print(f'# agent-error: {e}', file=sys.stderr)
+    sys.exit(1)
+" < "$tmpfile" 2>/dev/null) || { rm -f "$tmpfile"; return 1; }
+
+  rm -f "$tmpfile"
+
+  if [ -n "$yaml_content" ]; then
+    echo "$yaml_content"
+    return 0
+  fi
+  return 1
+}
+
+# ---------------------------------------------------------------------------
 # build_pruned_yaml TEST_JOB TEST_NAME TEST_ENTRY_JSON
 #
 # Generates a single-entry YAML list for the pruned test matrix.
+# Tries LLM agent first (preserves ALL original fields); falls back to
+# a hardcoded Python extractor that handles common field shapes.
 # Outputs YAML content on stdout.
 # ---------------------------------------------------------------------------
 build_pruned_yaml() {
   local test_job="$1" test_name="$2" entry_json="$3"
+
+  # Try agent-based generation first — more robust, handles any workflow shape
+  local agent_yaml
+  if agent_yaml=$(_build_pruned_yaml_agent "$test_job" "$test_name" "$entry_json" 2>/dev/null); then
+    verify_info "build_pruned_yaml: agent-generated pruned YAML"
+    echo "$agent_yaml"
+    return 0
+  fi
+
+  verify_info "build_pruned_yaml: agent unavailable/failed, using Python fallback"
 
   python3 -c "
 import json, sys, yaml, re
@@ -194,12 +326,16 @@ pruned = {
     'team': entry.get('team', 'UNKNOWN'),
 }
 
+# Preserve extra fields beyond the standard set
+for k, v in entry.items():
+    if k not in pruned:
+        pruned[k] = v
+
 # Add comment
 print('# Pruned to single test for bug escape verification')
 print(yaml.dump([pruned], default_flow_style=False).rstrip())
 " 2>/dev/null
 }
-
 # ---------------------------------------------------------------------------
 # poll_run_start RUN_ID START_WAIT_MINUTES
 #
@@ -474,4 +610,5 @@ wait_for_run_to_appear() {
   printf '[verify][WARN] Could not find run for %s on %s after %d attempts\n' "$wf_basename" "$branch" "$max_attempts" >&2
   return 1
 }
+
 
