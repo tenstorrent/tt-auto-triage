@@ -27,10 +27,10 @@ if [ -n "${TEST_WORKFLOWS:-}" ]; then
   for wf in "${wf_filter[@]}"; do
     wf=$(echo "$wf" | xargs)  # trim whitespace
     if [ "$first" = true ]; then
-      filter_jq+=".path == \"$wf\""
+      filter_jq+="(.path == \"$wf\" or (.path | endswith(\"/\" + \"$wf\")))"
       first=false
     else
-      filter_jq+=" or .path == \"$wf\""
+      filter_jq+=" or (.path == \"$wf\" or (.path | endswith(\"/\" + \"$wf\")))"
     fi
   done
   filter_jq+=')]'
