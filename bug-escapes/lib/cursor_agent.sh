@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 #
-# cursor_agent.sh — Wrapper for headless Cursor CLI agent invocations.
+# cursor_agent.sh — Wrapper for headless LLM agent invocations.
+#
+# Supports two backends, selected by the LLM_BACKEND env var:
+#   cursor  (default) — Cursor CLI:  agent --trust --model auto -p "$prompt"
+#   copilot           — Copilot CLI: copilot -p "$prompt" --allow-all-tools
 #
 # Provides functions for sending prompts to the agent, extracting JSON,
 # and substituting variables into prompt templates.
@@ -47,9 +51,15 @@ cursor_agent_query() {
     local exit_code=0
     local stderr_file
     stderr_file="$(mktemp)"
-    timeout "$CURSOR_AGENT_TIMEOUT" \
-      agent --trust --model auto -p "$prompt" \
-      > "$output_file" 2>"$stderr_file" || exit_code=$?
+    if [ "${LLM_BACKEND:-cursor}" = "copilot" ]; then
+      timeout "$CURSOR_AGENT_TIMEOUT" \
+        copilot -p "$prompt" --allow-all-tools \
+        > "$output_file" 2>"$stderr_file" || exit_code=$?
+    else
+      timeout "$CURSOR_AGENT_TIMEOUT" \
+        agent --trust --model auto -p "$prompt" \
+        > "$output_file" 2>"$stderr_file" || exit_code=$?
+    fi
 
     if [ "$exit_code" -eq 0 ] && [ -s "$output_file" ]; then
       rm -f "$stderr_file"
