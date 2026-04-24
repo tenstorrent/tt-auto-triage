@@ -22,8 +22,8 @@ MAX_PHASE="${MAX_PHASE:-4}"
 # Pre-flight checks
 # -------------------------------------------------------------------
 check_command jq gh
-if [ -z "${CURSOR_API_KEY:-}" ]; then
-  die "CURSOR_API_KEY is not set"
+if [ "${LLM_BACKEND:-cursor}" != "copilot" ] && [ -z "${CURSOR_API_KEY:-}" ]; then
+  die "CURSOR_API_KEY is not set (required for cursor backend)"
 fi
 
 log_info "=== Bug Escape Detection — start ==="
