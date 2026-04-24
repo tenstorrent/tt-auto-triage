@@ -276,7 +276,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
         candidate_snippet=$(find "$run_search_dir" -type f -name "*.txt" 2>/dev/null \
           | sort \
           | xargs -I{} tail -c 30000 {} 2>/dev/null \
-          | grep -i "FAILED\|TT_FATAL\|TT_THROW\|AssertionError\|RuntimeError\|ERROR:\|Error:\|exit code [1-9]\|non-zero exit\|[Kk]illed\|[Tt]raceback\|[Ss]egmentation fault\|CUDA error\|pytest.*FAILED\|FAIL " 2>/dev/null \
+          | grep -i "FAILED\|TT_FATAL\|TT_THROW\|AssertionError\|RuntimeError\|ERROR:\|Error:\|exit code [1-9]\|non-zero exit\|[Kk]illed\|[Tt]raceback\|[Ss]egmentation fault\|CUDA error\|pytest.*FAILED\|FAIL \|[Hh]ealth check.*[Ff]ailed\|[Hh]ealth checks failed\|[Tt]imeout\|[Cc]onnection refused\|[Cc]annot connect\|runner.*lost\|[Ll]ost communication" 2>/dev/null \
           | tail -40 \
           || true)
         if [ -n "$candidate_snippet" ]; then
