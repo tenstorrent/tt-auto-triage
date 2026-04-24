@@ -118,3 +118,15 @@ Traced false negatives from run 24904276503 (all 88 candidates classified infra 
 - **Verify**: skipped (no qualifying escapes)
 - **Duration**: ~5 minutes
 - **Notes**: Large candidate pool (85) for blackhole-e2e — significantly more than other workflows. All classified as infra noise or flaky after LLM review. No real bug escapes detected in last 7 days on this workflow.
+
+
+## 2026-04-24 21:08 UTC — single-card-demo-tests.yaml
+
+- **Run ID**: [24911646290](https://github.com/tenstorrent/tt-metal/actions/runs/24911646290)
+- **Workflow scanned**: `.github/workflows/single-card-demo-tests.yaml`
+- **Backend**: copilot | **mock-verify**: false | **lookback**: 7d | **threshold**: 3 consecutive
+- **Phase 2**: 66 candidates reviewed by LLM (4 chunks of 20, 1 flaky-filtered) → 0 confirmed consistent failures
+- **Bug escapes**: 0 (horizontal=0, vertical=0, cross_layer=0, unknown=0)
+- **Verify**: skipped (no qualifying escapes)
+- **Duration**: ~8 minutes
+- **Notes**: 66 candidates is a notable candidate volume for single-card-demo-tests, though LLM classified all as infra noise or flaky. The 1 flaky-filtered candidate is expected. No real bug escapes detected in last 7 days on this workflow.
