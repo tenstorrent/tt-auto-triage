@@ -41,17 +41,18 @@ cursor_agent_query() {
   local output_file="$2"
   local attempt=0
   local max_retries="${CURSOR_AGENT_MAX_RETRIES}"
+  local backend="${LLM_BACKEND:-cursor}"
 
   while [ "$attempt" -le "$max_retries" ]; do
     if [ "$attempt" -gt 0 ]; then
-      log_warn "cursor_agent_query: retry $attempt/$max_retries"
+      log_warn "${backend}_agent: retry $attempt/$max_retries"
       sleep $((attempt * 5))
     fi
 
     local exit_code=0
     local stderr_file
     stderr_file="$(mktemp)"
-    if [ "${LLM_BACKEND:-cursor}" = "copilot" ]; then
+    if [ "$backend" = "copilot" ]; then
       timeout "$CURSOR_AGENT_TIMEOUT" \
         copilot -p "$prompt" --allow-all-tools \
         > "$output_file" 2>"$stderr_file" || exit_code=$?
@@ -67,11 +68,11 @@ cursor_agent_query() {
     fi
 
     if [ "$exit_code" -eq 124 ]; then
-      log_warn "cursor_agent_query: timed out after ${CURSOR_AGENT_TIMEOUT}s"
+      log_warn "${backend}_agent: timed out after ${CURSOR_AGENT_TIMEOUT}s"
     else
-      log_warn "cursor_agent_query: failed with exit code $exit_code"
+      log_warn "${backend}_agent: failed with exit code $exit_code"
       if [ -s "$stderr_file" ]; then
-        log_warn "cursor_agent_query stderr: $(head -c 500 "$stderr_file")"
+        log_warn "${backend}_agent stderr: $(head -c 500 "$stderr_file")"
       fi
     fi
     rm -f "$stderr_file"
@@ -79,7 +80,7 @@ cursor_agent_query() {
     attempt=$((attempt + 1))
   done
 
-  log_error "cursor_agent_query: all attempts exhausted"
+  log_error "${backend}_agent: all attempts exhausted"
   return 1
 }
 
