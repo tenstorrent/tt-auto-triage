@@ -236,8 +236,17 @@ for i in $(seq 0 $((num_workflows - 1))); do
     job_name=$(echo "$candidate" | jq -r '.job')
     failing_runs_arr=$(echo "$candidate" | jq -c '.failing_runs')
 
-    # Download logs for at least one failing run
+    # Download logs for failing runs; try each until we find error lines.
+    # This prevents misclassifying a job as "infra noise" when the first run's
+    # log tail is dominated by post-test output (AI summary errors, cleanup, etc.)
+    # and the actual test failures only appear in a later run's log.
     log_dir_found=""
+    log_snippet=""
+
+    # Normalize job name for fuzzy matching (needed for job dir search below)
+    job_slug=$(echo "$job_name" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' ' ' | xargs)
+    first_word=$(echo "$job_slug" | cut -d' ' -f1)
+
     for try_run_id in $(echo "$failing_runs_arr" | jq -r '.[].run_id'); do
       run_log_dir="$LOGS_DIR/run_${try_run_id}"
       if [ ! -d "$run_log_dir" ]; then
@@ -247,8 +256,33 @@ for i in $(seq 0 $((num_workflows - 1))); do
         }
       fi
       if [ -d "$run_log_dir" ]; then
-        log_dir_found="$run_log_dir"
-        break
+        # Remember the first successfully downloaded run as fallback
+        if [ -z "$log_dir_found" ]; then
+          log_dir_found="$run_log_dir"
+        fi
+
+        # Try to extract error lines from this run; move on if nothing found
+        run_job_dir=""
+        if [ -n "$first_word" ]; then
+          while IFS= read -r d; do
+            dir_slug=$(basename "$d" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' ' ' | xargs)
+            if echo "$dir_slug" | grep -q "$first_word"; then
+              run_job_dir="$d"
+              break
+            fi
+          done < <(find "$run_log_dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+        fi
+        run_search_dir="${run_job_dir:-$run_log_dir}"
+        candidate_snippet=$(find "$run_search_dir" -type f -name "*.txt" 2>/dev/null \
+          | sort \
+          | xargs -I{} tail -c 30000 {} 2>/dev/null \
+          | grep -i "FAILED\|TT_FATAL\|TT_THROW\|AssertionError\|RuntimeError\|ERROR:\|Error:\|exit code [1-9]\|non-zero exit\|[Kk]illed\|[Tt]raceback\|[Ss]egmentation fault\|CUDA error\|pytest.*FAILED\|FAIL " 2>/dev/null \
+          | tail -40 \
+          || true)
+        if [ -n "$candidate_snippet" ]; then
+          log_snippet="$candidate_snippet"
+          break  # Found error lines — no need to try more runs
+        fi
       fi
     done
 
@@ -256,37 +290,6 @@ for i in $(seq 0 $((num_workflows - 1))); do
       log_info "      Could not download logs for '$job_name' — skipping"
       continue
     fi
-
-    # Pre-extract error lines from the log files so the LLM doesn't need to do
-    # file I/O during its call. GitHub Actions logs unzip to:
-    #   run_dir/JobName/NNN_StepName.txt
-    # We find the closest-matching job subdir, grep for error patterns, and include
-    # the results directly in the candidate summary.
-    log_snippet=""
-    {
-      # Normalize job name for fuzzy matching
-      job_slug=$(echo "$job_name" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' ' ' | xargs)
-      first_word=$(echo "$job_slug" | cut -d' ' -f1)
-
-      job_dir=""
-      if [ -n "$first_word" ]; then
-        while IFS= read -r d; do
-          dir_slug=$(basename "$d" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' ' ' | xargs)
-          if echo "$dir_slug" | grep -q "$first_word"; then
-            job_dir="$d"
-            break
-          fi
-        done < <(find "$log_dir_found" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
-      fi
-
-      search_dir="${job_dir:-$log_dir_found}"
-      log_snippet=$(find "$search_dir" -type f -name "*.txt" 2>/dev/null \
-        | sort \
-        | xargs -I{} tail -c 30000 {} 2>/dev/null \
-        | grep -i "FAILED\|TT_FATAL\|TT_THROW\|AssertionError\|RuntimeError\|ERROR:\|Error:\|exit code [1-9]\|non-zero exit\|[Kk]illed\|[Tt]raceback\|[Ss]egmentation fault\|CUDA error\|pytest.*FAILED\|FAIL " 2>/dev/null \
-        | tail -40 \
-        || true)
-    }
 
     candidates_summaries+=("
 === CANDIDATE $((included + 1)): ${job_name} ===
