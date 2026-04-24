@@ -271,7 +271,7 @@ Log directory: ${log_dir_found}
     continue
   fi
 
-  log_info "    Sending $included candidates to agent for batch classification"
+  log_info "    Sending $included candidates to ${LLM_BACKEND:-cursor} agent for batch classification"
 
   # Single agent call for this workflow
   agent_output="$(mktemp)"
@@ -283,7 +283,7 @@ Log directory: ${log_dir_found}
 
     # The agent returns a JSON array. Iterate and match back by job name.
     num_results=$(jq 'if type == "array" then length else 0 end' "$agent_output" 2>/dev/null || echo 0)
-    log_info "    Agent returned $num_results classifications"
+    log_info "    ${LLM_BACKEND:-cursor} agent returned $num_results classifications"
 
     for idx in $(seq 0 $((num_results - 1))); do
       result=$(jq -c ".[$idx]" "$agent_output" 2>/dev/null || echo "{}")
