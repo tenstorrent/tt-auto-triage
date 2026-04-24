@@ -48,12 +48,20 @@ if ! command -v envsubst &>/dev/null; then
 fi
 log_info "  envsubst: ok"
 
-log_info "Checking agent CLI..."
-agent_version=$(agent --version 2>/dev/null || echo "FAILED")
-if [ "$agent_version" = "FAILED" ]; then
-  die "agent CLI not working (agent --version failed)"
+log_info "Checking LLM CLI (LLM_BACKEND=${LLM_BACKEND:-cursor})..."
+if [ "${LLM_BACKEND:-cursor}" = "copilot" ]; then
+  copilot_ver=$(copilot --version 2>/dev/null || echo "FAILED")
+  if [ "$copilot_ver" = "FAILED" ]; then
+    die "copilot CLI not working (copilot --version failed)"
+  fi
+  log_info "  copilot version: $copilot_ver"
+else
+  agent_version=$(agent --version 2>/dev/null || echo "FAILED")
+  if [ "$agent_version" = "FAILED" ]; then
+    die "agent CLI not working (agent --version failed)"
+  fi
+  log_info "  agent version: $agent_version"
 fi
-log_info "  agent version: $agent_version"
 
 log_info "Checking gh authentication..."
 gh_check=$(gh api repos/tenstorrent/tt-metal --jq '.full_name' 2>/dev/null || echo "FAILED")
