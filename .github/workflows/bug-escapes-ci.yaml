@@ -88,13 +88,20 @@ on:
         description: "Max minutes a running tt-metal run may take after starting before verify.sh gives up"
         type: string
         default: "120"
+      llm-backend:
+        description: "LLM backend for agent-driven steps: 'cursor' (default) or 'copilot'"
+        type: string
+        default: "cursor"
     secrets:
       GITHUB_READ_TOKEN:
         description: "Token with read access to target-repo workflow runs"
         required: true
       CURSOR_API_KEY:
-        description: "Cursor CLI API key for agent-driven steps"
-        required: true
+        description: "Cursor CLI API key (required when llm-backend=cursor)"
+        required: false
+      COPILOT_PAT:
+        description: "GitHub PAT with Copilot access (required when llm-backend=copilot)"
+        required: false
       GITHUB_WRITE_TOKEN:
         description: "Token with contents:write + actions:write on tt-metal for verification. Required when auto-verify=true."
         required: false
@@ -123,33 +130,51 @@ jobs:
           repository: tenstorrent/tt-auto-triage
           ref: ebanerjee/bug-escapes
 
-      - name: Install Cursor CLI
+      - name: Install LLM CLI
+        env:
+          LLM_BACKEND: ${{ inputs.llm-backend }}
         run: |
           set -euo pipefail
-          install_script="$(mktemp)"
-          curl --fail --show-error --silent --location \
-            --proto '=https' --tlsv1.2 \
-            https://cursor.com/install \
-            -o "$install_script"
-          bash "$install_script"
-          rm -f "$install_script"
-          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+          if [ "${LLM_BACKEND:-cursor}" = "copilot" ]; then
+            npm install -g @github/copilot
+            copilot --version || echo "::warning::copilot version check failed"
+          else
+            install_script="$(mktemp)"
+            curl --fail --show-error --silent --location \
+              --proto '=https' --tlsv1.2 \
+              https://cursor.com/install \
+              -o "$install_script"
+            bash "$install_script"
+            rm -f "$install_script"
+            echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+          fi
 
       - name: Validate secrets
         env:
+          LLM_BACKEND: ${{ inputs.llm-backend }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
         run: |
           set -euo pipefail
-          if [ -z "${CURSOR_API_KEY:-}" ]; then
-            echo "::error::CURSOR_API_KEY is not set"
-            exit 1
+          if [ "${LLM_BACKEND:-cursor}" = "copilot" ]; then
+            if [ -z "${COPILOT_PAT:-}" ]; then
+              echo "::error::COPILOT_PAT is required when llm-backend=copilot"
+              exit 1
+            fi
+          else
+            if [ -z "${CURSOR_API_KEY:-}" ]; then
+              echo "::error::CURSOR_API_KEY is required when llm-backend=cursor"
+              exit 1
+            fi
+            agent --version 2>/dev/null || echo "::warning::agent version check failed"
           fi
-          agent --version 2>/dev/null || echo "::warning::agent version check failed"
 
       - name: Run bug escape detection
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_READ_TOKEN }}
+          LLM_BACKEND: ${{ inputs.llm-backend }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
           CONSECUTIVE_RUNS: ${{ inputs.consecutive-runs }}
           MAX_PHASE: ${{ inputs.max-phase }}
           TEST_WORKFLOWS: ${{ inputs.test-workflows }}
@@ -340,7 +365,9 @@ jobs:
         if: steps.gate.outputs.skipped != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN || github.token }}
+          LLM_BACKEND: ${{ inputs.llm-backend }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
           FIX_COMMIT_SHA: ${{ matrix.escape.fix_commit_sha }}
           TEST_PIPELINE: ${{ matrix.escape.test_pipeline }}
           TEST_JOB: ${{ matrix.escape.test_job }}
