@@ -158,31 +158,6 @@
       "test_layer": "multi-layer"
     },
     {
-      "path": ".github/workflows/models-post-commit.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
-    {
-      "path": ".github/workflows/ttnn-post-commit.yaml",
-      "classification": "other",
-      "test_layer": "ttnn"
-    },
-    {
-      "path": ".github/workflows/cpp-post-commit.yaml",
-      "classification": "other",
-      "test_layer": "tt-metalium"
-    },
-    {
-      "path": ".github/workflows/ops-post-commit.yaml",
-      "classification": "other",
-      "test_layer": "ttnn"
-    },
-    {
-      "path": ".github/workflows/tt-train-post-commit.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
-    {
       "path": ".github/workflows/blackhole-e2e-tests.yaml",
       "classification": "other",
       "test_layer": "multi-layer"
@@ -201,11 +176,6 @@
       "path": ".github/workflows/models-t3-e2e-tests.yaml",
       "classification": "other",
       "test_layer": "models"
-    },
-    {
-      "path": ".github/workflows/runtime-perf-tests.yaml",
-      "classification": "other",
-      "test_layer": "tt-metalium"
     },
     {
       "path": ".github/workflows/galaxy-e2e-tests.yaml",
