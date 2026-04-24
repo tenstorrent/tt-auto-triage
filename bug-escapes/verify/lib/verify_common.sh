@@ -279,25 +279,40 @@ check_no_tests_ran() {
 # ---------------------------------------------------------------------------
 # check_failure_is_real RUN_ID TEST_JOB EXPECTED_FAILURE_SIG CURSOR_API_KEY
 #
-# Uses the Cursor AI API to classify a job failure as real vs infra/unrelated.
-# Fetches the last 200 lines of the job log and asks Cursor to analyze them.
+# Classifies a job failure as real vs infra/unrelated using an LLM.
+# Backend is chosen by LLM_BACKEND env var (default: cursor):
+#   cursor  — Cursor AI REST API (api.cursor.sh), requires CURSOR_API_KEY ($4)
+#   copilot — GitHub Models API (models.inference.ai.azure.com), requires
+#             COPILOT_GITHUB_TOKEN env var
 #
 # Returns one of: real_failure, infra_failure, unrelated_failure, inconclusive
 # on stdout.
 #
 # Conservative defaults:
-#   - If CURSOR_API_KEY is empty → returns "real_failure" (skip check)
+#   - If no API key/token available → returns "real_failure" (skip check)
 #   - If log fetch fails → returns "real_failure" (don't drop real failures)
 #   - If API call fails or response unparseable → returns "inconclusive"
 # ---------------------------------------------------------------------------
 check_failure_is_real() {
   local run_id="$1" test_job="$2" expected_sig="${3:-}" cursor_api_key="${4:-}"
+  local llm_backend="${LLM_BACKEND:-cursor}"
 
-  # Skip if no API key — conservative: treat as real
-  if [ -z "$cursor_api_key" ]; then
-    verify_info "check_failure_is_real: no CURSOR_API_KEY, assuming real_failure"
-    echo "real_failure"
-    return 0
+  # Resolve the active API key/token based on backend
+  local active_key=""
+  if [ "$llm_backend" = "copilot" ]; then
+    active_key="${COPILOT_GITHUB_TOKEN:-}"
+    if [ -z "$active_key" ]; then
+      verify_info "check_failure_is_real: no COPILOT_GITHUB_TOKEN, assuming real_failure"
+      echo "real_failure"
+      return 0
+    fi
+  else
+    active_key="$cursor_api_key"
+    if [ -z "$active_key" ]; then
+      verify_info "check_failure_is_real: no CURSOR_API_KEY, assuming real_failure"
+      echo "real_failure"
+      return 0
+    fi
   fi
 
   # Fetch job logs via GitHub REST API (no gh CLI dependency)
@@ -366,14 +381,22 @@ print(json.dumps({
   local tmpfile
   tmpfile=$(mktemp)
 
-  http_code=$(curl -s -o "$tmpfile" -w "%{http_code}" \
-    -X POST "https://api.cursor.sh/v1/chat/completions" \
-    -H "Authorization: Bearer $cursor_api_key" \
-    -H "Content-Type: application/json" \
-    -d "$payload" 2>/dev/null) || true
+  if [ "$llm_backend" = "copilot" ]; then
+    http_code=$(curl -s -o "$tmpfile" -w "%{http_code}" \
+      -X POST "https://models.inference.ai.azure.com/chat/completions" \
+      -H "Authorization: Bearer $active_key" \
+      -H "Content-Type: application/json" \
+      -d "$payload" 2>/dev/null) || true
+  else
+    http_code=$(curl -s -o "$tmpfile" -w "%{http_code}" \
+      -X POST "https://api.cursor.sh/v1/chat/completions" \
+      -H "Authorization: Bearer $active_key" \
+      -H "Content-Type: application/json" \
+      -d "$payload" 2>/dev/null) || true
+  fi
 
   if [ "$http_code" != "200" ]; then
-    verify_warn "check_failure_is_real: Cursor API returned HTTP $http_code, returning inconclusive"
+    verify_warn "check_failure_is_real: ${llm_backend} API returned HTTP $http_code, returning inconclusive"
     rm -f "$tmpfile"
     echo "inconclusive"
     return 0
@@ -451,3 +474,4 @@ wait_for_run_to_appear() {
   printf '[verify][WARN] Could not find run for %s on %s after %d attempts\n' "$wf_basename" "$branch" "$max_attempts" >&2
   return 1
 }
+
