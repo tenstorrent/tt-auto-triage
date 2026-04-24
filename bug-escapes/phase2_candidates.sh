@@ -243,10 +243,6 @@ for i in $(seq 0 $((num_workflows - 1))); do
     log_dir_found=""
     log_snippet=""
 
-    # Normalize job name for fuzzy matching (needed for job dir search below)
-    job_slug=$(echo "$job_name" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' ' ' | xargs)
-    first_word=$(echo "$job_slug" | cut -d' ' -f1)
-
     for try_run_id in $(echo "$failing_runs_arr" | jq -r '.[].run_id'); do
       run_log_dir="$LOGS_DIR/run_${try_run_id}"
       if [ ! -d "$run_log_dir" ]; then
@@ -261,22 +257,12 @@ for i in $(seq 0 $((num_workflows - 1))); do
           log_dir_found="$run_log_dir"
         fi
 
-        # Try to extract error lines from this run; move on if nothing found
-        run_job_dir=""
-        if [ -n "$first_word" ]; then
-          while IFS= read -r d; do
-            dir_slug=$(basename "$d" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' ' ' | xargs)
-            if echo "$dir_slug" | grep -q "$first_word"; then
-              run_job_dir="$d"
-              break
-            fi
-          done < <(find "$run_log_dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
-        fi
-        run_search_dir="${run_job_dir:-$run_log_dir}"
-        # Grep full file content (not just tail) so failures at any position are caught.
-        # Using xargs grep instead of tail|grep avoids missing errors in the middle of
-        # large log files (e.g. a 2.5MB pytest log where FAILED summary is at byte ~1.5M).
-        candidate_snippet=$(find "$run_search_dir" -type f -name "*.txt" 2>/dev/null \
+        # Search all actual log files recursively, excluding system.txt (GitHub runner
+        # metadata containing only condition evaluation text like "Evaluating job.if" —
+        # never test output). The flat numbered files in run_log_dir root (e.g.
+        # "0_JobName.txt") are the full job logs; job subdirectories only have system.txt.
+        # Grep full file content so failures at any position are caught.
+        candidate_snippet=$(find "$run_log_dir" -type f -name "*.txt" ! -name "system.txt" 2>/dev/null \
           | sort \
           | xargs grep -ih "FAILED\|TT_FATAL\|TT_THROW\|AssertionError\|RuntimeError\|ERROR:\|Error:\|exit code [1-9]\|non-zero exit\|[Kk]illed\|[Tt]raceback\|[Ss]egmentation fault\|CUDA error\|pytest.*FAILED\|FAIL \|[Hh]ealth check.*[Ff]ailed\|[Hh]ealth checks failed\|[Tt]imeout\|[Cc]onnection refused\|[Cc]annot connect\|runner.*lost\|[Ll]ost communication" 2>/dev/null \
           | tail -40 \
