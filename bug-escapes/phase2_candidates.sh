@@ -257,10 +257,42 @@ for i in $(seq 0 $((num_workflows - 1))); do
       continue
     fi
 
+    # Pre-extract error lines from the log files so the LLM doesn't need to do
+    # file I/O during its call. GitHub Actions logs unzip to:
+    #   run_dir/JobName/NNN_StepName.txt
+    # We find the closest-matching job subdir, grep for error patterns, and include
+    # the results directly in the candidate summary.
+    log_snippet=""
+    {
+      # Normalize job name for fuzzy matching
+      job_slug=$(echo "$job_name" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' ' ' | xargs)
+      first_word=$(echo "$job_slug" | cut -d' ' -f1)
+
+      job_dir=""
+      if [ -n "$first_word" ]; then
+        while IFS= read -r d; do
+          dir_slug=$(basename "$d" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' ' ' | xargs)
+          if echo "$dir_slug" | grep -q "$first_word"; then
+            job_dir="$d"
+            break
+          fi
+        done < <(find "$log_dir_found" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+      fi
+
+      search_dir="${job_dir:-$log_dir_found}"
+      log_snippet=$(find "$search_dir" -type f -name "*.txt" 2>/dev/null \
+        | sort \
+        | xargs -I{} tail -c 30000 {} 2>/dev/null \
+        | grep -i "FAILED\|TT_FATAL\|TT_THROW\|AssertionError\|RuntimeError\|ERROR:\|Error:\|exit code [1-9]\|non-zero exit\|[Kk]illed\|[Tt]raceback\|[Ss]egmentation fault\|CUDA error\|pytest.*FAILED\|FAIL " 2>/dev/null \
+        | tail -40 \
+        || true)
+    }
+
     candidates_summaries+=("
 === CANDIDATE $((included + 1)): ${job_name} ===
 Failing run IDs: $(echo "$failing_runs_arr" | jq -r '[.[].run_id | tostring] | join(", ")')
-Log directory: ${log_dir_found}
+Pre-extracted error lines (grep output from log files):
+${log_snippet:-[no lines matched error patterns — may be infrastructure noise or unusual error format]}
 
 ")
     candidates_meta+=("$(echo "$candidate" | jq -c '.')")
