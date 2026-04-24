@@ -5,6 +5,10 @@ name: "(triage) Verify Bug Escape"
 on:
   workflow_dispatch:
     inputs:
+      llm-backend:
+        description: "LLM backend for failure classification: 'cursor' (default) or 'copilot'"
+        type: string
+        default: "cursor"
       fix-commit-sha:
         description: "The commit SHA believed to have fixed the bug"
         type: string
@@ -39,6 +43,10 @@ on:
         default: "120"
   workflow_call:
     inputs:
+      llm-backend:
+        description: "LLM backend for failure classification: 'cursor' (default) or 'copilot'"
+        type: string
+        default: "cursor"
       fix-commit-sha:
         description: "The commit SHA believed to have fixed the bug"
         type: string
@@ -76,7 +84,10 @@ on:
         description: "Token with contents:write and actions:write to push branches and dispatch workflows"
         required: true
       CURSOR_API_KEY:
-        description: "Cursor AI API key for classifying job failures as real vs infra"
+        description: "Cursor AI API key for classifying job failures (required when llm-backend=cursor)"
+        required: false
+      COPILOT_PAT:
+        description: "GitHub PAT with Copilot access (required when llm-backend=copilot)"
         required: false
 
 permissions:
@@ -110,6 +121,9 @@ jobs:
       - name: Run verification
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN || github.token }}
+          LLM_BACKEND: ${{ inputs.llm-backend }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
           FIX_COMMIT_SHA: ${{ inputs.fix-commit-sha }}
           TEST_PIPELINE: ${{ inputs.test-pipeline }}
           TEST_JOB: ${{ inputs.test-job }}
@@ -120,7 +134,6 @@ jobs:
           MAX_WAIT_START_MINUTES: ${{ inputs.start-wait-minutes }}
           MAX_WAIT_FINISH_MINUTES: ${{ inputs.finish-wait-minutes }}
           OWNER_REPO: tenstorrent/tt-metal
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           set -euo pipefail
           chmod +x triage/bug-escapes/verify/verify.sh
@@ -134,3 +147,4 @@ jobs:
           path: triage/bug-escapes/verify/output/
           retention-days: 30
           if-no-files-found: warn
+
