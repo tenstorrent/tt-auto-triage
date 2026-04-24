@@ -106,3 +106,15 @@ Traced false negatives from run 24904276503 (all 88 candidates classified infra 
 - **Verify**: skipped (no qualifying escapes)
 - **Duration**: ~1 minute
 - **Notes**: Clean scan. fast-dispatch-frequent-tests appears healthy over the last 7 days — no sustained multi-run failures survived LLM triage.
+
+
+## 2026-04-24 20:05 UTC — blackhole-e2e-tests.yaml
+
+- **Run ID**: [24909240592](https://github.com/tenstorrent/tt-metal/actions/runs/24909240592)
+- **Workflow scanned**: `.github/workflows/blackhole-e2e-tests.yaml`
+- **Backend**: copilot | **mock-verify**: false | **lookback**: 7d | **threshold**: 3 consecutive
+- **Phase 2**: 85 candidates reviewed by LLM (5 chunks of 20) → 0 confirmed consistent failures
+- **Bug escapes**: 0 (horizontal=0, vertical=0, cross_layer=0, unknown=0)
+- **Verify**: skipped (no qualifying escapes)
+- **Duration**: ~5 minutes
+- **Notes**: Large candidate pool (85) for blackhole-e2e — significantly more than other workflows. All classified as infra noise or flaky after LLM review. No real bug escapes detected in last 7 days on this workflow.
