@@ -63,19 +63,60 @@ _restore_seen_cache() {
   rm -f "$tmpzip"
 }
 _restore_seen_cache
-log_info "Seen cache loaded: $(jq 'length' "$SEEN_CACHE_FILE") entries"
+
+# Evict stale entries after loading the remote cache.
+# Exact-key entries (not _noisy) now use {"v":"verdict","t":"ISO_ts"} format.
+# Old-format string entries are expired immediately (no timestamp = unknown age).
+# _noisy entries keep their own 6-hour TTL enforced by _is_job_noisy().
+# EXACT_KEY_TTL_HOURS: exact-key entries older than this are evicted (default: 48h).
+EXACT_KEY_TTL_HOURS="${EXACT_KEY_TTL_HOURS:-48}"
+_evict_stale_entries() {
+  local now_s ttl_s before_count after_count
+  now_s=$(date -u +%s)
+  ttl_s=$(( EXACT_KEY_TTL_HOURS * 3600 ))
+  before_count=$(jq 'length' "$SEEN_CACHE_FILE")
+  jq --argjson now "$now_s" --argjson ttl "$ttl_s" '
+    with_entries(
+      select(
+        # Keep all _noisy entries (TTL enforced by _is_job_noisy())
+        (.key | startswith("_noisy|")) or
+        # Keep new-format exact-key entries within TTL
+        (
+          (.value | type == "object") and
+          (.value.t != null) and
+          (($now - ((.value.t | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime)? // 0)) < $ttl)
+        )
+        # Old-format string entries: silently dropped (stale, no timestamp)
+      )
+    )
+  ' "$SEEN_CACHE_FILE" > "${SEEN_CACHE_FILE}.tmp" \
+    && mv "${SEEN_CACHE_FILE}.tmp" "$SEEN_CACHE_FILE"
+  after_count=$(jq 'length' "$SEEN_CACHE_FILE")
+  local evicted=$(( before_count - after_count ))
+  if [ "$evicted" -gt 0 ]; then
+    log_info "Seen cache: evicted $evicted stale entries (${before_count} → ${after_count})"
+    SEEN_CACHE_UPDATED=true
+  fi
+}
+_evict_stale_entries
+log_info "Seen cache loaded: $(jq 'length' "$SEEN_CACHE_FILE") entries (TTL=${EXACT_KEY_TTL_HOURS}h)"
 
 _mark_seen() {
   local key="$1" verdict="$2"
-  jq --arg k "$key" --arg v "$verdict" '. + {($k): $v}' "$SEEN_CACHE_FILE" \
+  local now_ts
+  now_ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  jq --arg k "$key" --arg v "$verdict" --arg t "$now_ts" \
+    '. + {($k): {"v": $v, "t": $t}}' "$SEEN_CACHE_FILE" \
     > "${SEEN_CACHE_FILE}.tmp" && mv "${SEEN_CACHE_FILE}.tmp" "$SEEN_CACHE_FILE"
   SEEN_CACHE_UPDATED=true
 }
 
 _is_seen() {
-  local val
-  val=$(jq -r --arg k "$1" '.[$k] // ""' "$SEEN_CACHE_FILE")
-  [ -n "$val" ]
+  # Only new-format {"v":"...","t":"..."} objects are considered seen.
+  # Old-format string entries (no timestamp) are treated as expired and ignored.
+  local result
+  result=$(jq -r --arg k "$1" '(.[$k] // null) | if type == "object" and .v != null then "yes" else "no" end' "$SEEN_CACHE_FILE")
+  [ "$result" = "yes" ]
 }
 
 # Job-level noise index — keyed by "_noisy|wf_basename|job_name", value is ISO timestamp.
