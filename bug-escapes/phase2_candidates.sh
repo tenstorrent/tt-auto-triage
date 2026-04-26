@@ -26,6 +26,44 @@ MAX_LOG_BYTES="${MAX_LOG_BYTES:-100000}"
 MAX_RUNS_PER_WORKFLOW="${MAX_RUNS_PER_WORKFLOW:-50}"
 PHASE2_CHUNK_SIZE="${PHASE2_CHUNK_SIZE:-20}"
 
+# ── Persistent seen-candidate cache ────────────────────────────────────────
+# Keyed by "workflow_basename|job_name|sorted_run_ids". Verdicts:
+#   no_logs     - logs not downloadable (stale/expired)
+#   infra_noise - LLM or grep found no real test failure
+#   confirmed   - LLM confirmed a real test failure
+# Pulled from remote at start so distributed workers share state.
+SEEN_CACHE_FILE="$SCRIPT_DIR/state/seen.json"
+SEEN_CACHE_UPDATED=false
+mkdir -p "$SCRIPT_DIR/state"
+if [ ! -f "$SEEN_CACHE_FILE" ]; then
+  echo '{}' > "$SEEN_CACHE_FILE"
+fi
+_remote_cache=$(git -C "$SCRIPT_DIR" show "origin/ebanerjee/bug-escapes:bug-escapes/state/seen.json" 2>/dev/null || echo '{}')
+echo "$_remote_cache" | jq -s '.[0] * .[1]' "$SEEN_CACHE_FILE" - > "${SEEN_CACHE_FILE}.merged" 2>/dev/null \
+  && mv "${SEEN_CACHE_FILE}.merged" "$SEEN_CACHE_FILE" || true
+log_info "Seen cache loaded: $(jq 'length' "$SEEN_CACHE_FILE") entries"
+
+_mark_seen() {
+  local key="$1" verdict="$2"
+  jq --arg k "$key" --arg v "$verdict" '. + {($k): $v}' "$SEEN_CACHE_FILE" \
+    > "${SEEN_CACHE_FILE}.tmp" && mv "${SEEN_CACHE_FILE}.tmp" "$SEEN_CACHE_FILE"
+  SEEN_CACHE_UPDATED=true
+}
+
+_is_seen() {
+  local val
+  val=$(jq -r --arg k "$1" '.[$k] // ""' "$SEEN_CACHE_FILE")
+  [ -n "$val" ]
+}
+
+_candidate_key() {
+  local wf="$1" job="$2" runs_json="$3"
+  local sorted_ids
+  sorted_ids=$(echo "$runs_json" | jq -r '[.[].run_id | tostring] | sort | join(",")' 2>/dev/null || echo "")
+  printf '%s|%s|%s' "$wf" "$job" "$sorted_ids"
+}
+# ───────────────────────────────────────────────────────────────────────────
+
 mkdir -p "$LOGS_DIR"
 
 # Initialize output
@@ -228,6 +266,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
   # The agent will search the log files itself — no excerpt extraction needed.
   candidates_summaries=()
   candidates_meta=()
+  candidates_keys=()
   included=0
 
   for c in $(seq 0 $((num_candidates - 1))); do
@@ -235,6 +274,13 @@ for i in $(seq 0 $((num_workflows - 1))); do
     candidate=$(echo "$candidate_jobs" | jq -c ".[$c]")
     job_name=$(echo "$candidate" | jq -r '.job')
     failing_runs_arr=$(echo "$candidate" | jq -c '.failing_runs')
+
+    # Skip candidates already classified in a prior run
+    cand_key=$(_candidate_key "$wf_basename" "$job_name" "$failing_runs_arr")
+    if _is_seen "$cand_key"; then
+      log_info "      '$job_name' already classified — skipping (cached)"
+      continue
+    fi
 
     # Download logs for failing runs; try each until we find error lines.
     # This prevents misclassifying a job as "infra noise" when the first run's
@@ -276,6 +322,15 @@ for i in $(seq 0 $((num_workflows - 1))); do
 
     if [ -z "$log_dir_found" ]; then
       log_info "      Could not download logs for '$job_name' — skipping"
+      _mark_seen "$cand_key" "no_logs"
+      continue
+    fi
+
+    # If grep found no error lines, skip LLM entirely — sending a blank snippet
+    # to the agent is pure token waste; it can only say "infra noise" anyway.
+    if [ -z "$log_snippet" ]; then
+      log_info "      No error lines in logs for '$job_name' — skipping LLM (infra noise)"
+      _mark_seen "$cand_key" "infra_noise"
       continue
     fi
 
@@ -283,10 +338,11 @@ for i in $(seq 0 $((num_workflows - 1))); do
 === CANDIDATE $((included + 1)): ${job_name} ===
 Failing run IDs: $(echo "$failing_runs_arr" | jq -r '[.[].run_id | tostring] | join(", ")')
 Pre-extracted error lines (grep output from log files):
-${log_snippet:-[no lines matched error patterns — may be infrastructure noise or unusual error format]}
+${log_snippet}
 
 ")
     candidates_meta+=("$(echo "$candidate" | jq -c '.')")
+    candidates_keys+=("$cand_key")
     included=$((included + 1))
   done
 
@@ -314,6 +370,15 @@ ${log_snippet:-[no lines matched error patterns — may be infrastructure noise 
     done
 
     log_info "    Chunk $((chunk_idx+1))/$num_chunks: candidates $((chunk_start+1))-$((chunk_end+1))"
+
+    # Pre-mark all candidates in this chunk as infra_noise before calling the LLM.
+    # Confirmed ones will be overwritten to "confirmed" below.  This ensures that
+    # even if the LLM call fails or times out, these candidates are not re-tried
+    # on the next hourly run (they'd just be noise again anyway).
+    for _pci in $(seq "$chunk_start" "$chunk_end"); do
+      _mark_seen "${candidates_keys[$_pci]}" "infra_noise"
+    done
+
     agent_output="$(mktemp)"
     if cursor_agent_from_template "$PROMPT_TEMPLATE" "$agent_output" \
          "WORKFLOW_PATH=$wf_path" \
@@ -346,12 +411,14 @@ ${log_snippet:-[no lines matched error patterns — may be infrastructure noise 
           continue
         fi
 
-        # Match back to candidate metadata to get failing_run_ids
+        # Match back to candidate metadata to get failing_run_ids and cache key
         matched_meta=""
-        for m in "${candidates_meta[@]}"; do
-          meta_job=$(echo "$m" | jq -r '.job')
+        matched_key=""
+        for _mi in "${!candidates_meta[@]}"; do
+          meta_job=$(echo "${candidates_meta[$_mi]}" | jq -r '.job')
           if [ "$meta_job" = "$agent_job" ]; then
-            matched_meta="$m"
+            matched_meta="${candidates_meta[$_mi]}"
+            matched_key="${candidates_keys[$_mi]}"
             break
           fi
         done
@@ -374,6 +441,8 @@ ${log_snippet:-[no lines matched error patterns — may be infrastructure noise 
         fi
 
         log_info "      CONFIRMED: $test_name ($agent_job, confidence=$confidence, flaky=$is_flaky, layer=$effective_test_layer)"
+        # Upgrade seen-cache verdict from pre-marked infra_noise → confirmed
+        [ -n "$matched_key" ] && _mark_seen "$matched_key" "confirmed"
 
         jq --arg wf "$wf_path" \
            --arg job "$agent_job" \
@@ -411,3 +480,17 @@ done
 
 total_failures=$(jq 'length' "$FAILURES_OUTPUT")
 log_info "Phase 2 done: $total_failures confirmed consistent failures"
+
+# Push updated seen-candidate cache to remote so the next hourly run inherits it
+if [ "$SEEN_CACHE_UPDATED" = "true" ]; then
+  _repo_root=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "")
+  if [ -n "$_repo_root" ]; then
+    log_info "Pushing seen-candidate cache ($(jq 'length' "$SEEN_CACHE_FILE") entries)"
+    git -C "$_repo_root" add "bug-escapes/state/seen.json"
+    git -C "$_repo_root" -c user.name="BrAIn" -c user.email="brain@tenstorrent.com" \
+      commit -m "state: update seen-candidate cache [skip ci]" 2>/dev/null \
+      || log_info "  No new cache entries to commit"
+    git -C "$_repo_root" push origin HEAD:ebanerjee/bug-escapes 2>/dev/null \
+      || log_warn "  Could not push seen cache — will retry next run"
+  fi
+fi
