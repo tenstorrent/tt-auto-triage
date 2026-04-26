@@ -35,12 +35,34 @@ PHASE2_CHUNK_SIZE="${PHASE2_CHUNK_SIZE:-20}"
 SEEN_CACHE_FILE="$SCRIPT_DIR/state/seen.json"
 SEEN_CACHE_UPDATED=false
 mkdir -p "$SCRIPT_DIR/state"
-if [ ! -f "$SEEN_CACHE_FILE" ]; then
-  echo '{}' > "$SEEN_CACHE_FILE"
-fi
-_remote_cache=$(git -C "$SCRIPT_DIR" show "origin/ebanerjee/bug-escapes:bug-escapes/state/seen.json" 2>/dev/null || echo '{}')
-echo "$_remote_cache" | jq -s '.[0] * .[1]' "$SEEN_CACHE_FILE" - > "${SEEN_CACHE_FILE}.merged" 2>/dev/null \
-  && mv "${SEEN_CACHE_FILE}.merged" "$SEEN_CACHE_FILE" || true
+echo '{}' > "$SEEN_CACHE_FILE"
+
+# Download the latest seen-candidate cache artifact from the tt-metal repo.
+# The artifact is uploaded at the end of each Phase 2 run (see bug-escapes-ci.yaml).
+# Falls back silently to an empty cache if no artifact exists yet.
+_restore_seen_cache() {
+  local token="${GITHUB_TOKEN:-}"
+  [ -z "$token" ] && return
+  local artifact_id
+  artifact_id=$(curl -s -H "Authorization: Bearer $token" \
+    "https://api.github.com/repos/tenstorrent/tt-metal/actions/artifacts?name=bug-escapes-seen-cache&per_page=1" \
+    | jq -r '.artifacts[0].id // empty' 2>/dev/null || echo "")
+  [ -z "$artifact_id" ] && { log_info "Seen cache: no prior artifact found (first run)"; return; }
+  local tmpzip
+  tmpzip=$(mktemp --suffix=.zip)
+  if curl -s -H "Authorization: Bearer $token" -L \
+       "https://api.github.com/repos/tenstorrent/tt-metal/actions/artifacts/${artifact_id}/zip" \
+       -o "$tmpzip" 2>/dev/null && [ -s "$tmpzip" ]; then
+    if unzip -p "$tmpzip" "seen.json" > "${SEEN_CACHE_FILE}.dl" 2>/dev/null; then
+      jq -s '.[0] * .[1]' "$SEEN_CACHE_FILE" "${SEEN_CACHE_FILE}.dl" \
+        > "${SEEN_CACHE_FILE}.merged" 2>/dev/null \
+        && mv "${SEEN_CACHE_FILE}.merged" "$SEEN_CACHE_FILE" || true
+      rm -f "${SEEN_CACHE_FILE}.dl"
+    fi
+  fi
+  rm -f "$tmpzip"
+}
+_restore_seen_cache
 log_info "Seen cache loaded: $(jq 'length' "$SEEN_CACHE_FILE") entries"
 
 _mark_seen() {
@@ -481,16 +503,6 @@ done
 total_failures=$(jq 'length' "$FAILURES_OUTPUT")
 log_info "Phase 2 done: $total_failures confirmed consistent failures"
 
-# Push updated seen-candidate cache to remote so the next hourly run inherits it
 if [ "$SEEN_CACHE_UPDATED" = "true" ]; then
-  _repo_root=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "")
-  if [ -n "$_repo_root" ]; then
-    log_info "Pushing seen-candidate cache ($(jq 'length' "$SEEN_CACHE_FILE") entries)"
-    git -C "$_repo_root" add "bug-escapes/state/seen.json"
-    git -C "$_repo_root" -c user.name="BrAIn" -c user.email="brain@tenstorrent.com" \
-      commit -m "state: update seen-candidate cache [skip ci]" 2>/dev/null \
-      || log_info "  No new cache entries to commit"
-    git -C "$_repo_root" push origin HEAD:ebanerjee/bug-escapes 2>/dev/null \
-      || log_warn "  Could not push seen cache — will retry next run"
-  fi
+  log_info "Seen cache updated: $(jq 'length' "$SEEN_CACHE_FILE") entries — will be uploaded as artifact by workflow"
 fi

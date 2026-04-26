@@ -197,6 +197,16 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
 
+      - name: Upload seen-candidate cache
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bug-escapes-seen-cache
+          path: bug-escapes/state/seen.json
+          retention-days: 90
+          if-no-files-found: ignore
+          overwrite: true
+
       # --- Autonomous mode: prepare the verify matrix -----------------------
       # Emit a JSON array of escapes that qualify for verification: must be
       # type=vertical with fix_confidence=high and a real fix_commit_sha.
