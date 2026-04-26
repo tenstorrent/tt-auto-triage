@@ -144,8 +144,14 @@ for i in $(seq 0 $((num_workflows - 1))); do
     page=$((page + 1))
   done
 
+  # Strictly filter to the lookback window. The pagination loop stops as soon as
+  # the oldest run on a page crosses cutoff_date, but may have collected up to
+  # MAX_RUNS_PER_WORKFLOW runs before checking. Filter here so we only fetch job
+  # timelines for runs actually within the window — this is the main API call budget.
+  all_runs=$(echo "$all_runs" | jq --arg cutoff "$cutoff_date" '[.[] | select(.created_at >= $cutoff)]')
+
   num_runs=$(echo "$all_runs" | jq 'length')
-  log_info "    Fetched $num_runs runs (cap: $MAX_RUNS_PER_WORKFLOW)"
+  log_info "    Fetched $num_runs runs in lookback window"
 
   if [ "$num_runs" -lt "$CONSECUTIVE_RUNS" ]; then
     log_info "    Not enough runs — skipping"
