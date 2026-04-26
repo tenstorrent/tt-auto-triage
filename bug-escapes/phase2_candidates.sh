@@ -78,6 +78,36 @@ _is_seen() {
   [ -n "$val" ]
 }
 
+# Job-level noise index — keyed by "_noisy|wf_basename|job_name", value is ISO timestamp.
+# Used to skip log downloads for jobs that have been consistently empty/undownloadable,
+# avoiding repeated zip fetches when the run-ID window shifts each hour.
+# Only set for empty-snippet and no-logs paths (not LLM-classified infra noise, since
+# those had real log content and could later produce real test failures).
+# TTL: 6 hours — if a job starts producing real errors, we catch it within one cron cycle.
+_mark_job_noisy() {
+  local wf="$1" job="$2"
+  local noisy_key="_noisy|${wf}|${job}"
+  local now_ts
+  now_ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  jq --arg k "$noisy_key" --arg v "$now_ts" '. + {($k): $v}' "$SEEN_CACHE_FILE" \
+    > "${SEEN_CACHE_FILE}.tmp" && mv "${SEEN_CACHE_FILE}.tmp" "$SEEN_CACHE_FILE"
+  SEEN_CACHE_UPDATED=true
+}
+
+_is_job_noisy() {
+  local wf="$1" job="$2"
+  local noisy_key="_noisy|${wf}|${job}"
+  local ts
+  ts=$(jq -r --arg k "$noisy_key" '.[$k] // ""' "$SEEN_CACHE_FILE")
+  [ -z "$ts" ] && return 1
+  local now_ts last_ts
+  now_ts=$(date -u +%s)
+  last_ts=$(date -u -d "$ts" +%s 2>/dev/null \
+    || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$ts" +%s 2>/dev/null \
+    || echo 0)
+  [ $(( now_ts - last_ts )) -lt 21600 ]  # 6 hours
+}
+
 _candidate_key() {
   local wf="$1" job="$2" runs_json="$3"
   local sorted_ids
@@ -310,6 +340,15 @@ for i in $(seq 0 $((num_workflows - 1))); do
       continue
     fi
 
+    # Skip log download for jobs that have been consistently empty within the last 6h.
+    # These jobs (infra setup, condition-eval-only) never produce test output, so
+    # downloading their logs each hour (as run IDs shift) is pure I/O waste.
+    if _is_job_noisy "$wf_basename" "$job_name"; then
+      log_info "      '$job_name' known-noisy job — skipping log download"
+      _mark_seen "$cand_key" "infra_noise"
+      continue
+    fi
+
     # Download logs for failing runs; try each until we find error lines.
     # This prevents misclassifying a job as "infra noise" when the first run's
     # log tail is dominated by post-test output (AI summary errors, cleanup, etc.)
@@ -351,14 +390,17 @@ for i in $(seq 0 $((num_workflows - 1))); do
     if [ -z "$log_dir_found" ]; then
       log_info "      Could not download logs for '$job_name' — skipping"
       _mark_seen "$cand_key" "no_logs"
+      _mark_job_noisy "$wf_basename" "$job_name"
       continue
     fi
 
     # If grep found no error lines, skip LLM entirely — sending a blank snippet
     # to the agent is pure token waste; it can only say "infra noise" anyway.
+    # Also mark the job as known-noisy so future hourly runs skip the download.
     if [ -z "$log_snippet" ]; then
       log_info "      No error lines in logs for '$job_name' — skipping LLM (infra noise)"
       _mark_seen "$cand_key" "infra_noise"
+      _mark_job_noisy "$wf_basename" "$job_name"
       continue
     fi
 
