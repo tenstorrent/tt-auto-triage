@@ -412,19 +412,40 @@ for i in $(seq 0 $((num_workflows - 1))); do
     fi
 
     # Download logs for failing runs; try each until we find error lines.
-    # This prevents misclassifying a job as "infra noise" when the first run's
-    # log tail is dominated by post-test output (AI summary errors, cleanup, etc.)
-    # and the actual test failures only appear in a later run's log.
+    # Strategy: prefer job-level log download (smaller, works for in-progress runs,
+    # avoids cross-job noise from run-level ZIPs that contain 50+ jobs). Fall back
+    # to run-level ZIP only when job_id is unavailable (0/null).
+    # This prevents misclassifying a job as "infra noise" when:
+    #   a) The parent run is still in-progress so ZIP isn't available yet
+    #   b) The log tail is dominated by other failing jobs in the same run
     log_dir_found=""
     log_snippet=""
 
-    for try_run_id in $(echo "$failing_runs_arr" | jq -r '.[].run_id'); do
+    while IFS=$'\t' read -r try_run_id try_job_id; do
       run_log_dir="$LOGS_DIR/run_${try_run_id}"
       if [ ! -d "$run_log_dir" ]; then
-        download_run_logs "$try_run_id" "$run_log_dir" || {
-          log_warn "      Could not download logs for run $try_run_id"
-          continue
-        }
+        # Primary: job-level log (works even when run is still in-progress)
+        _job_download_ok=false
+        if [ -n "$try_job_id" ] && [ "$try_job_id" != "0" ] && [ "$try_job_id" != "null" ]; then
+          job_log_file="$run_log_dir/job_${try_job_id}.txt"
+          mkdir -p "$run_log_dir"
+          if gh api "repos/${AT_OWNER_REPO}/actions/jobs/${try_job_id}/logs" \
+               > "$job_log_file" 2>/dev/null && [ -s "$job_log_file" ]; then
+            _job_download_ok=true
+          else
+            rm -f "$job_log_file"
+            rmdir "$run_log_dir" 2>/dev/null || true
+          fi
+        fi
+        # Fallback: run-level ZIP (works only for completed runs)
+        if [ "$_job_download_ok" = "false" ]; then
+          download_run_logs "$try_run_id" "$run_log_dir" || {
+            log_warn "      Could not download logs for run $try_run_id (job=$try_job_id)"
+            # Remove empty dir so next hourly run retries (don't cache failed downloads)
+            rmdir "$run_log_dir" 2>/dev/null || true
+            continue
+          }
+        fi
       fi
       if [ -d "$run_log_dir" ]; then
         # Remember the first successfully downloaded run as fallback
@@ -452,12 +473,14 @@ for i in $(seq 0 $((num_workflows - 1))); do
           break  # Found error lines — no need to try more runs
         fi
       fi
-    done
+    done < <(echo "$failing_runs_arr" | jq -r '.[] | [.run_id, (.job_id // 0)] | @tsv')
 
     if [ -z "$log_dir_found" ]; then
       log_info "      Could not download logs for '$job_name' — skipping"
+      # Only cache the no_logs verdict (window-scoped), do NOT mark job noisy.
+      # Transient download failures (e.g. in-progress runs) should be retried
+      # next hour with a fresh window, not suppressed for 6h.
       _mark_seen "$cand_key" "no_logs"
-      _mark_job_noisy "$wf_basename" "$job_name"
       continue
     fi
 
