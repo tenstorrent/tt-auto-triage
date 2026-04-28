@@ -570,7 +570,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
     # the 2MB ARG_MAX limit (performance/nightly workflows produce very verbose
     # error output — tensor diffs, long stack traces — that can push 20 candidates
     # over the limit even after env is stripped with env -i in cursor_agent.sh).
-    local _snippet_for_prompt="${log_snippet:0:${MAX_SNIPPET_BYTES}}"
+    _snippet_for_prompt="${log_snippet:0:${MAX_SNIPPET_BYTES}}"
     candidates_summaries+=("
 === CANDIDATE $((included + 1)): ${job_name} ===
 Failing run IDs: $(echo "$failing_runs_arr" | jq -r '[.[].run_id | tostring] | join(", ")')
