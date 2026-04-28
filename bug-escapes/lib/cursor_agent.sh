@@ -43,6 +43,16 @@ cursor_agent_query() {
   local max_retries="${CURSOR_AGENT_MAX_RETRIES}"
   local backend="${LLM_BACKEND:-cursor}"
 
+  # Write prompt to a temp file and use env -i to strip the GHA environment.
+  # GHA runners set many large env vars; combined with the prompt (100-500KB
+  # for typical candidate batches) the total argv+envp can exceed the 2MB
+  # ARG_MAX limit, causing "Argument list too long" from /usr/bin/timeout.
+  # env -i reduces envp to ~500B; bash reads the prompt file in-process before
+  # calling execve(agent,...) so only the expanded value goes through kernel.
+  local _prompt_file
+  _prompt_file="$(mktemp)"
+  printf '%s' "$prompt" > "$_prompt_file"
+
   while [ "$attempt" -le "$max_retries" ]; do
     if [ "$attempt" -gt 0 ]; then
       log_warn "${backend}_agent: retry $attempt/$max_retries"
@@ -54,16 +64,20 @@ cursor_agent_query() {
     stderr_file="$(mktemp)"
     if [ "$backend" = "copilot" ]; then
       timeout "$CURSOR_AGENT_TIMEOUT" \
-        copilot -p "$prompt" --allow-all-tools \
+        env -i HOME="$HOME" PATH="$PATH" \
+          ${COPILOT_GITHUB_TOKEN:+GH_TOKEN="$COPILOT_GITHUB_TOKEN"} \
+        bash -c 'copilot -p "$(cat "$1")" --allow-all-tools' -- "$_prompt_file" \
         > "$output_file" 2>"$stderr_file" || exit_code=$?
     else
       timeout "$CURSOR_AGENT_TIMEOUT" \
-        agent --trust --model auto -p "$prompt" \
+        env -i HOME="$HOME" PATH="$PATH" \
+          ${CURSOR_API_KEY:+CURSOR_API_KEY="$CURSOR_API_KEY"} \
+        bash -c 'agent --trust --model auto -p "$(cat "$1")"' -- "$_prompt_file" \
         > "$output_file" 2>"$stderr_file" || exit_code=$?
     fi
 
     if [ "$exit_code" -eq 0 ] && [ -s "$output_file" ]; then
-      rm -f "$stderr_file"
+      rm -f "$stderr_file" "$_prompt_file"
       return 0
     fi
 
@@ -80,6 +94,7 @@ cursor_agent_query() {
     attempt=$((attempt + 1))
   done
 
+  rm -f "$_prompt_file"
   log_error "${backend}_agent: all attempts exhausted"
   return 1
 }
