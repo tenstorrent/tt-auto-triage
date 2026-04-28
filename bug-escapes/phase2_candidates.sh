@@ -13,6 +13,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
+# Trap ERR to print which line caused a set -e exit — helps diagnose silent crashes.
+trap 'echo "[phase2 ERR] exit $? at line $LINENO (func=${FUNCNAME[0]:-main})" >&2' ERR
+
 OUTPUT_DIR="$SCRIPT_DIR/output"
 PIPELINE_CONFIG="$OUTPUT_DIR/pipeline-config.json"
 FAILURES_OUTPUT="$OUTPUT_DIR/consistent-failures.json"
