@@ -29,6 +29,10 @@ PHASE2_CHUNK_SIZE="${PHASE2_CHUNK_SIZE:-20}"
 # than this many hours. Guards against wrong LLM classification silencing a real
 # failure for the full 48h TTL. Default: 24h (re-examine persistent failures daily).
 INFRA_NOISE_RECHECK_HOURS="${INFRA_NOISE_RECHECK_HOURS:-24}"
+# NO_LOGS_RECHECK_HOURS: force re-check of cached no_logs entries older than
+# this many hours. no_logs is often transient (in-progress runs whose ZIP isn't
+# available yet); retry sooner than the 48h TTL. Default: 4h.
+NO_LOGS_RECHECK_HOURS="${NO_LOGS_RECHECK_HOURS:-4}"
 
 # ── Persistent seen-candidate cache ────────────────────────────────────────
 # Keyed by "workflow_basename|job_name|sorted_run_ids". Verdicts:
@@ -388,12 +392,16 @@ for i in $(seq 0 $((num_workflows - 1))); do
       _cached_verdict=$(jq -r --arg k "$cand_key" '.[$k].v // "unknown"' "$SEEN_CACHE_FILE" 2>/dev/null || echo "unknown")
       _cached_ts=$(jq -r --arg k "$cand_key" '.[$k].t // ""' "$SEEN_CACHE_FILE" 2>/dev/null || echo "")
       _force_recheck=false
-      if [ "$_cached_verdict" = "infra_noise" ] && [ -n "$_cached_ts" ]; then
+      if [ -n "$_cached_ts" ]; then
         _cached_s=$(date -u -d "$_cached_ts" +%s 2>/dev/null || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$_cached_ts" +%s 2>/dev/null || echo 0)
         _age_h=$(( ($(date -u +%s) - _cached_s) / 3600 ))
-        if [ "$_age_h" -ge "${INFRA_NOISE_RECHECK_HOURS:-24}" ]; then
+        if [ "$_cached_verdict" = "infra_noise" ] && [ "$_age_h" -ge "${INFRA_NOISE_RECHECK_HOURS:-24}" ]; then
           _force_recheck=true
           log_info "      '$job_name' cached infra_noise is ${_age_h}h old — forcing re-check"
+        elif [ "$_cached_verdict" = "no_logs" ] && [ "$_age_h" -ge "${NO_LOGS_RECHECK_HOURS:-4}" ]; then
+          # no_logs is often transient (in-progress parent run). Retry after a short window.
+          _force_recheck=true
+          log_info "      '$job_name' cached no_logs is ${_age_h}h old — forcing re-check"
         fi
       fi
       if [ "$_force_recheck" = "false" ]; then
