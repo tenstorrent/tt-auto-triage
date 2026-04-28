@@ -24,6 +24,11 @@ CONSECUTIVE_RUNS="${CONSECUTIVE_RUNS:-3}"
 LOOKBACK_DAYS="${LOOKBACK_DAYS:-14}"
 MAX_CANDIDATES="${MAX_CANDIDATES:-999}"
 MAX_LOG_BYTES="${MAX_LOG_BYTES:-100000}"
+# MAX_SNIPPET_BYTES: cap each candidate's log snippet before adding to the LLM
+# prompt. Performance/nightly tests can produce tensor diffs and multi-KB stack
+# traces; 20 such candidates in a chunk easily exceeds the 2MB ARG_MAX limit.
+# 6000 bytes ≈ 30 typical log lines — sufficient for failure type classification.
+MAX_SNIPPET_BYTES="${MAX_SNIPPET_BYTES:-6000}"
 MAX_RUNS_PER_WORKFLOW="${MAX_RUNS_PER_WORKFLOW:-50}"
 PHASE2_CHUNK_SIZE="${PHASE2_CHUNK_SIZE:-20}"
 # INFRA_NOISE_RECHECK_HOURS: force re-check of cached infra_noise entries older
@@ -561,11 +566,16 @@ for i in $(seq 0 $((num_workflows - 1))); do
       continue
     fi
 
+    # Truncate snippet to MAX_SNIPPET_BYTES to keep the chunk prompt under
+    # the 2MB ARG_MAX limit (performance/nightly workflows produce very verbose
+    # error output — tensor diffs, long stack traces — that can push 20 candidates
+    # over the limit even after env is stripped with env -i in cursor_agent.sh).
+    local _snippet_for_prompt="${log_snippet:0:${MAX_SNIPPET_BYTES}}"
     candidates_summaries+=("
 === CANDIDATE $((included + 1)): ${job_name} ===
 Failing run IDs: $(echo "$failing_runs_arr" | jq -r '[.[].run_id | tostring] | join(", ")')
 Pre-extracted error lines (grep output from log files):
-${log_snippet}
+${_snippet_for_prompt}
 
 ")
     candidates_meta+=("$(echo "$candidate" | jq -c '.')")
