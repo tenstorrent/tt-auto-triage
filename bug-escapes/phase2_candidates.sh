@@ -13,8 +13,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/lib/common.sh"
 
-# Trap ERR to print which line caused a set -e exit — helps diagnose silent crashes.
-trap 'echo "[phase2 ERR] exit $? at line $LINENO (func=${FUNCNAME[0]:-main})" >&2' ERR
 
 OUTPUT_DIR="$SCRIPT_DIR/output"
 PIPELINE_CONFIG="$OUTPUT_DIR/pipeline-config.json"
@@ -518,7 +516,7 @@ for i in $(seq 0 $((num_workflows - 1))); do
     # this is deterministically a real test failure — no LLM judgment needed.
     # The LLM has historically misclassified these as infra_noise when the snippet
     # also contains innocuous "error" strings from C++ paths or apt output.
-    pytest_fail_line=$(echo "$log_snippet" | grep -iE "^FAILED [a-zA-Z_./].*\.py(::|$)|FAILED [a-zA-Z_./].*\.py::" | head -1)
+    pytest_fail_line=$(echo "$log_snippet" | grep -iE "^FAILED [a-zA-Z_./].*\.py(::|$)|FAILED [a-zA-Z_./].*\.py::" | head -1 || true)
     if [ -n "$pytest_fail_line" ]; then
       # Extract test name: everything before " - " on the FAILED line
       _pytest_test_name=$(echo "$pytest_fail_line" | sed 's/^FAILED //' | sed 's/ - .*//' | xargs)
