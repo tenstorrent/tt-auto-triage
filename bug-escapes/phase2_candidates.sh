@@ -25,6 +25,10 @@ MAX_CANDIDATES="${MAX_CANDIDATES:-999}"
 MAX_LOG_BYTES="${MAX_LOG_BYTES:-100000}"
 MAX_RUNS_PER_WORKFLOW="${MAX_RUNS_PER_WORKFLOW:-50}"
 PHASE2_CHUNK_SIZE="${PHASE2_CHUNK_SIZE:-20}"
+# INFRA_NOISE_RECHECK_HOURS: force re-check of cached infra_noise entries older
+# than this many hours. Guards against wrong LLM classification silencing a real
+# failure for the full 48h TTL. Default: 24h (re-examine persistent failures daily).
+INFRA_NOISE_RECHECK_HOURS="${INFRA_NOISE_RECHECK_HOURS:-24}"
 
 # ── Persistent seen-candidate cache ────────────────────────────────────────
 # Keyed by "workflow_basename|job_name|sorted_run_ids". Verdicts:
@@ -374,11 +378,28 @@ for i in $(seq 0 $((num_workflows - 1))); do
     job_name=$(echo "$candidate" | jq -r '.job')
     failing_runs_arr=$(echo "$candidate" | jq -c '.failing_runs')
 
-    # Skip candidates already classified in a prior run
+    # Skip candidates already classified in a prior run.
+    # Exception: if the cached verdict is infra_noise and the entry is older than
+    # INFRA_NOISE_RECHECK_HOURS (default 24h), force a re-check.  This prevents
+    # a wrong infra_noise classification from silencing a real failure for the full
+    # 48h TTL — a persistent failure will be re-examined at least once per day.
     cand_key=$(_candidate_key "$wf_basename" "$job_name" "$failing_runs_arr")
     if _is_seen "$cand_key"; then
-      log_info "      '$job_name' already classified — skipping (cached)"
-      continue
+      _cached_verdict=$(jq -r --arg k "$cand_key" '.[$k].v // "unknown"' "$SEEN_CACHE_FILE" 2>/dev/null || echo "unknown")
+      _cached_ts=$(jq -r --arg k "$cand_key" '.[$k].t // ""' "$SEEN_CACHE_FILE" 2>/dev/null || echo "")
+      _force_recheck=false
+      if [ "$_cached_verdict" = "infra_noise" ] && [ -n "$_cached_ts" ]; then
+        _cached_s=$(date -u -d "$_cached_ts" +%s 2>/dev/null || date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$_cached_ts" +%s 2>/dev/null || echo 0)
+        _age_h=$(( ($(date -u +%s) - _cached_s) / 3600 ))
+        if [ "$_age_h" -ge "${INFRA_NOISE_RECHECK_HOURS:-24}" ]; then
+          _force_recheck=true
+          log_info "      '$job_name' cached infra_noise is ${_age_h}h old — forcing re-check"
+        fi
+      fi
+      if [ "$_force_recheck" = "false" ]; then
+        log_info "      '$job_name' already classified — skipping (cached)"
+        continue
+      fi
     fi
 
     # Skip log download for jobs that have been consistently empty within the last 6h.
@@ -416,9 +437,14 @@ for i in $(seq 0 $((num_workflows - 1))); do
         # never test output). The flat numbered files in run_log_dir root (e.g.
         # "0_JobName.txt") are the full job logs; job subdirectories only have system.txt.
         # Grep full file content so failures at any position are caught.
+        # Filter out common false-positives that contain "error" in non-error context:
+        #   - C++ include paths (runtime/sfpi/compiler/..., riscv-tt-elf/.../error_constants.h)
+        #   - apt-get package names (liberror-perl, libstdc++, libedit2, etc.)
+        #   - Docker digest-mismatch lines (harmless OCI annotation warnings)
         candidate_snippet=$(find "$run_log_dir" -type f -name "*.txt" ! -name "system.txt" 2>/dev/null \
           | sort \
           | xargs grep -ih "FAILED\|TT_FATAL\|TT_THROW\|AssertionError\|RuntimeError\|ERROR:\|Error:\|exit code [1-9]\|non-zero exit\|[Kk]illed\|[Tt]raceback\|[Ss]egmentation fault\|CUDA error\|pytest.*FAILED\|FAIL \|[Hh]ealth check.*[Ff]ailed\|[Hh]ealth checks failed\|[Tt]imeout\|[Cc]onnection refused\|[Cc]annot connect\|runner.*lost\|[Ll]ost communication" 2>/dev/null \
+          | grep -v "runtime/sfpi/compiler/\|riscv-tt-elf/\|liberror-perl\|libstdc++\|libedit2\|digest-mismatch\|##\[endgroup\]\|\.hpp\|\.h:[0-9]" \
           | tail -40 \
           || true)
         if [ -n "$candidate_snippet" ]; then
@@ -442,6 +468,56 @@ for i in $(seq 0 $((num_workflows - 1))); do
       log_info "      No error lines in logs for '$job_name' — skipping LLM (infra noise)"
       _mark_seen "$cand_key" "infra_noise"
       _mark_job_noisy "$wf_basename" "$job_name"
+      continue
+    fi
+
+    # Pytest short-circuit: if the snippet contains a pytest-style FAILED line
+    # (e.g. "FAILED tests/nightly/.../test_foo.py::test_bar[params] - AssertionError")
+    # this is deterministically a real test failure — no LLM judgment needed.
+    # The LLM has historically misclassified these as infra_noise when the snippet
+    # also contains innocuous "error" strings from C++ paths or apt output.
+    pytest_fail_line=$(echo "$log_snippet" | grep -iE "^FAILED [a-zA-Z_./].*\.py(::|$)|FAILED [a-zA-Z_./].*\.py::" | head -1)
+    if [ -n "$pytest_fail_line" ]; then
+      # Extract test name: everything before " - " on the FAILED line
+      _pytest_test_name=$(echo "$pytest_fail_line" | sed 's/^FAILED //' | sed 's/ - .*//' | xargs)
+      # Extract failure signature: the part after " - " on the same line
+      _pytest_failure_sig=$(echo "$pytest_fail_line" | sed 's/^FAILED [^ ]* - //' | xargs 2>/dev/null || echo "")
+      if [ -z "$_pytest_failure_sig" ]; then
+        _pytest_failure_sig=$(echo "$log_snippet" | grep -iE "^E\s+|AssertionError:|TT_FATAL|RuntimeError:" | tail -1 | xargs 2>/dev/null || echo "test assertion failure")
+      fi
+
+      # Refine test_layer from the test path
+      _pytest_effective_layer="$test_layer"
+      _pytest_file_path="${_pytest_test_name%%::*}"
+      _pytest_refined=$(be_file_to_layer "$_pytest_file_path" 2>/dev/null || echo "unknown")
+      if [ "$_pytest_refined" != "unknown" ] && [ -n "$_pytest_refined" ]; then
+        _pytest_effective_layer="$_pytest_refined"
+      fi
+
+      is_flaky=$(echo "$candidate" | jq -r '.likely_flaky // false')
+      flake_score=$(echo "$candidate" | jq -r '.flake_score // 0')
+
+      log_info "      CONFIRMED (pytest): $_pytest_test_name (layer=$_pytest_effective_layer, flaky=$is_flaky)"
+      _mark_seen "$cand_key" "confirmed"
+
+      jq --arg wf "$wf_path" \
+         --arg job "$job_name" \
+         --arg tn "$_pytest_test_name" \
+         --arg fs "$_pytest_failure_sig" \
+         --argjson frid "$failing_runs_arr" \
+         --arg tl "$_pytest_effective_layer" \
+         --arg conf "high" \
+         --arg notes "Detected via pytest FAILED line (deterministic short-circuit, no LLM)" \
+         --argjson flaky "$is_flaky" \
+         --argjson fscore "$flake_score" \
+         '. += [{"workflow": $wf, "job": $job, "test_name": $tn, "failure_signature": $fs, "failing_run_ids": $frid, "test_layer": $tl, "agent_confidence": $conf, "agent_notes": $notes, "likely_flaky": $flaky, "flake_score": $fscore}]' \
+         "$FAILURES_OUTPUT" > "${FAILURES_OUTPUT}.tmp" && mv "${FAILURES_OUTPUT}.tmp" "$FAILURES_OUTPUT"
+
+      total_confirmed=$(jq 'length' "$FAILURES_OUTPUT")
+      if [ "$total_confirmed" -ge "$MAX_CANDIDATES" ]; then
+        log_info "      Reached MAX_CANDIDATES=$MAX_CANDIDATES — stopping Phase 2 early"
+        break 2  # break out of both the candidate loop and workflow loop
+      fi
       continue
     fi
 
