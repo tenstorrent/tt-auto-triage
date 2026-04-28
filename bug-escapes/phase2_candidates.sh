@@ -429,6 +429,13 @@ for i in $(seq 0 $((num_workflows - 1))); do
     log_dir_found=""
     log_snippet=""
 
+    # Write TSV to a temp file instead of using process substitution < <(jq ...).
+    # In bash 5.x, while...done < <(cmd) propagates the subprocess exit code through
+    # set -e even when the jq command itself succeeds — causing a silent script exit
+    # if jq produces no output or the process substitution races with set -e cleanup.
+    _runs_tsv=$(mktemp)
+    echo "$failing_runs_arr" | jq -r '.[] | [.run_id, (.job_id // 0)] | @tsv' > "$_runs_tsv" 2>/dev/null || true
+
     while IFS=$'\t' read -r try_run_id try_job_id; do
       run_log_dir="$LOGS_DIR/run_${try_run_id}"
       if [ ! -d "$run_log_dir" ]; then
@@ -481,7 +488,8 @@ for i in $(seq 0 $((num_workflows - 1))); do
           break  # Found error lines — no need to try more runs
         fi
       fi
-    done < <(echo "$failing_runs_arr" | jq -r '.[] | [.run_id, (.job_id // 0)] | @tsv')
+    done < "$_runs_tsv"
+    rm -f "$_runs_tsv"
 
     if [ -z "$log_dir_found" ]; then
       log_info "      Could not download logs for '$job_name' — skipping"
