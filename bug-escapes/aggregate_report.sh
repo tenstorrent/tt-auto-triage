@@ -135,7 +135,7 @@ combined=$(jq -n \
         # Filter decision: did this escape meet the verify criteria?
         was_verification_candidate:
           (($e.type == "vertical") and
-           ($e.fix_confidence == "high") and
+           ($e.fix_confidence == "high" or $e.fix_confidence == "medium") and
            ($e.fix_commit_sha != null) and ($e.fix_commit_sha != "unknown")),
 
         # Join with verification result
@@ -165,7 +165,7 @@ combined=$(jq -n \
             {
               status: (
                 if (($e.type == "vertical") and
-                    ($e.fix_confidence == "high") and
+                    ($e.fix_confidence == "high" or $e.fix_confidence == "medium") and
                     ($e.fix_commit_sha != null) and
                     ($e.fix_commit_sha != "unknown")) then
                   "missing_artifact"
@@ -176,12 +176,12 @@ combined=$(jq -n \
               verdict: null,
               reason: (
                 if (($e.type == "vertical") and
-                    ($e.fix_confidence == "high") and
+                    ($e.fix_confidence == "high" or $e.fix_confidence == "medium") and
                     ($e.fix_commit_sha != null) and
                     ($e.fix_commit_sha != "unknown")) then
                   "verification was expected but no artifact was found"
                 else
-                  "did not meet verify filter (needs type=vertical, fix_confidence=high, valid SHA)"
+                  "did not meet verify filter (needs type=vertical, fix_confidence=medium/high, valid SHA)"
                 end
               )
             }
@@ -325,7 +325,7 @@ render_not_attempted() {
   echo "## Not attempted (did not meet verify filter)"
   echo ""
   echo "Bug escapes found by detection but not verified because they did not"
-  echo "match the criteria \`type == vertical AND fix_confidence == high AND"
+  echo "match the criteria \`type == vertical AND fix_confidence == medium/high AND"
   echo "fix_commit_sha valid\`."
   echo ""
   render_not_attempted

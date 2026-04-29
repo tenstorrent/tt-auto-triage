@@ -209,11 +209,12 @@ jobs:
 
       # --- Autonomous mode: prepare the verify matrix -----------------------
       # Emit a JSON array of escapes that qualify for verification: must be
-      # type=vertical with fix_confidence=high and a real fix_commit_sha.
+      # type=vertical with fix_confidence=high or medium and a real fix_commit_sha.
+      # Low-confidence escapes are excluded — attribution is too uncertain.
       # GitHub Actions requires the matrix input to fit on a single line of
       # $GITHUB_OUTPUT, so we use `jq -c` (compact). An empty matrix is
       # perfectly valid here; the downstream job is gated on verify-count != 0.
-      - name: Filter for vertical, high-confidence escapes (build verify matrix)
+      - name: Filter for vertical, medium-or-higher confidence escapes (build verify matrix)
         id: filter
         if: always()
         run: |
@@ -230,7 +231,7 @@ jobs:
           jq -c '[
             .bug_escapes[] | select(
               .type == "vertical" and
-              .fix_confidence == "high" and
+              (.fix_confidence == "high" or .fix_confidence == "medium") and
               .fix_commit_sha != null and
               .fix_commit_sha != "" and
               .fix_commit_sha != "unknown"
@@ -240,7 +241,7 @@ jobs:
           count=$(jq 'length' verify-matrix.json)
           echo "verify-matrix=$(cat verify-matrix.json)" >> "$GITHUB_OUTPUT"
           echo "verify-count=${count}" >> "$GITHUB_OUTPUT"
-          echo "Qualifying escapes (vertical + high + valid SHA): ${count}"
+          echo "Qualifying escapes (vertical + medium/high + valid SHA): ${count}"
 
       # Deadline is a shared epoch-seconds timestamp consumed by every matrix
       # leg's gate step. Computed once here so all legs agree on "now + budget".
@@ -274,7 +275,7 @@ jobs:
               echo "- **auto-verify**: ${{ inputs.auto-verify }}"
               if [ "${{ inputs.auto-verify }}" = "true" ]; then
                 echo "- **verify-budget-hours**: ${{ inputs.verify-budget-hours }}"
-                echo "- **verification candidates** (vertical + high): ${{ steps.filter.outputs.verify-count }}"
+                echo "- **verification candidates** (vertical + medium/high): ${{ steps.filter.outputs.verify-count }}"
               fi
               if [ -n "${{ inputs.test-workflows }}" ]; then
                 echo "- **workflows scanned**: \`${{ inputs.test-workflows }}\`"
