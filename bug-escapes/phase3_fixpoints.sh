@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'echo "[ERR] phase3 crashed at line $LINENO — exit $?" >&2' ERR
 
 # Phase 3: Find Fix Points
 #
@@ -31,7 +32,7 @@ export CURSOR_AGENT_TIMEOUT=120
 echo '[]' > "$FIX_POINTS_OUTPUT"
 echo '[]' > "$ONGOING_FAILURES_OUTPUT"
 
-num_failures=$(jq 'length' "$FAILURES_INPUT")
+num_failures=$(jq 'length' "$FAILURES_INPUT" 2>/dev/null || echo 0)
 log_info "Phase 3: analyzing $num_failures consistent failures for fix points"
 
 for i in $(seq 0 $((num_failures - 1))); do
@@ -85,19 +86,20 @@ for i in $(seq 0 $((num_failures - 1))); do
     fi
 
     for r in $(seq 0 $((runs_on_page - 1))); do
-      rid=$(echo "$page_json" | jq -r ".workflow_runs[$r].id")
+      rid=$(echo "$page_json" | jq -r ".workflow_runs[$r].id" 2>/dev/null || echo "")
       if [ "$rid" = "$last_failing_run_id" ]; then
         found_our_run=true
         break
       fi
-      subsequent_runs=$(echo "$subsequent_runs" | jq --argjson run "$(echo "$page_json" | jq ".workflow_runs[$r]")" '. += [$run]')
+      _run_data=$(echo "$page_json" | jq ".workflow_runs[$r]" 2>/dev/null || echo "null")
+      subsequent_runs=$(echo "$subsequent_runs" | jq --argjson run "$_run_data" '. += [$run]' 2>/dev/null || echo "$subsequent_runs")
     done
 
     page=$((page + 1))
   done
 
-  subsequent_runs=$(echo "$subsequent_runs" | jq 'reverse')
-  num_subsequent=$(echo "$subsequent_runs" | jq 'length')
+  subsequent_runs=$(echo "$subsequent_runs" | jq 'reverse' 2>/dev/null || echo "[]")
+  num_subsequent=$(echo "$subsequent_runs" | jq 'length' 2>/dev/null || echo 0)
 
   if [ "$num_subsequent" -eq 0 ]; then
     log_info "    No subsequent runs found — skipping (failure may still be active)"
@@ -124,8 +126,9 @@ for i in $(seq 0 $((num_failures - 1))); do
       break
     fi
 
-    run_id=$(echo "$subsequent_runs" | jq -r ".[$r].id")
-    run_sha=$(echo "$subsequent_runs" | jq -r ".[$r].head_sha")
+    run_id=$(echo "$subsequent_runs" | jq -r ".[$r].id" 2>/dev/null || echo "")
+    run_sha=$(echo "$subsequent_runs" | jq -r ".[$r].head_sha" 2>/dev/null || echo "")
+    if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then continue; fi
 
     jobs_json=$(get_jobs_for_run "$run_id")
     job_conclusion=$(echo "$jobs_json" | jq -r --arg jn "$job_name" '
@@ -176,7 +179,8 @@ for i in $(seq 0 $((num_failures - 1))); do
     if [ "$check_start" -le "$check_end" ]; then
       log_info "    Post-fix stability: checking runs $check_start..$check_end (idx in subsequent)"
       for r in $(seq "$check_start" "$check_end"); do
-        pf_run_id=$(echo "$subsequent_runs" | jq -r ".[$r].id")
+        pf_run_id=$(echo "$subsequent_runs" | jq -r ".[$r].id" 2>/dev/null || echo "")
+        if [ -z "$pf_run_id" ] || [ "$pf_run_id" = "null" ]; then continue; fi
         pf_jobs=$(get_jobs_for_run "$pf_run_id")
         pf_conclusion=$(echo "$pf_jobs" | jq -r --arg jn "$job_name" '
           .jobs[] | select(.name == $jn or (.name | endswith(" / " + $jn)) or (.name | contains($jn))) | .conclusion // "unknown"
@@ -356,7 +360,7 @@ for i in $(seq 0 $((num_failures - 1))); do
   fi
   rm -f "$agent_output"
 
-  num_fixes=$(echo "$candidate_fixes" | jq 'length')
+  num_fixes=$(echo "$candidate_fixes" | jq 'length' 2>/dev/null || echo 0)
   if [ "$num_fixes" -eq 0 ]; then
     # Try to determine layer from the first passing SHA's changed files
     fallback_files=$(gh api "repos/${AT_OWNER_REPO}/commits/${first_passing_run_sha}" \
@@ -399,5 +403,5 @@ done
 export CURSOR_AGENT_MAX_RETRIES="$SAVED_RETRIES"
 export CURSOR_AGENT_TIMEOUT="$SAVED_TIMEOUT"
 
-total_fixpoints=$(jq 'length' "$FIX_POINTS_OUTPUT")
+total_fixpoints=$(jq 'length' "$FIX_POINTS_OUTPUT" 2>/dev/null || echo 0)
 log_info "Phase 3 done: $total_fixpoints fix points identified"
