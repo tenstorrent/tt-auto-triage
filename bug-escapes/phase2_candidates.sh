@@ -624,7 +624,10 @@ ${_snippet_for_prompt}
          "CANDIDATES_SUMMARY=$chunk_summary"; then
 
       # The agent returns a JSON array. Iterate and match back by job name.
-      num_results=$(jq 'if type == "array" then length else 0 end' "$agent_output" 2>/dev/null || echo 0)
+      # Use head -1 so a multi-doc output file (two arrays) doesn't produce
+      # a multi-line num_results that breaks bash arithmetic below.
+      num_results=$(jq 'if type == "array" then length else 0 end' "$agent_output" 2>/dev/null | head -1)
+      num_results="${num_results:-0}"
       log_info "    ${LLM_BACKEND:-cursor} agent returned $num_results classifications"
 
       for idx in $(seq 0 $((num_results - 1))); do

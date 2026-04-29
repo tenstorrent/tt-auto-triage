@@ -118,14 +118,18 @@ cursor_agent_json() {
 
   _save_agent_log "$label" "$raw_file"
 
-  if jq '.' "$raw_file" > "$output_file" 2>/dev/null; then
+  # Only emit the *first* JSON value — agents occasionally return multiple
+  # arrays (retry output appended, or model echoed prompt + result) which
+  # would make jq output multi-line counts and break downstream arithmetic.
+  if jq -c '.' "$raw_file" 2>/dev/null | head -1 | jq '.' > "$output_file" 2>/dev/null \
+      && [ -s "$output_file" ]; then
     rm -f "$raw_file"
     return 0
   fi
 
-  # Strip markdown code fences and try again
+  # Strip markdown code fences and try again (take first block only)
   sed -n '/^```/,/^```/{/^```/d;p}' "$raw_file" \
-    | jq '.' > "$output_file" 2>/dev/null
+    | jq -c '.' 2>/dev/null | head -1 | jq '.' > "$output_file" 2>/dev/null
   local status=$?
 
   if [ "$status" -ne 0 ] || [ ! -s "$output_file" ]; then
