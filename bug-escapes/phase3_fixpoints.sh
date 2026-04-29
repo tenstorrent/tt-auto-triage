@@ -132,8 +132,8 @@ for i in $(seq 0 $((num_failures - 1))); do
 
     jobs_json=$(get_jobs_for_run "$run_id")
     job_conclusion=$(echo "$jobs_json" | jq -r --arg jn "$job_name" '
-      .jobs[] | select(.name == $jn or (.name | endswith(" / " + $jn)) or (.name | contains($jn))) | .conclusion // "unknown"
-    ' 2>/dev/null | head -1)
+      (.jobs // [])[] | select(.name == $jn or (.name | endswith(" / " + $jn)) or (.name | contains($jn))) | .conclusion // "unknown"
+    ' 2>/dev/null | head -1 || echo "")
 
     if [ -z "$job_conclusion" ]; then
       consecutive_gaps=$((consecutive_gaps + 1))
@@ -183,8 +183,8 @@ for i in $(seq 0 $((num_failures - 1))); do
         if [ -z "$pf_run_id" ] || [ "$pf_run_id" = "null" ]; then continue; fi
         pf_jobs=$(get_jobs_for_run "$pf_run_id")
         pf_conclusion=$(echo "$pf_jobs" | jq -r --arg jn "$job_name" '
-          .jobs[] | select(.name == $jn or (.name | endswith(" / " + $jn)) or (.name | contains($jn))) | .conclusion // "unknown"
-        ' 2>/dev/null | head -1)
+          (.jobs // [])[] | select(.name == $jn or (.name | endswith(" / " + $jn)) or (.name | contains($jn))) | .conclusion // "unknown"
+        ' 2>/dev/null | head -1 || echo "")
 
         if [ "$pf_conclusion" = "success" ]; then
           post_fix_pass=$((post_fix_pass + 1))
