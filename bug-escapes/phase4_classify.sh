@@ -258,18 +258,22 @@ if [ "$before_dedup" -ne "$after_dedup" ]; then
   log_info "Deduplication: removed $removed duplicate escape(s) (same test seen in multiple workflows)"
 fi
 
-# Write final output
+# Write final output — write escapes to a temp file to avoid ARG_MAX limits
+# when the accumulated array is large (e.g. 62+ fix points)
+_escapes_tmp=$(mktemp)
+echo "$bug_escapes" > "$_escapes_tmp"
 jq -n \
   --arg gen "$generated_at" \
   --arg window "${lookback_start} to ${lookback_end}" \
   --arg repo "$AT_OWNER_REPO" \
-  --argjson escapes "$bug_escapes" \
+  --slurpfile escapes "$_escapes_tmp" \
   '{
     "generated_at": $gen,
     "lookback_window": $window,
     "repository": $repo,
-    "bug_escapes": $escapes
+    "bug_escapes": $escapes[0]
   }' > "$BUG_ESCAPES_OUTPUT"
+rm -f "$_escapes_tmp"
 
 # Print summary
 total=$(echo "$bug_escapes" | jq 'length')
