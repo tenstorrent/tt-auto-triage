@@ -207,6 +207,16 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
+      - name: Upload seen-escapes cache
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bug-escapes-seen-escapes-cache
+          path: bug-escapes/state/seen_escapes.json
+          retention-days: 30
+          if-no-files-found: ignore
+          overwrite: true
+
       # --- Autonomous mode: prepare the verify matrix -----------------------
       # Emit a JSON array of escapes that qualify for verification: must be
       # type=vertical with fix_confidence=high or medium and a real fix_commit_sha.

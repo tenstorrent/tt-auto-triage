@@ -20,6 +20,92 @@ BUG_ESCAPES_OUTPUT="$OUTPUT_DIR/bug-escapes-output.json"
 LOOKBACK_DAYS="${LOOKBACK_DAYS:-14}"
 MAX_ESCAPES="${MAX_ESCAPES:-999}"
 
+# --- Seen-escapes deduplication cache ---
+# Prevents re-reporting the same escape across multiple runs.
+# Keyed by "fix_sha|test_name|workflow_basename". TTL = LOOKBACK_DAYS.
+SEEN_ESCAPES_FILE="$SCRIPT_DIR/state/seen_escapes.json"
+SEEN_ESCAPES_TTL_DAYS="${SEEN_ESCAPES_TTL_DAYS:-${LOOKBACK_DAYS}}"
+mkdir -p "$SCRIPT_DIR/state"
+echo '{}' > "$SEEN_ESCAPES_FILE"
+
+_restore_seen_escapes_cache() {
+  local token="${GITHUB_TOKEN:-${GITHUB_READ_TOKEN:-}}"
+  [ -z "$token" ] && return
+  local artifact_id
+  artifact_id=$(curl -s -H "Authorization: Bearer $token" \
+    "https://api.github.com/repos/${AT_OWNER_REPO}/actions/artifacts?name=bug-escapes-seen-escapes-cache&per_page=1" \
+    | jq -r '.artifacts[0].id // empty' 2>/dev/null || echo "")
+  [ -z "$artifact_id" ] && { log_info "Seen-escapes cache: no prior artifact (first run)"; return; }
+  local tmpzip
+  tmpzip=$(mktemp --suffix=.zip)
+  if curl -s -H "Authorization: Bearer $token" -L \
+       "https://api.github.com/repos/${AT_OWNER_REPO}/actions/artifacts/${artifact_id}/zip" \
+       -o "$tmpzip" 2>/dev/null && [ -s "$tmpzip" ]; then
+    if python3 -c "
+import sys, zipfile, pathlib
+with zipfile.ZipFile('$tmpzip') as z:
+    names = z.namelist()
+    target = next((n for n in names if n.endswith('seen_escapes.json')), None)
+    if target:
+        pathlib.Path('${SEEN_ESCAPES_FILE}.dl').write_bytes(z.read(target))
+        sys.exit(0)
+sys.exit(1)
+" 2>/dev/null; then
+      jq -s '.[0] * .[1]' "$SEEN_ESCAPES_FILE" "${SEEN_ESCAPES_FILE}.dl" \
+        > "${SEEN_ESCAPES_FILE}.merged" 2>/dev/null \
+        && mv "${SEEN_ESCAPES_FILE}.merged" "$SEEN_ESCAPES_FILE" || true
+      rm -f "${SEEN_ESCAPES_FILE}.dl"
+    fi
+  fi
+  rm -f "$tmpzip"
+}
+
+_evict_stale_escapes() {
+  local ttl_s now_s before_count after_count
+  ttl_s=$(( SEEN_ESCAPES_TTL_DAYS * 86400 ))
+  now_s=$(date -u +%s)
+  before_count=$(jq 'length' "$SEEN_ESCAPES_FILE" 2>/dev/null || echo 0)
+  jq --argjson now "$now_s" --argjson ttl "$ttl_s" '
+    with_entries(
+      select(
+        (.value | type == "object") and
+        ((.value.t // "") != "") and
+        (
+          (now - ((.value.t | split("T")[0] + "T" + (.value.t | split("T")[1] | split("Z")[0]) | strptime("%Y-%m-%dT%H:%M:%S") | mktime) // 0)) < $ttl
+        )
+      )
+    )
+  ' "$SEEN_ESCAPES_FILE" > "${SEEN_ESCAPES_FILE}.tmp" 2>/dev/null \
+    && mv "${SEEN_ESCAPES_FILE}.tmp" "$SEEN_ESCAPES_FILE" || true
+  after_count=$(jq 'length' "$SEEN_ESCAPES_FILE" 2>/dev/null || echo 0)
+  local evicted=$(( before_count - after_count ))
+  [ "$evicted" -gt 0 ] && log_info "Seen-escapes cache: evicted $evicted stale entries"
+}
+
+_escape_cache_key() {
+  printf '%s' "${1}|${2}|$(basename "${3}")"
+}
+
+_is_escape_seen() {
+  local result
+  result=$(jq -r --arg k "$1" '(.[$k] // null) | if type == "object" then "yes" else "no" end' \
+    "$SEEN_ESCAPES_FILE" 2>/dev/null || echo "no")
+  [ "$result" = "yes" ]
+}
+
+_mark_escape_seen() {
+  local key="$1" etype="$2" conf="$3" now_ts
+  now_ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  jq --arg k "$key" --arg etype "$etype" --arg conf "$conf" --arg t "$now_ts" \
+    '. + {($k): {"t": $t, "type": $etype, "confidence": $conf}}' "$SEEN_ESCAPES_FILE" \
+    > "${SEEN_ESCAPES_FILE}.tmp" 2>/dev/null \
+    && mv "${SEEN_ESCAPES_FILE}.tmp" "$SEEN_ESCAPES_FILE" || true
+}
+
+_restore_seen_escapes_cache
+_evict_stale_escapes
+log_info "Seen-escapes cache loaded: $(jq 'length' "$SEEN_ESCAPES_FILE" 2>/dev/null || echo 0) entries (TTL=${SEEN_ESCAPES_TTL_DAYS}d)"
+
 generated_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 lookback_start=$(date -u -d "-${LOOKBACK_DAYS} days" '+%Y-%m-%d' 2>/dev/null \
   || date -u -v "-${LOOKBACK_DAYS}d" '+%Y-%m-%d' 2>/dev/null \
@@ -115,6 +201,13 @@ for i in $(seq 0 $((num_fixpoints - 1))); do
       log_warn "  [$((i+1))] Invalid fix SHA $fix_sha for $skip_test (HTTP $sha_check_status) — setting to unknown, skipping verification dispatch"
       fix_sha="unknown"
     fi
+  fi
+
+  # --- Seen-escapes dedup: skip if already reported in a prior run ---
+  escape_key=$(_escape_cache_key "$fix_sha" "$test_name" "$test_pipeline")
+  if _is_escape_seen "$escape_key"; then
+    log_info "  [$((i+1))] Skipping $test_name — already reported (seen-escapes cache hit: ${fix_sha:0:8})"
+    continue
   fi
 
   fix_layer=$(echo "$fix_commit" | jq -r '.fix_layer // "unknown"')
@@ -232,6 +325,9 @@ for i in $(seq 0 $((num_fixpoints - 1))); do
       "analysis": $notes
     }]')
 
+  # Record in seen-escapes cache so subsequent runs skip this escape
+  _mark_escape_seen "$escape_key" "$escape_type" "$fix_confidence"
+
   current_count=$(echo "$bug_escapes" | jq 'length')
   if [ "$current_count" -ge "$MAX_ESCAPES" ]; then
     log_info "Reached MAX_ESCAPES=$MAX_ESCAPES — stopping classification early"
@@ -274,6 +370,7 @@ jq -n \
     "bug_escapes": $escapes[0]
   }' > "$BUG_ESCAPES_OUTPUT"
 rm -f "$_escapes_tmp"
+log_info "Seen-escapes cache updated: $(jq 'length' "$SEEN_ESCAPES_FILE" 2>/dev/null || echo 0) entries"
 
 # Print summary
 total=$(echo "$bug_escapes" | jq 'length')
