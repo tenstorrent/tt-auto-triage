@@ -59,15 +59,18 @@ def create_issue(
 
 def main() -> int:
     log("=== Create Issues ===")
+    if LLM_BACKEND not in ("cursor", "copilot"):
+        log(f"LLM_BACKEND must be 'cursor' or 'copilot', got: {LLM_BACKEND!r}")
+        return 1
     if LLM_BACKEND == "copilot" and not os.environ.get("COPILOT_GITHUB_TOKEN"):
         log("COPILOT_GITHUB_TOKEN is required when LLM_BACKEND=copilot.")
         return 1
-    if LLM_BACKEND != "copilot" and not os.environ.get("CURSOR_API_KEY"):
+    if LLM_BACKEND == "cursor" and not os.environ.get("CURSOR_API_KEY"):
         log("CURSOR_API_KEY is required when LLM_BACKEND=cursor.")
         return 1
     workflow_data = download_workflow_data(TARGET_REPO)
-    if WORKFLOW_FILTER:
-        filters = [f.strip().lower() for f in WORKFLOW_FILTER.split(",") if f.strip()]
+    filters = [f.strip().lower() for f in WORKFLOW_FILTER.split(",") if f.strip()]
+    if filters:
         orig_count = len(workflow_data)
         workflow_data = [(name, runs) for name, runs in workflow_data
                          if any(f in str(name).lower() for f in filters)]
@@ -132,8 +135,8 @@ def main() -> int:
             "body": issue_body,
             "url": issue_url,
         })
-        for job in group:
-            summary.append(_entry(job, "created", issue=issue_url))
+        # One summary entry per group (one issue filed); secondary jobs are covered
+        summary.append(_entry(primary_job, "created", issue=issue_url))
 
     markdown = render(summary, open_issues)
     if SUMMARY_OUTPUT:

@@ -55,6 +55,39 @@ class CreateIssuesIssueStateTests(unittest.TestCase):
             {("Workflow A", "Job A"), ("Workflow B", "Job B")},
         )
 
+    def test_append_base_markers_with_extra_jobs(self) -> None:
+        extra = [("Workflow C", "Job C"), ("Workflow D", "Job D")]
+        body = append_base_markers(
+            "Issue body",
+            workflow_name="Workflow A",
+            job_name="Job A",
+            extra_jobs=extra,
+        )
+
+        self.assertIn("`Auto-triage-workflow: Workflow A`", body)
+        self.assertIn("`Auto-triage-job-name: Job A`", body)
+        self.assertIn("`Auto-triage-workflow: Workflow C`", body)
+        self.assertIn("`Auto-triage-job-name: Job C`", body)
+        self.assertIn("`Auto-triage-workflow: Workflow D`", body)
+        self.assertIn("`Auto-triage-job-name: Job D`", body)
+
+    def test_tracked_pairs_from_issues_recovers_all_extra_jobs(self) -> None:
+        extra = [("Workflow C", "Job C"), ("Workflow D", "Job D")]
+        issue_body = append_base_markers(
+            "Issue body",
+            workflow_name="Workflow A",
+            job_name="Job A",
+            extra_jobs=extra,
+        )
+        issues = [{"body": issue_body}]
+
+        pairs = tracked_pairs_from_issues(issues)
+
+        self.assertEqual(
+            pairs,
+            {("Workflow A", "Job A"), ("Workflow C", "Job C"), ("Workflow D", "Job D")},
+        )
+
     def test_sanitize_issue_body_redacts_common_secrets(self) -> None:
         body = (
             "token ghp_123456789012345678901234567890123456\n"

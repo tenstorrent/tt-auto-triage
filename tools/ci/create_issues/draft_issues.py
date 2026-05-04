@@ -103,9 +103,11 @@ def draft_issue_body(
 
     if grouped_jobs:
         grouped_jobs_section = (
-            "\n\nIMPORTANT: This issue covers multiple CI jobs that all share the same root cause.\n"
-            "All of the following jobs are affected and MUST be listed in the issue body under\n"
-            "an '### Affected jobs' section:\n"
+            "\n\nNOTE: The following additional CI jobs were flagged by a heuristic similarity check "
+            "as potentially sharing the same root cause. Verify this independently using the provided "
+            "logs before including them. If they do share the root cause, list them in the issue body "
+            "under an '### Affected jobs' section; otherwise describe only the jobs whose failures "
+            "you can confirm:\n"
             + "\n".join(
                 f"  - Workflow: {j['workflow_name']} / Job: {j['job_name']}"
                 for j in grouped_jobs
