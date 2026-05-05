@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .detect_failures import download_job_logs, find_failing_jobs, group_similar_jobs
+from .detect_failures import download_job_logs, filter_consistent_failures, find_failing_jobs, group_similar_jobs
 from .download_data import download_workflow_data
 from .draft_issues import draft_issue_body
 from .helpers import gh, log, sanitize_text
@@ -87,9 +87,18 @@ def main() -> int:
     logs_dir = Path("build_ci/create_issues/logs")
     enriched_jobs = download_job_logs(failing_jobs, TARGET_REPO, logs_dir)
 
+    # Consistency gate: only keep jobs whose error is reproducible across all consecutive runs
+    consistent_jobs = filter_consistent_failures(enriched_jobs)
+    if not consistent_jobs:
+        log("No jobs passed the consistency gate (all failures appear non-deterministic). Done.")
+        print(json.dumps({"created": 0, "skipped": len(tracked_pairs), "failures": []}))
+        return 0
+
+    log(f"  {len(enriched_jobs)} failing job(s) → {len(consistent_jobs)} with consistent errors")
+
     # Group jobs with similar errors to avoid filing near-duplicate issues
-    job_groups = group_similar_jobs(enriched_jobs, model=CURSOR_MODEL, backend=LLM_BACKEND)
-    log(f"  {len(enriched_jobs)} failing job(s) → {len(job_groups)} issue group(s) after deduplication")
+    job_groups = group_similar_jobs(consistent_jobs, model=CURSOR_MODEL, backend=LLM_BACKEND)
+    log(f"  {len(consistent_jobs)} consistent job(s) → {len(job_groups)} issue group(s) after deduplication")
 
     summary: list[dict[str, Any]] = []
     created_so_far = 0
