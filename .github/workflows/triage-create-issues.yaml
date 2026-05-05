@@ -50,6 +50,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/tt-auto-triage
+          ref: ebanerjee/create-issues-copilot
           persist-credentials: false
 
       - name: Install Cursor CLI
