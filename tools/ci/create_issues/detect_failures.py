@@ -320,3 +320,86 @@ def group_similar_jobs(
             f"{saved_count} duplicate issue(s) suppressed"
         )
     return groups
+
+
+
+# ---------------------------------------------------------------------------
+# Consistency gate: drop jobs where error signature differs across runs
+# ---------------------------------------------------------------------------
+
+def filter_consistent_failures(
+    jobs: list[dict[str, Any]],
+    threshold: float = 0.85,
+) -> list[dict[str, Any]]:
+    """Keep only jobs whose root-cause error is consistent across all consecutive runs.
+
+    Uses regex extraction on each run's log file.  If the extracted signatures
+    diverge (similarity < threshold) between any two runs, the job is dropped —
+    it is likely a flaky infra issue or an unrelated transient failure rather
+    than a deterministic bug.
+
+    A job with no extractable signature in ANY run is also dropped (can't
+    confirm the error is real or reproducible).
+
+    Returns the filtered job list.  Each kept job has an ``error_signature``
+    key added (the reference signature from run 1) so downstream steps can
+    reuse it without re-extracting.
+    """
+    kept: list[dict[str, Any]] = []
+
+    for job in jobs:
+        log_paths = job.get("log_paths", [])
+        if not log_paths:
+            log(f"  Dropping '{job['job_name']}': no log paths available")
+            continue
+
+        sigs: list[str] = []
+        for log_path in log_paths:
+            try:
+                text = Path(log_path).read_text(errors="replace")
+                sig = _regex_extract_error(text[-100_000:])
+                sigs.append(sig)
+            except Exception as exc:
+                log(f"  Warning: could not read log {log_path}: {exc}")
+                sigs.append("")
+
+        valid_sigs = [s for s in sigs if s]
+        if not valid_sigs:
+            log(
+                f"  Dropping '{job['job_name']}': no error signature found in any of "
+                f"{len(log_paths)} run log(s)"
+            )
+            continue
+
+        # All runs must agree — compare every signature against the first valid one
+        reference = valid_sigs[0]
+        inconsistent_run: int | None = None
+        for idx, sig in enumerate(sigs):
+            if not sig:
+                # A run with no extractable error is suspicious
+                inconsistent_run = idx
+                break
+            similarity = _error_similarity(reference, sig)
+            if similarity < threshold:
+                inconsistent_run = idx
+                log(
+                    f"  Dropping '{job['job_name']}': run {idx + 1} error diverges "
+                    f"(similarity {similarity:.2f} < {threshold:.2f})\n"
+                    f"    ref:  {reference[:120]}\n"
+                    f"    run{idx + 1}: {sig[:120]}"
+                )
+                break
+
+        if inconsistent_run is not None:
+            continue
+
+        kept.append({**job, "error_signature": reference})
+        short = reference[:80]
+        log(f"  Consistent ({len(sigs)} runs): '{job['job_name']}' — {short}")
+
+    dropped = len(jobs) - len(kept)
+    if dropped:
+        log(f"  Consistency gate: dropped {dropped}/{len(jobs)} job(s) with inconsistent errors")
+    else:
+        log(f"  Consistency gate: all {len(jobs)} job(s) passed")
+    return kept
