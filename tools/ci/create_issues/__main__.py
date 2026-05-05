@@ -88,7 +88,7 @@ def main() -> int:
     enriched_jobs = download_job_logs(failing_jobs, TARGET_REPO, logs_dir)
 
     # Group jobs with similar errors to avoid filing near-duplicate issues
-    job_groups = group_similar_jobs(enriched_jobs)
+    job_groups = group_similar_jobs(enriched_jobs, model=CURSOR_MODEL, backend=LLM_BACKEND)
     log(f"  {len(enriched_jobs)} failing job(s) → {len(job_groups)} issue group(s) after deduplication")
 
     summary: list[dict[str, Any]] = []
@@ -153,3 +153,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
