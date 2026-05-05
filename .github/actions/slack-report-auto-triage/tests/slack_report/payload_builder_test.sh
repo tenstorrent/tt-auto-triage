@@ -214,7 +214,7 @@ text_single=$(echo "$single_commit_json" | jq -r -f "$SCRIPTS_DIR/slack_message.
   --arg workflow_name "my-workflow" \
   --arg auto_fix "" \
   --arg allow_pings "false" \
-  --arg job_owner_ping "")
+  --argjson job_owner '[]')
 assert "1-commit: COMMITS section present" [ -n "$(echo "$text_single" | grep -F '*COMMITS:*' || true)" ]
 assert "1-commit: no truncation note" [ -z "$(echo "$text_single" | grep -F 'more commit(s)' || true)" ]
 
@@ -237,9 +237,33 @@ text_two=$(echo "$two_commit_json" | jq -r -f "$SCRIPTS_DIR/slack_message.jq" \
   --arg workflow_name "my-workflow" \
   --arg auto_fix "" \
   --arg allow_pings "false" \
-  --arg job_owner_ping "")
+  --argjson job_owner '[]')
 assert "2-commits: shows first hash" [ -n "$(echo "$text_two" | grep -F 'aaaa1111' || true)" ]
 assert "2-commits: does not show second hash" [ -z "$(echo "$text_two" | grep -F 'bbbb2222' || true)" ]
 assert "2-commits: truncation note says 1 more" [ -n "$(echo "$text_two" | grep -F '1 more commit(s)' || true)" ]
+
+# -- JOB_OWNER representative suffix is preserved with pings --------------------
+rm -rf "$tmpdir/.auto_triage"
+mkdir -p "$tmpdir/.auto_triage/output" "$tmpdir/.auto_triage/data"
+cp "$SAMPLE_CASE4_MSG" "$tmpdir/.auto_triage/output/slack_message.json"
+export MESSAGE_PATH="$tmpdir/.auto_triage/output/slack_message.json"
+export SLACK_TS=""
+export ALLOW_PINGS="true"
+rm -f "$tmpdir/github_output"
+
+cat > "$tmpdir/.auto_triage/data/job_owner.json" <<'EOF'
+[
+  {"name": "Rose Li (representing Metal Infra Team)", "slack_id": "U08DEGUJY3H"}
+]
+EOF
+
+cd "$tmpdir"
+bash "$BUILD_SCRIPT"
+cd - >/dev/null
+
+payload_owner_rep=$(cat "$tmpdir/.auto_triage/slack_payload.json")
+text_owner_rep=$(echo "$payload_owner_rep" | jq -r '.text // empty')
+assert "JOB OWNER representative owner is pinged" [ -n "$(echo "$text_owner_rep" | grep -F '<@U08DEGUJY3H>' || true)" ]
+assert "JOB OWNER representative suffix is preserved" [ -n "$(echo "$text_owner_rep" | grep -F '(representing Metal Infra Team)' || true)" ]
 
 test_summary
