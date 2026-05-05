@@ -16,6 +16,14 @@ import re
 import sys
 
 
+def add_owner(owners, seen, name, slack_id):
+    key = f"{(slack_id or '').upper()}::{(name or '').strip().lower()}"
+    if key in seen:
+        return
+    seen.add(key)
+    owners.append({"name": (name or "").strip(), "slack_id": (slack_id or "").strip()})
+
+
 def main():
     job_name = os.environ.get("JOB_NAME", "")
     owner_file = os.environ.get("JOB_OWNER_FILE", "")
@@ -27,6 +35,7 @@ def main():
         sys.exit(1)
 
     owners_result = []
+    seen_owners = set()
 
     try:
         with open(thread_file) as f:
@@ -46,6 +55,14 @@ def main():
         if os.environ.get("FETCH_JOB_OWNER_DEBUG"):
             print(f"Matched line: {clean[:200]}")
 
+        # Slack rich_text mentions may appear as explicit mention tokens.
+        # Parse these from the raw line before angle-bracket cleanup strips them.
+        for uid in re.findall(r"<@([A-Z0-9]+)>", line):
+            add_owner(owners_result, seen_owners, "", uid)
+
+        for sid in re.findall(r"<!subteam\^([A-Z0-9]+)(?:\|[^>]+)?>", line):
+            add_owner(owners_result, seen_owners, "", sid)
+
         # Owner names follow the job description, prefixed with @
         # Names are letter-based (no leading digits) to avoid capturing
         # trailing text like "27 other pipelines are failing"
@@ -54,7 +71,7 @@ def main():
             name = re.sub(r"\s{2,}", " ", name).strip()
             if name.lower() in job_name.lower():
                 continue
-            owners_result.append({"name": name, "slack_id": ""})
+            add_owner(owners_result, seen_owners, name, "")
 
         if owners_result:
             break
@@ -82,22 +99,58 @@ def main():
             groups_data = {}
     users = users_data.get("users", []) if isinstance(users_data, dict) else users_data
     groups = groups_data.get("usergroups", []) if isinstance(groups_data, dict) else groups_data
+    users_by_id = {u.get("id", ""): u for u in users if isinstance(u, dict)}
+    groups_by_id = {g.get("id", ""): g for g in groups if isinstance(g, dict)}
 
     for owner in owners_result:
-        nl = owner["name"].lower()
+        sid = owner.get("slack_id", "")
+
+        # If mention token already provided an ID, backfill a readable name.
+        if sid:
+            if sid.startswith("U"):
+                u = users_by_id.get(sid)
+                if isinstance(u, dict):
+                    owner["name"] = owner.get("name", "") or u.get("display_name") or u.get("real_name") or u.get("username") or sid
+            elif sid.startswith("S"):
+                g = groups_by_id.get(sid)
+                if isinstance(g, dict):
+                    owner["name"] = owner.get("name", "") or g.get("name") or g.get("handle") or sid
+            continue
+
+        nl = owner.get("name", "").lower()
+        if not nl:
+            continue
+
         for u in users:
             if not isinstance(u, dict) or u.get("deleted") or u.get("is_bot"):
                 continue
             if any((u.get(f) or "").lower() == nl for f in ("real_name", "display_name", "username")):
                 owner["slack_id"] = u.get("id", "")
                 break
-        if not owner["slack_id"]:
+        if not owner.get("slack_id"):
             for g in groups:
                 if not isinstance(g, dict):
                     continue
                 if any((g.get(f) or "").lower() == nl for f in ("name", "handle")):
                     owner["slack_id"] = g.get("id", "")
                     break
+
+    # Final de-duplication pass after Slack ID resolution: if the same person was
+    # captured both as @Name and as <@U...>, keep one enriched entry.
+    deduped = []
+    dedupe_index = {}
+    for owner in owners_result:
+        sid = (owner.get("slack_id") or "").strip()
+        name = (owner.get("name") or "").strip()
+        key = sid if sid else f"name::{name.lower()}"
+        existing_idx = dedupe_index.get(key)
+        if existing_idx is None:
+            dedupe_index[key] = len(deduped)
+            deduped.append({"name": name, "slack_id": sid})
+        else:
+            if not deduped[existing_idx]["name"] and name:
+                deduped[existing_idx]["name"] = name
+    owners_result = deduped
 
     owner_dir = os.path.dirname(owner_file)
     if owner_dir:

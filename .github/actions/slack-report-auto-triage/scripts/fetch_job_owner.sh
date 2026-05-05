@@ -48,7 +48,38 @@ if [ "$OK_STATUS" != "true" ]; then
     exit 0
 fi
 
-echo "$RESPONSE" | jq -r '[.messages[] | if .blocks then (.blocks[] | .text.text // empty) else (.text // empty) end] | join("\n")' > "$THREAD_TEXT_FILE"
+# Extract text from both legacy block text fields and modern rich_text blocks.
+# Copied/forwarded Slack messages often store content in rich_text elements.
+echo "$RESPONSE" | jq -r '
+  def rich_text_to_text(elems):
+    [elems[]? |
+      if .type == "text" then (.text // "")
+      elif .type == "link" then (.text // .url // "")
+      elif .type == "emoji" then (":" + (.name // "") + ":")
+      elif .type == "user" then ("<@" + (.user_id // "") + ">")
+      elif .type == "usergroup" then ("<!subteam^" + (.usergroup_id // "") + ">")
+      elif .type == "channel" then ("<#" + (.channel_id // "") + ">")
+      elif (.elements | type) == "array" then rich_text_to_text(.elements)
+      else ""
+      end
+    ] | join("");
+  [
+    .messages[] |
+      if (.blocks | type) == "array" then
+        [.blocks[] |
+          if .type == "rich_text" then
+            rich_text_to_text(.elements // [])
+          elif (.text | type) == "object" then
+            (.text.text // "")
+          else
+            (.text // "")
+          end
+        ] | join("\n")
+      else
+        (.text // "")
+      end
+  ] | join("\n")
+' > "$THREAD_TEXT_FILE"
 echo "Thread fetched ($(wc -c < "$THREAD_TEXT_FILE") bytes). Searching for job: ${JOB_NAME}"
 
 export JOB_NAME
