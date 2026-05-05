@@ -241,12 +241,6 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
     empty = {"source": "none", "github_assignees": [], "github_names": [], "slack_assignees": [], "slack_names": []}
     try:
         text = _run_llm_agent(prompt, merged_ex)
-        if os.environ.get("DEBUG_AGENT_STDOUT", "").strip().lower() in {"1", "true", "yes"}:
-            head = text[:4000]
-            tail = text[-4000:] if len(text) > 8000 else ""
-            log(f"  [DEBUG] agent stdout head ({len(head)}b of {len(text)}b total):\n{head}")
-            if tail:
-                log(f"  [DEBUG] agent stdout tail ({len(tail)}b):\n{tail}")
         idx = text.rfind(AGENT_MARKER)
         if idx < 0:
             raise ValueError(f"Marker {AGENT_MARKER!r} not in agent output")

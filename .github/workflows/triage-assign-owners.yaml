@@ -176,7 +176,6 @@ jobs:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
           LLM_BACKEND: ${{ inputs.llm-backend }}
-          DEBUG_AGENT_STDOUT: "1"
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           ISSUE_REPO: ${{ inputs.issue-repo }}
           TARGET_REPO: ${{ inputs.target-repo }}
