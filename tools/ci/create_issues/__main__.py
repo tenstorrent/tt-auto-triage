@@ -8,7 +8,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .detect_failures import download_job_logs, filter_consistent_failures, find_failing_jobs, group_similar_jobs
+from .detect_failures import (
+    _error_similarity,
+    download_job_logs,
+    filter_consistent_failures,
+    find_failing_jobs,
+)
 from .download_data import download_workflow_data
 from .draft_issues import draft_issue_body
 from .helpers import gh, log, sanitize_text
@@ -25,6 +30,8 @@ SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
 MAX_ISSUES = int(os.environ.get("MAX_ISSUES", "0"))
 WORKFLOW_FILTER = os.environ.get("WORKFLOW_FILTER", "")
 LLM_BACKEND = os.environ.get("LLM_BACKEND", "cursor")
+
+DEDUP_THRESHOLD = 0.85
 
 
 def _entry(job: dict[str, Any], action: str, **kwargs: Any) -> dict[str, Any]:
@@ -85,67 +92,83 @@ def main() -> int:
         return 0
 
     logs_dir = Path("build_ci/create_issues/logs")
-    enriched_jobs = download_job_logs(failing_jobs, TARGET_REPO, logs_dir)
-
-    # Consistency gate: only keep jobs whose error is reproducible across all consecutive runs
-    consistent_jobs = filter_consistent_failures(enriched_jobs)
-    if not consistent_jobs:
-        log("No jobs passed the consistency gate (all failures appear non-deterministic). Done.")
-        print(json.dumps({"created": 0, "skipped": len(tracked_pairs), "failures": []}))
-        return 0
-
-    log(f"  {len(enriched_jobs)} failing job(s) → {len(consistent_jobs)} with consistent errors")
-
-    # Group jobs with similar errors to avoid filing near-duplicate issues
-    job_groups = group_similar_jobs(consistent_jobs, model=CURSOR_MODEL, backend=LLM_BACKEND)
-    log(f"  {len(consistent_jobs)} consistent job(s) → {len(job_groups)} issue group(s) after deduplication")
 
     summary: list[dict[str, Any]] = []
     created_so_far = 0
-    for group in job_groups:
-        primary_job = group[0]
+    processed_signatures: list[str] = []
 
+    for i, job in enumerate(failing_jobs):
+        log(f"Processing job {i+1}/{len(failing_jobs)}: {job['workflow_name']} / {job['job_name']}")
+
+        # ── Early exit: MAX_ISSUES reached ──────────────────────────
         if MAX_ISSUES and created_so_far >= MAX_ISSUES:
-            for job in group:
-                summary.append(_entry(job, "limit_reached"))
+            # Mark this job AND all remaining jobs as limit_reached
+            for remaining_job in failing_jobs[i:]:
+                summary.append(_entry(remaining_job, "limit_reached"))
+            break
+
+        # ── Step 1: Download logs for THIS job only ─────────────────
+        enriched = download_job_logs([job], TARGET_REPO, logs_dir)
+        if not enriched:
+            summary.append(_entry(job, "inconsistent_error", reason="log download returned nothing"))
+            continue
+        enriched_job = enriched[0]
+
+        # ── Step 2: Consistency gate ────────────────────────────────
+        consistent = filter_consistent_failures([enriched_job])
+        if not consistent:
+            summary.append(_entry(job, "inconsistent_error"))
+            continue
+        consistent_job = consistent[0]
+
+        # ── Step 3: Cross-job dedup against already-processed sigs ──
+        sig = consistent_job.get("error_signature", "")
+        is_duplicate = False
+        if sig:
+            for prev_sig in processed_signatures:
+                if _error_similarity(sig, prev_sig) >= DEDUP_THRESHOLD:
+                    log(f"  Duplicate suppressed: error similar to an already-filed job")
+                    summary.append(_entry(job, "duplicate_suppressed"))
+                    is_duplicate = True
+                    break
+        if is_duplicate:
             continue
 
-        # Merge log paths from all jobs in the group for the LLM
-        all_log_paths = [p for job in group for p in job.get("log_paths", [])]
-        merged_job = {**primary_job, "log_paths": all_log_paths}
-        if len(group) > 1:
-            merged_job["grouped_jobs"] = group[1:]
-
+        # ── Step 4: Draft issue body via LLM ────────────────────────
+        log_paths = consistent_job.get("log_paths", [])
         log(f"  Drafting issue via {LLM_BACKEND} agent...")
-        agent_result = draft_issue_body(merged_job, all_log_paths, CURSOR_MODEL, CONSECUTIVE)
+        agent_result = draft_issue_body(consistent_job, log_paths, CURSOR_MODEL, CONSECUTIVE)
+
         if agent_result and agent_result.get("deterministic") is False:
-            for job in group:
-                summary.append(_entry(job, "agent_skipped", reason=agent_result.get("reason", "not deterministic")))
+            summary.append(_entry(job, "agent_skipped", reason=agent_result.get("reason", "not deterministic")))
             continue
 
         if not agent_result or not agent_result.get("issue_body"):
-            for job in group:
-                summary.append(_entry(job, "agent_skipped", reason="no issue body from agent"))
+            summary.append(_entry(job, "agent_skipped", reason="no issue body from agent"))
             continue
 
+        # ── Step 5: Dry-run gate ────────────────────────────────────
         if not CREATE_ISSUES:
-            for job in group:
-                summary.append(_entry(job, "dry_run"))
+            summary.append(_entry(job, "dry_run"))
+            # Still record the signature so future iterations dedup against it
+            if sig:
+                processed_signatures.append(sig)
             continue
 
-        extra_jobs = [(j["workflow_name"], j["job_name"]) for j in group[1:]]
+        # ── Step 6: Create the issue ────────────────────────────────
         issue_url, issue_title, issue_body = create_issue(
-            primary_job, agent_result, extra_jobs=extra_jobs or None
+            consistent_job, agent_result, extra_jobs=None,
         )
         created_so_far += 1
+        if sig:
+            processed_signatures.append(sig)
         open_issues.append({
             "number": issue_url.rsplit("/", 1)[-1],
             "title": issue_title,
             "body": issue_body,
             "url": issue_url,
         })
-        # One summary entry per group (one issue filed); secondary jobs are covered
-        summary.append(_entry(primary_job, "created", issue=issue_url))
+        summary.append(_entry(job, "created", issue=issue_url))
 
     markdown = render(summary, open_issues)
     if SUMMARY_OUTPUT:
@@ -162,4 +185,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
