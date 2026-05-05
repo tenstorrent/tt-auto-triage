@@ -65,6 +65,83 @@ python3 "$PYTHON_SCRIPT"
 count=$(jq 'length' "$JOB_OWNER_FILE")
 assert "Python returns empty when job name not in thread" [ "$count" -eq 0 ]
 
+# -- Python: explicit <@U...> mention token is captured and name backfilled ---
+echo 'Job blackhole-demo failing. Owner: <@U111>' > "$tmpdir/thread_uid.txt"
+JOB_OWNER_FILE="$tmpdir/job_owner_uid.json"
+THREAD_TEXT_FILE="$tmpdir/thread_uid.txt"
+export JOB_OWNER_FILE THREAD_TEXT_FILE
+python3 "$PYTHON_SCRIPT"
+uid_count=$(jq 'length' "$JOB_OWNER_FILE")
+uid_first_id=$(jq -r '.[0].slack_id' "$JOB_OWNER_FILE")
+uid_first_name=$(jq -r '.[0].name' "$JOB_OWNER_FILE")
+assert_eq "<@U...> mention extracted as one owner" "$uid_count" "1"
+assert_eq "<@U...> mention preserves slack_id" "$uid_first_id" "U111"
+assert_eq "<@U...> mention backfills name from directory" "$uid_first_name" "Alice Smith"
+
+# -- Python: <@U...|fallback> pipe form is also captured ----------------------
+echo 'Job blackhole-demo failing. Owner: <@U222|bob>' > "$tmpdir/thread_uid_pipe.txt"
+JOB_OWNER_FILE="$tmpdir/job_owner_uid_pipe.json"
+THREAD_TEXT_FILE="$tmpdir/thread_uid_pipe.txt"
+export JOB_OWNER_FILE THREAD_TEXT_FILE
+python3 "$PYTHON_SCRIPT"
+pipe_id=$(jq -r '.[0].slack_id // ""' "$JOB_OWNER_FILE")
+assert_eq "<@U...|fallback> pipe form is captured" "$pipe_id" "U222"
+
+# -- Python: <!subteam^S...> mention captures group and backfills name --------
+mkdir -p "$tmpdir/slack_data2"
+cat > "$tmpdir/slack_data2/slack_directory.json" <<'EOF'
+{"users": []}
+EOF
+cat > "$tmpdir/slack_data2/slack_groups.json" <<'EOF'
+{"usergroups": [
+  {"id": "S123", "name": "Metal Infra Team", "handle": "metal-infra"}
+]}
+EOF
+echo 'Job blackhole-demo failing. Owner: <!subteam^S123|metal-infra>' > "$tmpdir/thread_subteam.txt"
+JOB_OWNER_FILE="$tmpdir/job_owner_subteam.json"
+THREAD_TEXT_FILE="$tmpdir/thread_subteam.txt"
+SLACK_DATA_DIR="$tmpdir/slack_data2"
+export JOB_OWNER_FILE THREAD_TEXT_FILE SLACK_DATA_DIR
+python3 "$PYTHON_SCRIPT"
+sub_id=$(jq -r '.[0].slack_id' "$JOB_OWNER_FILE")
+sub_name=$(jq -r '.[0].name' "$JOB_OWNER_FILE")
+assert_eq "<!subteam^S...> mention preserves slack_id" "$sub_id" "S123"
+assert_eq "<!subteam^S...> mention backfills group name" "$sub_name" "Metal Infra Team"
+
+# -- Python: mention-token entry falls back to ID when directory lookup fails -
+mkdir -p "$tmpdir/slack_data_empty"
+echo '{"users": []}' > "$tmpdir/slack_data_empty/slack_directory.json"
+echo '{"usergroups": []}' > "$tmpdir/slack_data_empty/slack_groups.json"
+echo 'Job blackhole-demo failing. Owner: <@U999>' > "$tmpdir/thread_unknown.txt"
+JOB_OWNER_FILE="$tmpdir/job_owner_unknown.json"
+THREAD_TEXT_FILE="$tmpdir/thread_unknown.txt"
+SLACK_DATA_DIR="$tmpdir/slack_data_empty"
+export JOB_OWNER_FILE THREAD_TEXT_FILE SLACK_DATA_DIR
+python3 "$PYTHON_SCRIPT"
+fallback_count=$(jq 'length' "$JOB_OWNER_FILE")
+fallback_id=$(jq -r '.[0].slack_id' "$JOB_OWNER_FILE")
+fallback_name=$(jq -r '.[0].name' "$JOB_OWNER_FILE")
+assert_eq "Unknown <@U...> entry is preserved (not dropped)" "$fallback_count" "1"
+assert_eq "Unknown <@U...> entry keeps slack_id" "$fallback_id" "U999"
+assert_eq "Unknown <@U...> entry falls back to ID as name" "$fallback_name" "U999"
+
+# -- Python: same person mentioned by both name and ID is deduplicated --------
+mkdir -p "$tmpdir/slack_data_dup"
+cat > "$tmpdir/slack_data_dup/slack_directory.json" <<'EOF'
+{"users": [
+  {"id": "U111", "real_name": "Alice Smith", "deleted": false, "is_bot": false}
+]}
+EOF
+echo '{"usergroups": []}' > "$tmpdir/slack_data_dup/slack_groups.json"
+echo 'Job blackhole-demo failing. Owners: <@U111> @Alice Smith' > "$tmpdir/thread_dup.txt"
+JOB_OWNER_FILE="$tmpdir/job_owner_dup.json"
+THREAD_TEXT_FILE="$tmpdir/thread_dup.txt"
+SLACK_DATA_DIR="$tmpdir/slack_data_dup"
+export JOB_OWNER_FILE THREAD_TEXT_FILE SLACK_DATA_DIR
+python3 "$PYTHON_SCRIPT"
+dup_count=$(jq 'length' "$JOB_OWNER_FILE")
+assert_eq "Duplicate (mention + @name) collapses to one owner after resolution" "$dup_count" "1"
+
 # -- Shell: graceful failure when credentials missing -------------------------
 unset SLACK_TS CHANNEL_ID SLACK_BOT_TOKEN 2>/dev/null || true
 JOB_OWNER_FILE="$tmpdir/job_owner_shell.json"
@@ -74,5 +151,70 @@ bash "$SHELL_SCRIPT"
 assert "Shell exits 0 when credentials missing" [ -f "$JOB_OWNER_FILE" ]
 empty=$(jq 'length' "$JOB_OWNER_FILE")
 assert "Shell writes empty array when credentials missing" [ "$empty" -eq 0 ]
+
+# -- Shell: rich_text block extraction (jq) -----------------------------------
+# Verify the jq filter in fetch_job_owner.sh extracts text from rich_text blocks
+# (the format Slack uses for copied/forwarded messages). We do this by feeding
+# a fake conversations.replies response through the same jq expression.
+fake_replies=$(cat <<'EOF'
+{
+  "ok": true,
+  "messages": [
+    {
+      "blocks": [
+        {
+          "type": "rich_text",
+          "elements": [
+            {
+              "type": "rich_text_section",
+              "elements": [
+                {"type": "text", "text": "Job blackhole-demo failing. Owner: "},
+                {"type": "user", "user_id": "U777"},
+                {"type": "text", "text": " from "},
+                {"type": "usergroup", "usergroup_id": "S888"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+EOF
+)
+extract_jq='
+  def rich_text_to_text(elems):
+    [elems[]? |
+      if .type == "text" then (.text // "")
+      elif .type == "link" then (.text // .url // "")
+      elif .type == "emoji" then (":" + (.name // "") + ":")
+      elif .type == "user" then ("<@" + (.user_id // "") + ">")
+      elif .type == "usergroup" then ("<!subteam^" + (.usergroup_id // "") + ">")
+      elif .type == "channel" then ("<#" + (.channel_id // "") + ">")
+      elif (.elements | type) == "array" then rich_text_to_text(.elements)
+      else ""
+      end
+    ] | join("");
+  [
+    .messages[] |
+      if (.blocks | type) == "array" then
+        [.blocks[] |
+          if .type == "rich_text" then
+            rich_text_to_text(.elements // [])
+          elif (.text | type) == "object" then
+            (.text.text // "")
+          else
+            (.text // "")
+          end
+        ] | join("\n")
+      else
+        (.text // "")
+      end
+  ] | join("\n")
+'
+extracted=$(echo "$fake_replies" | jq -r "$extract_jq")
+assert "rich_text extraction emits <@U...> mention" [ -n "$(echo "$extracted" | grep -F '<@U777>' || true)" ]
+assert "rich_text extraction emits <!subteam^S...> mention" [ -n "$(echo "$extracted" | grep -F '<!subteam^S888>' || true)" ]
+assert "rich_text extraction preserves surrounding text" [ -n "$(echo "$extracted" | grep -F 'blackhole-demo' || true)" ]
 
 test_summary

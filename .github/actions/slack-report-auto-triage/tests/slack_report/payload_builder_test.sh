@@ -266,4 +266,38 @@ text_owner_rep=$(echo "$payload_owner_rep" | jq -r '.text // empty')
 assert "JOB OWNER representative owner is pinged" [ -n "$(echo "$text_owner_rep" | grep -F '<@U08DEGUJY3H>' || true)" ]
 assert "JOB OWNER representative suffix is preserved" [ -n "$(echo "$text_owner_rep" | grep -F '(representing Metal Infra Team)' || true)" ]
 
+# JOB OWNER must be visually separated from the previous section by a blank line.
+# Inspect the line directly above "*JOB OWNER:*" -- it must be empty. We use awk
+# instead of grep -Pz so the assertion works on both macOS BSD grep and GNU grep.
+line_above_owner=$(printf '%s\n' "$text_owner_rep" | awk '/^\*JOB OWNER:\*/{print prev; exit} {prev=$0}')
+assert_eq "JOB OWNER section is preceded by a blank line" "$line_above_owner" ""
+
+# -- JOB_OWNER ID-only entries are kept (not silently dropped) ----------------
+# Emulates the case where fetch_job_owner.py captured a <@U...> mention but the
+# Slack directory cache didn't contain the user, so the entry has slack_id but
+# no name. build_slack_payload.sh must not filter it out.
+rm -rf "$tmpdir/.auto_triage"
+mkdir -p "$tmpdir/.auto_triage/output" "$tmpdir/.auto_triage/data"
+cp "$SAMPLE_CASE4_MSG" "$tmpdir/.auto_triage/output/slack_message.json"
+export MESSAGE_PATH="$tmpdir/.auto_triage/output/slack_message.json"
+export SLACK_TS=""
+export ALLOW_PINGS="true"
+rm -f "$tmpdir/github_output"
+
+cat > "$tmpdir/.auto_triage/data/job_owner.json" <<'EOF'
+[
+  {"name": "", "slack_id": "U999IDONLY"}
+]
+EOF
+
+cd "$tmpdir"
+bash "$BUILD_SCRIPT"
+cd - >/dev/null
+
+text_id_only=$(jq -r '.text // empty' "$tmpdir/.auto_triage/slack_payload.json")
+assert "ID-only JOB OWNER entry is preserved (not dropped)" \
+  [ -n "$(echo "$text_id_only" | grep -F '*JOB OWNER:*' || true)" ]
+assert "ID-only JOB OWNER entry renders as ping" \
+  [ -n "$(echo "$text_id_only" | grep -F '<@U999IDONLY>' || true)" ]
+
 test_summary

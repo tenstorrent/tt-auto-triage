@@ -57,7 +57,10 @@ def main():
 
         # Slack rich_text mentions may appear as explicit mention tokens.
         # Parse these from the raw line before angle-bracket cleanup strips them.
-        for uid in re.findall(r"<@([A-Z0-9]+)>", line):
+        # Both forms are accepted: <@U12345> and <@U12345|fallback_label>. Slack
+        # mrkdwn text.text payloads sometimes deliver the pipe form even though
+        # rich_text blocks emit the bare form.
+        for uid in re.findall(r"<@([A-Z0-9]+)(?:\|[^>]+)?>", line):
             add_owner(owners_result, seen_owners, "", uid)
 
         for sid in re.findall(r"<!subteam\^([A-Z0-9]+)(?:\|[^>]+)?>", line):
@@ -106,15 +109,26 @@ def main():
         sid = owner.get("slack_id", "")
 
         # If mention token already provided an ID, backfill a readable name.
+        # Fall back to the raw ID so the entry is never lost: directory data
+        # may be missing (offline/test runs) or the ID may not yet be cached
+        # (newly added users/groups, or W-prefixed Enterprise Grid users).
         if sid:
-            if sid.startswith("U"):
+            resolved_name = (owner.get("name") or "").strip()
+            if sid.startswith(("U", "W")):
                 u = users_by_id.get(sid)
                 if isinstance(u, dict):
-                    owner["name"] = owner.get("name", "") or u.get("display_name") or u.get("real_name") or u.get("username") or sid
+                    resolved_name = (
+                        resolved_name
+                        or u.get("display_name")
+                        or u.get("real_name")
+                        or u.get("username")
+                        or ""
+                    )
             elif sid.startswith("S"):
                 g = groups_by_id.get(sid)
                 if isinstance(g, dict):
-                    owner["name"] = owner.get("name", "") or g.get("name") or g.get("handle") or sid
+                    resolved_name = resolved_name or g.get("name") or g.get("handle") or ""
+            owner["name"] = resolved_name or sid
             continue
 
         nl = owner.get("name", "").lower()

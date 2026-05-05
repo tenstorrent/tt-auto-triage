@@ -115,7 +115,10 @@ def commits_section(arr):
   + section_line("NOTES"; .notes)
   + (if ($auto_fix // "") != "" then "\n*AUTO-FIX:* Draft PR created -> <\($auto_fix)|link>\n" else "" end)
   + (if (($case == "1") or ($case == "2") or ($case == "4")) and (($job_owner | type) == "array") and (($job_owner | length) > 0)
-     then section_people("JOB OWNER"; $job_owner; true)
+     # Prepend "\n" so JOB OWNER is visually separated from the previous section,
+     # matching the leading-newline convention used by AUTO-FIX above. The trailing
+     # gsub("\n{3,}"; "\n\n") collapses any extra newlines that may stack up.
+     then "\n" + section_people("JOB OWNER"; $job_owner; true)
      else ""
      end)
   + "\n---\n_DISCLAIMER: This analysis has been done by AI. Do not take the results as absolute truth since it has been inaccurate in the past._"

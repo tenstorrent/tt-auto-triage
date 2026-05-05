@@ -145,9 +145,13 @@ JOB_OWNER_JSON="[]"
 if [ -f "$JOB_OWNER_FILE" ]; then
   # Pass owner objects through to slack_message.jq so they use the same person()
   # rendering logic as other people sections (including representative suffixes).
+  # Keep entries that have either a name OR a slack_id -- mention-token parsing
+  # in fetch_job_owner.py can produce ID-only entries when the directory cache
+  # is missing the user/group; person() in slack_message.jq still renders those
+  # as a ping or as the raw ID, which is preferable to silently dropping them.
   JOB_OWNER_JSON=$(jq -c '
     if type == "array" then
-      map(select((.name // "") != ""))
+      map(select(((.name // "") != "") or ((.slack_id // "") != "")))
     else
       []
     end
