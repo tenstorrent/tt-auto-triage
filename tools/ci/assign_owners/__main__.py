@@ -243,7 +243,7 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
         text = _run_llm_agent(prompt, merged_ex)
         if os.environ.get("DEBUG_AGENT_STDOUT", "").strip().lower() in {"1", "true", "yes"}:
             head = text[:4000]
-            tail = text[4000:][-4000:] if len(text) > 4000 else ""
+            tail = text[-4000:] if len(text) > 8000 else ""
             log(f"  [DEBUG] agent stdout head ({len(head)}b of {len(text)}b total):\n{head}")
             if tail:
                 log(f"  [DEBUG] agent stdout tail ({len(tail)}b):\n{tail}")
