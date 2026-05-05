@@ -33,7 +33,7 @@ on:
         description: >-
           When true (default), any issue that already has a recommended-owner
           comment is skipped BEFORE any pipeline_reorg load, Slack download,
-          identity-index build, or Cursor agent call. Applies to both the
+          identity-index build, or LLM agent call. Applies to both the
           all-open-issues path and a scoped `issue-numbers` run — if you ask
           for #888 and #888 already has an owner, the workflow does nothing
           and exits in seconds. Set to false to re-resolve every issue
@@ -69,6 +69,10 @@ on:
           Requires `skip-assigning-for-issues-that-already-have-owners=false`.
         type: string
         default: ""
+      llm-backend:
+        description: "LLM backend for the resolver agent fallback: 'cursor' (default) or 'copilot' (uses COPILOT_PAT, no Cursor quota)"
+        type: string
+        default: "cursor"
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to target-repo and tenstorrent org"
@@ -77,8 +81,11 @@ on:
         description: "Token with write access to issue-repo"
         required: true
       CURSOR_API_KEY:
-        description: "Cursor API key for the agent fallback owner resolver"
-        required: true
+        description: "Cursor API key for the agent fallback owner resolver (required when llm-backend=cursor)"
+        required: false
+      COPILOT_PAT:
+        description: "GitHub PAT with Copilot access (required when llm-backend=copilot)"
+        required: false
       SLACK_BOT_TOKEN:
         description: "Slack bot token; used to check Slack 'deleted' for employment check"
         required: false
@@ -96,10 +103,23 @@ jobs:
           AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
           ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
+          LLM_BACKEND: ${{ inputs.llm-backend }}
         run: |
           [ -n "$ISSUE_WRITE_TOKEN" ] || { echo "::error::ISSUE_WRITE_TOKEN is required"; exit 1; }
           [ -n "$AGGREGATE_READ_TOKEN" ] || { echo "::error::AGGREGATE_READ_TOKEN is required"; exit 1; }
-          [ -n "$CURSOR_API_KEY" ] || { echo "::error::CURSOR_API_KEY is required"; exit 1; }
+          case "$LLM_BACKEND" in
+            cursor)
+              [ -n "$CURSOR_API_KEY" ] || { echo "::error::CURSOR_API_KEY is required when llm-backend=cursor"; exit 1; }
+              ;;
+            copilot)
+              [ -n "$COPILOT_PAT" ] || { echo "::error::COPILOT_PAT is required when llm-backend=copilot"; exit 1; }
+              ;;
+            *)
+              echo "::error::llm-backend must be 'cursor' or 'copilot', got: '$LLM_BACKEND'"
+              exit 1
+              ;;
+          esac
 
       - name: Checkout tt-auto-triage
         uses: actions/checkout@v4
@@ -109,6 +129,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Cursor CLI
+        if: inputs.llm-backend == 'cursor'
         run: |
           set -euo pipefail
           install_script="$(mktemp)"
@@ -119,6 +140,19 @@ jobs:
           bash "$install_script"
           rm -f "$install_script"
           echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Node.js 24 (required for Copilot CLI)
+        if: inputs.llm-backend == 'copilot'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install GitHub Copilot CLI
+        if: inputs.llm-backend == 'copilot'
+        run: |
+          set -euo pipefail
+          npm install -g @github/copilot
+          copilot --version || { echo "::error::Copilot CLI installation failed"; exit 1; }
 
       - name: Checkout target repo ownership data
         uses: actions/checkout@v4
@@ -140,6 +174,8 @@ jobs:
           AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
           ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
+          LLM_BACKEND: ${{ inputs.llm-backend }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           ISSUE_REPO: ${{ inputs.issue-repo }}
           TARGET_REPO: ${{ inputs.target-repo }}

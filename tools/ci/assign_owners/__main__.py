@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Hybrid owner resolver: pipeline_reorg fast path, Cursor agent slow path.
+# Hybrid owner resolver: pipeline_reorg fast path, Cursor or Copilot agent slow path.
 from __future__ import annotations
 
 import json
@@ -34,6 +34,7 @@ TARGET_REPO_ROOT = Path(os.environ.get("TARGET_REPO_ROOT", "tt-metal"))
 SLACK_DUMP_PATH = Path(os.environ.get("SLACK_DUMP_PATH", "slack_users.json"))
 SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
 CURSOR_MODEL = os.environ.get("CURSOR_MODEL", "auto")
+LLM_BACKEND = os.environ.get("LLM_BACKEND", "cursor").strip().lower() or "cursor"
 GITHUB_ORG = os.environ.get("GITHUB_ORG", "tenstorrent")
 OWNERS_READY_LABEL = "auto-triage:owners-ready"
 AGENT_MARKER = "===FINAL==="
@@ -179,6 +180,57 @@ def _build_prompt(workflow_name: str, job_name: str, ex_owner_note: str,
     )
 
 
+# Env vars forwarded to BOTH Cursor and Copilot agents. Includes everything the
+# `check_active` subprocess needs (PYTHONPATH for the module, SLACK_DUMP_PATH
+# for the dump location, GITHUB_TOKEN for any gh API calls the agent makes).
+_AGENT_BASE_ENV_KEYS: tuple[str, ...] = (
+    "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL",
+    "GITHUB_TOKEN", "SLACK_DUMP_PATH", "PYTHONPATH",
+)
+_AGENT_TIMEOUT_SECONDS = 900
+
+
+def _agent_env(secret_keys: tuple[str, ...], merged_ex: frozenset[str]) -> dict[str, str]:
+    """Build the env dict forwarded to the agent subprocess. EX_EMPLOYEES is
+    OVERRIDDEN with the merged (global + per-issue) blacklist so the agent's
+    own check_active calls reject every blacklisted candidate without needing
+    a separate per-issue CLI arg."""
+    env = {
+        k: os.environ[k]
+        for k in _AGENT_BASE_ENV_KEYS + secret_keys
+        if k in os.environ
+    }
+    if merged_ex:
+        env["EX_EMPLOYEES"] = ",".join(sorted(merged_ex))
+    return env
+
+
+def _run_cursor_agent(prompt: str, merged_ex: frozenset[str]) -> str:
+    cmd = ["agent", "--trust", "-p", prompt]
+    if CURSOR_MODEL and CURSOR_MODEL != "auto":
+        cmd[1:1] = ["--model", CURSOR_MODEL]
+    env = _agent_env(("CURSOR_API_KEY",), merged_ex)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=_AGENT_TIMEOUT_SECONDS, env=env)
+    if proc.returncode != 0:
+        raise RuntimeError(f"Cursor agent exited {proc.returncode}: {proc.stderr[:200]}")
+    return proc.stdout or ""
+
+
+def _run_copilot_agent(prompt: str, merged_ex: frozenset[str]) -> str:
+    cmd = ["copilot", "-p", prompt, "--allow-all-tools"]
+    env = _agent_env(("COPILOT_GITHUB_TOKEN",), merged_ex)
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=_AGENT_TIMEOUT_SECONDS, env=env)
+    if proc.returncode != 0:
+        raise RuntimeError(f"Copilot agent exited {proc.returncode}: {proc.stderr[:200]}")
+    return proc.stdout or ""
+
+
+def _run_llm_agent(prompt: str, merged_ex: frozenset[str]) -> str:
+    if LLM_BACKEND == "copilot":
+        return _run_copilot_agent(prompt, merged_ex)
+    return _run_cursor_agent(prompt, merged_ex)
+
+
 def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
                        slack_dir: list[dict[str, Any]] | None = None,
                        extra_ex: frozenset[str] = frozenset(),
@@ -187,27 +239,8 @@ def _resolve_via_agent(workflow_name: str, job_name: str, ex_owner_note: str,
     ex_display = ", ".join(sorted(merged_ex))
     prompt = _build_prompt(workflow_name, job_name, ex_owner_note, ex_display, extra_context)
     empty = {"source": "none", "github_assignees": [], "github_names": [], "slack_assignees": [], "slack_names": []}
-    cmd = ["agent", "--trust", "--model", CURSOR_MODEL, "-p", prompt]
-    # Forward everything the agent needs to run `check_active` itself. The
-    # EX_EMPLOYEES env var is OVERRIDDEN here with the merged (global +
-    # per-issue) set so the agent's own check_active calls reject every
-    # blacklisted candidate without needing a separate per-issue arg.
-    env = {
-        k: os.environ[k]
-        for k in (
-            "PATH", "HOME", "TMPDIR", "LANG", "LC_ALL",
-            "CURSOR_API_KEY", "GITHUB_TOKEN",
-            "SLACK_DUMP_PATH", "PYTHONPATH",
-        )
-        if k in os.environ
-    }
-    if merged_ex:
-        env["EX_EMPLOYEES"] = ",".join(sorted(merged_ex))
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env=env)
-        if proc.returncode != 0:
-            raise RuntimeError(f"Cursor agent exited {proc.returncode}: {proc.stderr[:200]}")
-        text = proc.stdout or ""
+        text = _run_llm_agent(prompt, merged_ex)
         idx = text.rfind(AGENT_MARKER)
         if idx < 0:
             raise ValueError(f"Marker {AGENT_MARKER!r} not in agent output")
@@ -427,8 +460,14 @@ def main() -> int:
     if not ISSUE_WRITE_TOKEN:
         log("ISSUE_WRITE_TOKEN is required.")
         return 1
-    if not os.environ.get("CURSOR_API_KEY"):
-        log("CURSOR_API_KEY is required for the agent fallback.")
+    if LLM_BACKEND not in ("cursor", "copilot"):
+        log(f"LLM_BACKEND must be 'cursor' or 'copilot', got: {LLM_BACKEND!r}")
+        return 1
+    if LLM_BACKEND == "copilot" and not os.environ.get("COPILOT_GITHUB_TOKEN"):
+        log("COPILOT_GITHUB_TOKEN is required when LLM_BACKEND=copilot.")
+        return 1
+    if LLM_BACKEND == "cursor" and not os.environ.get("CURSOR_API_KEY"):
+        log("CURSOR_API_KEY is required when LLM_BACKEND=cursor.")
         return 1
     err = _validate_flags()
     if err:

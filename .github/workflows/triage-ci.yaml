@@ -67,6 +67,10 @@ on:
           Requires `skip-assigning-for-issues-that-already-have-owners=false`.
         type: string
         default: ""
+      llm-backend:
+        description: "LLM backend for the resolver agent fallback: 'cursor' (default) or 'copilot'"
+        type: string
+        default: "cursor"
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to target-repo"
@@ -75,7 +79,10 @@ on:
         description: "Token with write access to issue-repo"
         required: true
       CURSOR_API_KEY:
-        description: "Cursor API key (required for agent-based owner fallback)"
+        description: "Cursor API key (required when llm-backend=cursor)"
+        required: false
+      COPILOT_PAT:
+        description: "GitHub PAT with Copilot access (required when llm-backend=copilot)"
         required: false
       SLACK_BOT_TOKEN:
         description: "Optional Slack bot token for Slack-deleted employment check"
@@ -105,8 +112,10 @@ jobs:
       reassign-to-someone-else: ${{ inputs.reassign-to-someone-else }}
       refresh-owner-recommendation: ${{ inputs.refresh-owner-recommendation }}
       extra-context-for-agent: ${{ inputs.extra-context-for-agent }}
+      llm-backend: ${{ inputs.llm-backend }}
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
