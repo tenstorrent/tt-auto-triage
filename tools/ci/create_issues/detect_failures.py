@@ -158,12 +158,14 @@ _ERROR_PATTERNS: tuple[re.Pattern, ...] = tuple(
     re.compile(p, re.MULTILINE)
     for p in (
         r"TT_FATAL\b[^\n]{0,300}",
+        r"TT_THROW:[^\n]{0,300}",
         r"SIGABRT[^\n]{0,200}",
         r"Segmentation fault[^\n]{0,200}",
         r"AssertionError:[^\n]{0,200}",
         r"RuntimeError:[^\n]{0,200}",
         r"FAILED\s+\S+::[^\n]{0,200}",
-        r"(?:^|\s)FAILED\s+[^\n]{5,200}",
+        # Exclude GTest summary lines like "FAILED ] 4 tests, listed below:" or "FAILED ] N tests"
+        r"(?:^|\s)FAILED\s+(?!\])[^\n]{5,200}",
         r"(?:TypeError|ValueError|KeyError|AttributeError|ImportError|OSError|IOError):[^\n]{0,200}",
         r"(?:performance|regression|exceeded|threshold|inference.?time)[^\n]{0,200}",
         r"Error:[^\n]{0,200}",

@@ -23,7 +23,7 @@ from .render_summary import load_all_open_issues, render
 TARGET_REPO = os.environ.get("TARGET_REPO", "tenstorrent/tt-metal")
 ISSUE_REPO = os.environ.get("ISSUE_REPO", "ebanerjeeTT/issue_dump")
 CREATE_ISSUES = os.environ.get("CREATE_ISSUES", "false").lower() == "true"
-CONSECUTIVE = int(os.environ.get("CONSECUTIVE_FAILURES", "3"))
+CONSECUTIVE = int(os.environ.get("CONSECUTIVE_FAILURES", "2"))
 ISSUE_WRITE_TOKEN = os.environ.get("ISSUE_WRITE_TOKEN", "")
 CURSOR_MODEL = os.environ.get("CURSOR_MODEL", "claude-4-sonnet")
 SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
