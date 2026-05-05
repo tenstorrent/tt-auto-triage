@@ -146,9 +146,8 @@ def download_job_logs(
     return enriched
 
 
-
 # ---------------------------------------------------------------------------
-# Deduplication: group jobs with similar error signatures
+# Deduplication: group jobs with similar errors
 # ---------------------------------------------------------------------------
 import difflib as _difflib
 
@@ -163,39 +162,71 @@ _ERROR_PATTERNS: tuple[re.Pattern, ...] = tuple(
         r"Segmentation fault[^\n]{0,200}",
         r"AssertionError:[^\n]{0,200}",
         r"RuntimeError:[^\n]{0,200}",
-        # pytest: "FAILED path::test - ErrorType: message"
         r"FAILED\s+\S+::[^\n]{0,200}",
-        # pytest short: standalone "FAILED" line followed by error class
         r"(?:^|\s)FAILED\s+[^\n]{5,200}",
-        # Python exceptions
         r"(?:TypeError|ValueError|KeyError|AttributeError|ImportError|OSError|IOError):[^\n]{0,200}",
-        # Performance regression
         r"(?:performance|regression|exceeded|threshold|inference.?time)[^\n]{0,200}",
-        # Generic "Error: ..." at start of content
         r"Error:[^\n]{0,200}",
     )
 )
 
+_EXTRACT_ERROR_PROMPT = """\
+You are analyzing a CI job failure log. Your task is to extract the specific root-cause error.
 
-def _extract_error_signature(log_text: str) -> str:
-    """Extract and normalise the key error line from a log (no third-party deps).
+Rules:
+- Return ONLY the error message text — no explanation, no context, no formatting.
+- Ignore infrastructure noise: package installation failures, network timeouts, hugepages errors, \
+OOM killer messages, disk full, device unavailable, environment setup failures.
+- Focus on the actual test/assertion failure (e.g. Python exception, TT_FATAL, SIGABRT, \
+pytest FAILED, assertion error, shape mismatch, wrong output value).
+- If multiple errors exist, return only the primary root cause.
+- If no meaningful test failure is found (only infrastructure errors), return exactly: NO_TEST_FAILURE
 
-    Strips ANSI escape codes and GitHub Actions timestamp prefixes before matching.
+Log tail (last ~5000 characters):
+{log_tail}
+"""
+
+
+def _extract_error_with_llm(
+    log_text: str,
+    model: str,
+    backend: str,
+) -> str:
+    """Call the LLM to extract the specific root-cause error from a log.
+
+    Returns the extracted error string, or empty string on failure.
+    Falls back to empty string so the caller can use regex extraction instead.
     """
-    # Strip ANSI colour codes (pytest wraps FAILED/PASSED in colour sequences)
-    clean = _ANSI_ESCAPE.sub("", log_text)
-    # Strip GitHub Actions per-line timestamps
-    clean = _TIMESTAMP_PREFIX.sub("", clean)
+    # Lazy import to avoid circular dependency at module load time
+    from .draft_issues import _run_llm_agent  # noqa: PLC0415
 
+    tail = log_text[-5_000:]
+    prompt = _EXTRACT_ERROR_PROMPT.format(log_tail=tail)
+    try:
+        result = _run_llm_agent(prompt, model=model, backend=backend)
+        # Strip markdown fences if the agent wrapped the result
+        result = result.strip()
+        if result.startswith("```"):
+            result = result.split("\n", 1)[-1].rstrip("`").strip()
+        if result == "NO_TEST_FAILURE" or not result:
+            return ""
+        return result[:500]  # cap length to prevent pathological inputs
+    except Exception as exc:
+        log(f"    LLM error extraction failed ({type(exc).__name__}): {exc}")
+        return ""
+
+
+def _regex_extract_error(log_text: str) -> str:
+    """Fallback: extract error signature using regex patterns."""
+    clean = _ANSI_ESCAPE.sub("", log_text)
+    clean = _TIMESTAMP_PREFIX.sub("", clean)
     for pat in _ERROR_PATTERNS:
         m = pat.search(clean)
         if m:
             sig = m.group(0)
-            # Strip volatile parts: file paths, line numbers, function names
             sig = re.sub(r"\S+\.(cpp|h|py|cc|cxx|hpp|c):\d+", "", sig)
             sig = re.sub(r" @ \S+", "", sig)
             sig = re.sub(r" in \w+:", "", sig)
-            # Strip test node IDs (path::test[params]) to keep the error type
             sig = re.sub(r"\S+::\S+\[[^\]]*\]", "", sig)
             sig = re.sub(r"\s+", " ", sig).strip()
             return sig
@@ -210,30 +241,49 @@ def _error_similarity(a: str, b: str) -> float:
 
 def group_similar_jobs(
     jobs: list[dict[str, Any]],
-    threshold: float = 0.65,
+    threshold: float = 0.90,
+    model: str = "claude-4-sonnet",
+    backend: str = "cursor",
 ) -> list[list[dict[str, Any]]]:
     """Group jobs with similar error signatures to avoid filing duplicate issues.
 
-    Uses stdlib ``difflib`` only — no third-party dependencies.
+    Extracts the root-cause error via LLM for accurate comparison, falling back
+    to regex extraction if the LLM call fails.  Uses a high similarity threshold
+    (default 0.90) to avoid false-positive grouping of unrelated failures.
+
     Returns a list of groups; each group is a non-empty list of job dicts.
     The first entry in each group is the *primary* job (drives issue creation).
     """
     signatures: list[str] = []
+    sig_source: list[str] = []  # "llm" or "regex" per job, for logging
+
     for job in jobs:
-        sig = ""
+        log_text = ""
         for log_path in job.get("log_paths", []):
             try:
                 text = Path(log_path).read_text(errors="replace")
-                # Read from the tail — errors appear near the end of long logs
-                text = text[-100_000:]
-                sig = _extract_error_signature(text)
-                if sig:
-                    break
+                # Prefer the most recent run (first log path) and read from tail
+                log_text = text[-100_000:]
+                break
             except Exception:
                 pass
+
+        sig = ""
+        source = "none"
+        if log_text:
+            sig = _extract_error_with_llm(log_text, model=model, backend=backend)
+            if sig:
+                source = "llm"
+            else:
+                # LLM failed or returned no test failure — fall back to regex
+                sig = _regex_extract_error(log_text)
+                if sig:
+                    source = "regex"
+
         signatures.append(sig)
+        sig_source.append(source)
         short = sig[:80] if sig else "(no signature)"
-        log(f"    Sig [{job['job_name']!r:.40}]: {short}")
+        log(f"    Sig [{source}] [{job['job_name']!r:.40}]: {short}")
 
     visited: set[int] = set()
     groups: list[list[dict[str, Any]]] = []
@@ -242,13 +292,24 @@ def group_similar_jobs(
             continue
         group = [i]
         visited.add(i)
-        if signatures[i]:
-            for j in range(i + 1, len(jobs)):
-                if j in visited:
-                    continue
-                if _error_similarity(signatures[i], signatures[j]) >= threshold:
-                    group.append(j)
-                    visited.add(j)
+        # Only group if both jobs have signatures from the same source class
+        # (don't mix LLM-extracted with regex-extracted — quality mismatch)
+        if signatures[i] and sig_source[i] == "llm":
+            effective_threshold = threshold  # high threshold for LLM extractions
+        elif signatures[i]:
+            effective_threshold = 0.65  # original threshold for regex fallback
+        else:
+            effective_threshold = 1.1  # impossible threshold → no grouping
+
+        for j in range(i + 1, len(jobs)):
+            if j in visited:
+                continue
+            # Only group LLM-with-LLM or regex-with-regex, not mixed
+            if sig_source[j] != sig_source[i]:
+                continue
+            if _error_similarity(signatures[i], signatures[j]) >= effective_threshold:
+                group.append(j)
+                visited.add(j)
         groups.append([jobs[k] for k in group])
 
     merged_count = sum(1 for g in groups if len(g) > 1)
