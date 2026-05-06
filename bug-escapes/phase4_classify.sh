@@ -80,6 +80,7 @@ _evict_stale_escapes() {
   after_count=$(jq 'length' "$SEEN_ESCAPES_FILE" 2>/dev/null || echo 0)
   local evicted=$(( before_count - after_count ))
   [ "$evicted" -gt 0 ] && log_info "Seen-escapes cache: evicted $evicted stale entries"
+  return 0
 }
 
 _escape_cache_key() {
