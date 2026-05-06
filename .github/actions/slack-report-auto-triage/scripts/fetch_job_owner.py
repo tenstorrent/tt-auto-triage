@@ -166,6 +166,18 @@ def main():
                 deduped[existing_idx]["name"] = name
     owners_result = deduped
 
+    # Detect default metalinfra owner: when the metalinfra team is assigned as
+    # fallback (no explicit owner for the job), mark the entry so the Slack
+    # formatter can append a disclaimer.  The known metalinfra group ID in
+    # tt-metal is S0985AN7TC5; we also match by name pattern for resilience.
+    _METALINFRA_IDS = {"S0985AN7TC5"}
+    _METALINFRA_NAME_PATTERNS = {"metal infra", "metalinfra", "metal infra team"}
+    for owner in owners_result:
+        sid = (owner.get("slack_id") or "").strip()
+        name_lower = (owner.get("name") or "").strip().lower()
+        if sid in _METALINFRA_IDS or name_lower in _METALINFRA_NAME_PATTERNS:
+            owner["is_default_owner"] = True
+
     owner_dir = os.path.dirname(owner_file)
     if owner_dir:
         os.makedirs(owner_dir, exist_ok=True)

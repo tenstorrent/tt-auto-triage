@@ -44,6 +44,20 @@ def section_people(lbl; arr; use_slack_id):
     "*\(lbl):* " + join_people(arr; use_slack_id) + "\n"
   else "" end;
 
+def person_job_owner(p; use_slack_id):
+  person(p; use_slack_id)
+  + (if (p.is_default_owner // false) then
+      " (As a representative for the metalinfra team. Metalinfra was chosen as the default owner as this job has no owner. Please find a suitable owner)."
+    else "" end);
+
+def join_job_owners(arr; use_slack_id):
+  arr | map(person_job_owner(.; use_slack_id)) | join(", ");
+
+def section_job_owners(lbl; arr; use_slack_id):
+  if (arr | type) == "array" and (arr | length) > 0 then
+    "*\(lbl):* " + join_job_owners(arr; use_slack_id) + "\n"
+  else "" end;
+
 def section_files(lbl; arr):
   if (arr | type) == "array" and (arr | length) > 0 then
     "*\(lbl):*\n```\n" + (arr | join("\n")) + "\n```\n"
@@ -118,7 +132,7 @@ def commits_section(arr):
      # Prepend "\n" so JOB OWNER is visually separated from the previous section,
      # matching the leading-newline convention used by AUTO-FIX above. The trailing
      # gsub("\n{3,}"; "\n\n") collapses any extra newlines that may stack up.
-     then "\n" + section_people("JOB OWNER"; $job_owner; true)
+     then "\n" + section_job_owners("JOB OWNER"; $job_owner; true)
      else ""
      end)
   + "\n---\n_DISCLAIMER: This analysis has been done by AI. Do not take the results as absolute truth since it has been inaccurate in the past._"

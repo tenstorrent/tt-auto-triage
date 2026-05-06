@@ -107,6 +107,35 @@ sub_id=$(jq -r '.[0].slack_id' "$JOB_OWNER_FILE")
 sub_name=$(jq -r '.[0].name' "$JOB_OWNER_FILE")
 assert_eq "<!subteam^S...> mention preserves slack_id" "$sub_id" "S123"
 assert_eq "<!subteam^S...> mention backfills group name" "$sub_name" "Metal Infra Team"
+sub_is_default=$(jq -r '.[0].is_default_owner // false' "$JOB_OWNER_FILE")
+assert_eq "Metal Infra Team is marked as default owner" "$sub_is_default" "true"
+
+# -- Python: is_default_owner flag set for known metalinfra group ID ----------
+mkdir -p "$tmpdir/slack_data_mi"
+echo '{"users": []}' > "$tmpdir/slack_data_mi/slack_directory.json"
+cat > "$tmpdir/slack_data_mi/slack_groups.json" <<'EOF'
+{"usergroups": [
+  {"id": "S0985AN7TC5", "name": "metal infra team", "handle": "metalinfra"}
+]}
+EOF
+echo 'Job blackhole-demo failing. Owner: <!subteam^S0985AN7TC5|metalinfra>' > "$tmpdir/thread_mi.txt"
+JOB_OWNER_FILE="$tmpdir/job_owner_mi.json"
+THREAD_TEXT_FILE="$tmpdir/thread_mi.txt"
+SLACK_DATA_DIR="$tmpdir/slack_data_mi"
+export JOB_OWNER_FILE THREAD_TEXT_FILE SLACK_DATA_DIR
+python3 "$PYTHON_SCRIPT"
+mi_is_default=$(jq -r '.[0].is_default_owner // false' "$JOB_OWNER_FILE")
+assert_eq "Known metalinfra group ID is marked as default owner" "$mi_is_default" "true"
+
+# -- Python: non-metalinfra owner does NOT get is_default_owner ---------------
+echo 'Job blackhole-demo failing. Owner: <@U111>' > "$tmpdir/thread_non_mi.txt"
+JOB_OWNER_FILE="$tmpdir/job_owner_non_mi.json"
+THREAD_TEXT_FILE="$tmpdir/thread_non_mi.txt"
+SLACK_DATA_DIR="$tmpdir/slack_data"
+export JOB_OWNER_FILE THREAD_TEXT_FILE SLACK_DATA_DIR
+python3 "$PYTHON_SCRIPT"
+non_mi_is_default=$(jq -r '.[0].is_default_owner // "absent"' "$JOB_OWNER_FILE")
+assert_eq "Non-metalinfra owner has no is_default_owner flag" "$non_mi_is_default" "absent"
 
 # -- Python: mention-token entry falls back to ID when directory lookup fails -
 mkdir -p "$tmpdir/slack_data_empty"

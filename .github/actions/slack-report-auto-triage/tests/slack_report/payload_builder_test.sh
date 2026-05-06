@@ -300,4 +300,57 @@ assert "ID-only JOB OWNER entry is preserved (not dropped)" \
 assert "ID-only JOB OWNER entry renders as ping" \
   [ -n "$(echo "$text_id_only" | grep -F '<@U999IDONLY>' || true)" ]
 
+# -- JOB_OWNER default-owner disclaimer for metalinfra fallback ---------------
+rm -rf "$tmpdir/.auto_triage"
+mkdir -p "$tmpdir/.auto_triage/output" "$tmpdir/.auto_triage/data"
+cp "$SAMPLE_CASE4_MSG" "$tmpdir/.auto_triage/output/slack_message.json"
+export MESSAGE_PATH="$tmpdir/.auto_triage/output/slack_message.json"
+export SLACK_TS=""
+export ALLOW_PINGS="true"
+rm -f "$tmpdir/github_output"
+
+cat > "$tmpdir/.auto_triage/data/job_owner.json" <<'EOF'
+[
+  {"name": "Rose Li (representing Metal Infra Team)", "slack_id": "U08DEGUJY3H", "is_default_owner": true}
+]
+EOF
+
+cd "$tmpdir"
+bash "$BUILD_SCRIPT"
+cd - >/dev/null
+
+text_default_owner=$(jq -r '.text // empty' "$tmpdir/.auto_triage/slack_payload.json")
+assert "Default-owner metalinfra is pinged" \
+  [ -n "$(echo "$text_default_owner" | grep -F '<@U08DEGUJY3H>' || true)" ]
+assert "Default-owner disclaimer is appended" \
+  [ -n "$(echo "$text_default_owner" | grep -F 'Metalinfra was chosen as the default owner' || true)" ]
+assert "Default-owner disclaimer includes action request" \
+  [ -n "$(echo "$text_default_owner" | grep -F 'Please find a suitable owner' || true)" ]
+
+# -- JOB_OWNER explicit metalinfra (no disclaimer) ----------------------------
+rm -rf "$tmpdir/.auto_triage"
+mkdir -p "$tmpdir/.auto_triage/output" "$tmpdir/.auto_triage/data"
+cp "$SAMPLE_CASE4_MSG" "$tmpdir/.auto_triage/output/slack_message.json"
+export MESSAGE_PATH="$tmpdir/.auto_triage/output/slack_message.json"
+export SLACK_TS=""
+export ALLOW_PINGS="true"
+rm -f "$tmpdir/github_output"
+
+# Simulate metalinfra as explicit owner (no is_default_owner flag)
+cat > "$tmpdir/.auto_triage/data/job_owner.json" <<'EOF'
+[
+  {"name": "Rose Li (representing Metal Infra Team)", "slack_id": "U08DEGUJY3H"}
+]
+EOF
+
+cd "$tmpdir"
+bash "$BUILD_SCRIPT"
+cd - >/dev/null
+
+text_explicit_owner=$(jq -r '.text // empty' "$tmpdir/.auto_triage/slack_payload.json")
+assert "Explicit metalinfra owner is pinged" \
+  [ -n "$(echo "$text_explicit_owner" | grep -F '<@U08DEGUJY3H>' || true)" ]
+assert "Explicit metalinfra has no default-owner disclaimer" \
+  [ -z "$(echo "$text_explicit_owner" | grep -F 'Metalinfra was chosen as the default owner' || true)" ]
+
 test_summary
