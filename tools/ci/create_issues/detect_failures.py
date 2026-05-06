@@ -44,11 +44,15 @@ def find_failing_jobs(
             run_id = run.get("id")
             if not run_id:
                 continue
-            all_jobs = paginate_api(
-                f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100",
-                "jobs",
-                token,
-            )
+            try:
+                all_jobs = paginate_api(
+                    f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100",
+                    "jobs",
+                    token,
+                )
+            except RuntimeError as exc:
+                log(f"  Warning: failed to fetch jobs for run {run_id}: {exc} — skipping run")
+                continue
             run_failed_jobs[run_id] = {
                 job["name"]: job.get("html_url", "") for job in all_jobs if job.get("conclusion") == "failure"
             }
