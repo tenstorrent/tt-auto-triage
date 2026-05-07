@@ -9,8 +9,10 @@ All configuration is via environment variables:
   RUNS_TO_EVALUATE  -- how many recent runs to fetch and require consensus across (default: 3)
   CLOSE_ISSUES      -- "true" to actually close issues; default "false" (dry-run)
   SUMMARY_OUTPUT    -- path to write markdown summary; default stdout
-  CURSOR_API_KEY    -- required for agent analysis (issues stay open if absent)
+  CURSOR_API_KEY    -- required for agent analysis when llm-backend=cursor
   CURSOR_MODEL      -- Cursor model to use (default: claude-4-sonnet)
+  LLM_BACKEND       -- LLM backend: 'copilot' (default) or 'cursor'
+  CHECK_PASSING_ONLY -- if 'true', skip agent; only close jobs that are passing
 """
 
 from __future__ import annotations
@@ -50,6 +52,8 @@ RUNS_TO_EVALUATE = int(os.environ.get("RUNS_TO_EVALUATE", "3"))
 CLOSE_ISSUES = os.environ.get("CLOSE_ISSUES", "false").lower() == "true"
 SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
 CURSOR_MODEL = os.environ.get("CURSOR_MODEL", "claude-4-sonnet")
+LLM_BACKEND = os.environ.get("LLM_BACKEND", "copilot")
+CHECK_PASSING_ONLY = os.environ.get("CHECK_PASSING_ONLY", "false").lower() == "true"
 
 LABEL_UNKNOWN_FIX = "solved by unknown change"
 
@@ -71,12 +75,58 @@ def _run_cursor_agent(prompt: str) -> str:
     # "--trust" allows the agent to read local log/YAML files without
     # interactive confirmation -- required for non-interactive CI.
     cmd = ["agent", "--trust", "--model", CURSOR_MODEL, "-p", prompt]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=_AGENT_TIMEOUT)
+    safe_env = {
+        key: os.environ[key]
+        for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "CURSOR_API_KEY")
+        if key in os.environ
+    }
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=_AGENT_TIMEOUT, env=safe_env)
     if proc.returncode != 0:
         raise RuntimeError(
             f"Cursor agent exited {proc.returncode}: {proc.stderr[:200]}"
         )
     return proc.stdout or ""
+
+
+def _run_copilot_agent(prompt: str) -> str:
+    safe_env = {
+        key: os.environ[key]
+        for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "COPILOT_GITHUB_TOKEN")
+        if key in os.environ
+    }
+    proc = subprocess.run(
+        ["copilot", "-p", prompt, "--allow-all-tools"],
+        capture_output=True,
+        text=True,
+        timeout=_AGENT_TIMEOUT,
+        env=safe_env,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"Copilot agent exited {proc.returncode}: {proc.stderr[:200]}"
+        )
+    return proc.stdout or ""
+
+
+def _run_llm_agent(prompt: str) -> str:
+    """Dispatch to the configured LLM backend."""
+    if LLM_BACKEND == "copilot":
+        return _run_copilot_agent(prompt)
+    return _run_cursor_agent(prompt)
+
+
+def _can_use_agent() -> bool:
+    """Return True if the configured LLM backend is available."""
+    if LLM_BACKEND == "cursor":
+        if not os.environ.get("CURSOR_API_KEY"):
+            log("  CURSOR_API_KEY not set — cannot invoke agent, keeping issue open")
+            return False
+    elif LLM_BACKEND == "copilot":
+        import shutil
+        if not shutil.which("copilot"):
+            log("  Copilot CLI not found on PATH — cannot invoke agent, keeping issue open")
+            return False
+    return True
 
 
 def _parse_agent_json(text: str) -> dict[str, Any]:
@@ -338,7 +388,7 @@ def _call_agent(
         marker=MARKER,
     )
     try:
-        output = _run_cursor_agent(prompt)
+        output = _run_llm_agent(prompt)
         result = _parse_agent_json(output)
         if not isinstance(result, dict):
             log("  Agent returned non-dict JSON")
@@ -416,14 +466,43 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
         if updated is not None:
             body = updated
 
+    # CHECK_PASSING_ONLY fast path: deterministic close for passing jobs, no agent.
+    if CHECK_PASSING_ONLY:
+        if status == JobStatus.RESOLVED:
+            comment = (
+                f"Closing: job `{job_name}` in workflow `{workflow_name}` has been passing "
+                f"for the last {RUNS_TO_EVALUATE} consecutive runs.\n\n"
+                f"*Closed by tt-auto-triage lifecycle bot.*"
+            )
+            if CLOSE_ISSUES:
+                _post_comment(number, comment, ISSUE_WRITE_TOKEN)
+                _close_issue(number, ISSUE_WRITE_TOKEN)
+                log(f"  #{number}: ✅ CLOSED (check-passing-only)")
+            else:
+                log(f"  #{number}: 🔍 DRY-RUN would close (check-passing-only)")
+            return {
+                "number": number, "title": title, "url": url,
+                "workflow": workflow_name, "job": job_name,
+                "action": "closed" if CLOSE_ISSUES else "dry_run_close",
+                "status": status,
+                "agent_reason": "check-passing-only: job passed all consecutive runs",
+            }
+        else:
+            log(f"  #{number}: ⏭️  status is {status}, not resolved — keeping open (check-passing-only)")
+            return {
+                "number": number, "title": title, "url": url,
+                "workflow": workflow_name, "job": job_name,
+                "action": "kept_open",
+                "reason": f"check-passing-only: status is {status}",
+            }
+
     # Step 3: STILL_FAILING, RESOLVED, or REMOVED -- agent must analyze.
-    if not os.environ.get("CURSOR_API_KEY"):
-        log(f"  #{number}: CURSOR_API_KEY missing -- keeping open (no agent, no close)")
+    if not _can_use_agent():
         return {
             "number": number, "title": title, "url": url,
             "workflow": workflow_name, "job": job_name,
             "action": "kept_open",
-            "reason": "CURSOR_API_KEY not set -- agent analysis required before closing",
+            "reason": f"{LLM_BACKEND} agent not available -- analysis required before closing",
         }
 
     # Step 4: Download evidence for the agent.
@@ -563,8 +642,10 @@ def main() -> int:
     log(f"Issue repo:    {ISSUE_REPO}")
     log(f"Close issues:  {CLOSE_ISSUES}")
     log(f"Runs to evaluate: {RUNS_TO_EVALUATE}")
-    if not os.environ.get("CURSOR_API_KEY"):
-        log("  WARNING: CURSOR_API_KEY not set -- all potentially-resolved issues will stay open")
+    log(f"LLM backend:   {LLM_BACKEND}")
+    log(f"Check passing only: {CHECK_PASSING_ONLY}")
+    if not CHECK_PASSING_ONLY and not _can_use_agent():
+        log("  WARNING: agent backend not available -- all potentially-resolved issues will stay open")
 
     issues = load_open_issues(ISSUE_REPO, ISSUE_WRITE_TOKEN)
     log(f"Loaded {len(issues)} open 'CI auto triage' issues")

@@ -7,6 +7,14 @@ on:
         description: "Actually close resolved issues (false = dry-run)"
         type: boolean
         default: false
+      check-passing-only:
+        description: "Fast mode: close passing jobs deterministically without AI (no agent invoked)"
+        type: boolean
+        default: false
+      llm-backend:
+        description: "LLM backend for lifecycle review: 'copilot' or 'cursor'"
+        type: string
+        default: "copilot"
       issue-repo:
         description: "Repository containing the open auto-triage issues"
         type: string
@@ -27,8 +35,11 @@ on:
         description: "Token with write/close access to issue-repo"
         required: true
       CURSOR_API_KEY:
-        description: "Cursor API key -- issues will not be closed without this"
-        required: true
+        description: "Cursor API key (required when llm-backend=cursor and check-passing-only=false)"
+        required: false
+      COPILOT_API_KEY:
+        description: "GitHub PAT for Copilot CLI auth (required when llm-backend=copilot and check-passing-only=false)"
+        required: false
 
 permissions:
   contents: read
@@ -46,6 +57,7 @@ jobs:
           ref: ebanerjee/issue-lifecycle
 
       - name: Install Cursor CLI
+        if: inputs.llm-backend == 'cursor' && inputs.check-passing-only == false
         run: |
           set -euo pipefail
           install_script="$(mktemp)"
@@ -57,11 +69,27 @@ jobs:
           rm -f "$install_script"
           echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
 
+      - name: Set up Node.js 24 (required for Copilot CLI)
+        if: inputs.llm-backend == 'copilot' && inputs.check-passing-only == false
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install GitHub Copilot CLI
+        if: inputs.llm-backend == 'copilot' && inputs.check-passing-only == false
+        run: |
+          set -euo pipefail
+          npm install -g @github/copilot
+          copilot --version || { echo "::error::Copilot CLI installation failed"; exit 1; }
+
       - name: Run issue lifecycle manager
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_READ_TOKEN }}
           ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_API_KEY }}
+          LLM_BACKEND: ${{ inputs.llm-backend }}
+          CHECK_PASSING_ONLY: ${{ inputs.check-passing-only }}
           TARGET_REPO: ${{ inputs.target-repo }}
           ISSUE_REPO: ${{ inputs.issue-repo }}
           RUNS_TO_EVALUATE: ${{ inputs.runs-to-evaluate }}
