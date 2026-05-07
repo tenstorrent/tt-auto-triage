@@ -518,7 +518,7 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
         }
 
     # Step 5: Run the agent.
-    log(f"  #{number}: running Cursor agent...")
+    log(f"  #{number}: running {LLM_BACKEND} agent...")
     agent_result = _call_agent(workflow_name, job_name, status, body, log_paths)
 
     if agent_result is None:
