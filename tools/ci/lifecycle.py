@@ -45,7 +45,7 @@ from tools.ci.check_job_status import (
 # ---------------------------------------------------------------------------
 
 TARGET_REPO = os.environ.get("TARGET_REPO", "tenstorrent/tt-metal")
-ISSUE_REPO = os.environ.get("ISSUE_REPO", "ebanerjeeTT/issue_dump")
+ISSUE_REPO = os.environ.get("ISSUE_REPO", "tenstorrent/tt-metal")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 ISSUE_WRITE_TOKEN = os.environ.get("ISSUE_WRITE_TOKEN", "")
 RUNS_TO_EVALUATE = int(os.environ.get("RUNS_TO_EVALUATE", "3"))
