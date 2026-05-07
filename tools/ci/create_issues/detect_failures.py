@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import calendar
 import os
 import re
 import time
@@ -11,15 +12,41 @@ from .helpers import gh, log, paginate_api, sanitize_text
 SKIP_KEYWORDS: tuple[str, ...] = ("sanity", "Nightly tt-metal L2 tests")
 
 
+def _run_timestamp(run: dict[str, Any]) -> float:
+    """Parse a run's GitHub timestamp into epoch seconds; 0 if unparseable."""
+    raw = run.get("created_at") or run.get("run_started_at") or ""
+    try:
+        return calendar.timegm(time.strptime(raw, "%Y-%m-%dT%H:%M:%SZ"))
+    except (ValueError, TypeError):
+        return 0.0
+
+
 def find_failing_jobs(
     workflow_data: list[list[Any]],
     target_repo: str,
-    consecutive: int = 3,
+    consecutive_high_volume: int = 4,
+    consecutive_low_volume: int = 2,
+    high_volume_runs_per_day: int = 5,
     tracked_pairs: set[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
+    """Find jobs that have failed in the last N consecutive runs of their workflow.
+
+    The threshold N is adaptive per workflow:
+      * If the workflow had MORE than ``high_volume_runs_per_day`` runs on main
+        in the last 24h (the artifact is already pre-filtered to main + non-
+        manual + completed by the upstream aggregator), require
+        ``consecutive_high_volume`` consecutive failures.
+      * Otherwise, require ``consecutive_low_volume``.
+
+    Each result dict carries a ``"consecutive"`` key with the threshold that
+    was applied for that workflow, so downstream code (e.g. issue drafting)
+    can reference the correct number of failing runs.
+    """
     token = os.environ.get("GITHUB_TOKEN")
     owner, repo = target_repo.split("/")
     results: list[dict[str, Any]] = []
+    now = time.time()
+    one_day_ago = now - 86_400
 
     for workflow_name, runs in workflow_data:
         if not runs:
@@ -28,11 +55,19 @@ def find_failing_jobs(
             log(f"  Skipping '{workflow_name}' (skip keyword)")
             continue
 
-        sorted_runs = sorted(
-            runs,
-            key=lambda run: run.get("created_at", "") or run.get("run_started_at", ""),
-            reverse=True,
-        )[:consecutive]
+        recent_count = sum(1 for r in runs if _run_timestamp(r) >= one_day_ago)
+        if recent_count > high_volume_runs_per_day:
+            consecutive = consecutive_high_volume
+            volume_label = "high-volume"
+        else:
+            consecutive = consecutive_low_volume
+            volume_label = "low-volume"
+        log(
+            f"  '{workflow_name}': {recent_count} run(s) in last 24h "
+            f"({volume_label}) -> requires {consecutive} consecutive failure(s)"
+        )
+
+        sorted_runs = sorted(runs, key=_run_timestamp, reverse=True)[:consecutive]
         if len(sorted_runs) < consecutive:
             continue
         if not all(run.get("conclusion") == "failure" for run in sorted_runs):
@@ -74,6 +109,7 @@ def find_failing_jobs(
                 {
                     "workflow_name": workflow_name,
                     "job_name": job_name,
+                    "consecutive": consecutive,
                     "job_urls": [run_failed_jobs[run_id].get(job_name, "") for run_id in run_ids],
                     "run_urls": [run.get("html_url", "") for run in sorted_runs],
                 }

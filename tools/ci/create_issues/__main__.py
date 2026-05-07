@@ -23,7 +23,13 @@ from .render_summary import load_all_open_issues, render
 TARGET_REPO = os.environ.get("TARGET_REPO", "tenstorrent/tt-metal")
 ISSUE_REPO = os.environ.get("ISSUE_REPO", "ebanerjeeTT/issue_dump")
 CREATE_ISSUES = os.environ.get("CREATE_ISSUES", "false").lower() == "true"
-CONSECUTIVE = int(os.environ.get("CONSECUTIVE_FAILURES", "2"))
+# Adaptive consecutive-failure threshold: workflows with more than
+# HIGH_VOLUME_RUNS_PER_DAY runs on main in the last 24h require
+# CONSECUTIVE_HIGH_VOLUME consecutive failures; less-frequent workflows
+# only need CONSECUTIVE_LOW_VOLUME.
+CONSECUTIVE_HIGH_VOLUME = int(os.environ.get("CONSECUTIVE_FAILURES_HIGH_VOLUME", "4"))
+CONSECUTIVE_LOW_VOLUME = int(os.environ.get("CONSECUTIVE_FAILURES_LOW_VOLUME", "2"))
+HIGH_VOLUME_RUNS_PER_DAY = int(os.environ.get("HIGH_VOLUME_RUNS_PER_DAY", "5"))
 ISSUE_WRITE_TOKEN = os.environ.get("ISSUE_WRITE_TOKEN", "")
 CURSOR_MODEL = os.environ.get("CURSOR_MODEL", "claude-4-sonnet")
 SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
@@ -84,7 +90,14 @@ def main() -> int:
         log(f"  Workflow filter {filters}: {len(workflow_data)}/{orig_count} workflows matched")
     open_issues = load_all_open_issues(ISSUE_REPO, ISSUE_WRITE_TOKEN)
     tracked_pairs = tracked_pairs_from_issues(open_issues)
-    failing_jobs = find_failing_jobs(workflow_data, TARGET_REPO, CONSECUTIVE, tracked_pairs)
+    failing_jobs = find_failing_jobs(
+        workflow_data,
+        TARGET_REPO,
+        consecutive_high_volume=CONSECUTIVE_HIGH_VOLUME,
+        consecutive_low_volume=CONSECUTIVE_LOW_VOLUME,
+        high_volume_runs_per_day=HIGH_VOLUME_RUNS_PER_DAY,
+        tracked_pairs=tracked_pairs,
+    )
 
     if not failing_jobs:
         log("No new deterministic failures found. Done.")
@@ -137,7 +150,8 @@ def main() -> int:
         # ── Step 4: Draft issue body via LLM ────────────────────────
         log_paths = consistent_job.get("log_paths", [])
         log(f"  Drafting issue via {LLM_BACKEND} agent...")
-        agent_result = draft_issue_body(consistent_job, log_paths, CURSOR_MODEL, CONSECUTIVE)
+        per_workflow_consecutive = consistent_job.get("consecutive", CONSECUTIVE_LOW_VOLUME)
+        agent_result = draft_issue_body(consistent_job, log_paths, CURSOR_MODEL, per_workflow_consecutive)
 
         if agent_result and agent_result.get("deterministic") is False:
             summary.append(_entry(job, "agent_skipped", reason=agent_result.get("reason", "not deterministic")))
