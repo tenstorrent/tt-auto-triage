@@ -141,19 +141,21 @@ if [ -f "$RESOLVE_SCRIPT" ] && [ -d "$SLACK_DATA_DIR" ]; then
   fi
 fi
 
-JOB_OWNER_PING=""
+JOB_OWNER_JSON="[]"
 if [ -f "$JOB_OWNER_FILE" ]; then
-  # resolve_group_pings.py already converted resolvable S-IDs to U-IDs above.
-  # Any remaining S-prefixed IDs are unresolvable groups -- exclude them from pings.
-  JOB_OWNER_PING=$(jq -r --arg allow "${ALLOW_PINGS:-false}" '
-    [.[] | select(.name != "") |
-      if ($allow == "true") and ((.slack_id // "") != "") and ((.slack_id | startswith("S")) | not) then
-        "<@" + .slack_id + ">"
-      else .name
-      end
-    ] | join(", ")
-  ' "$JOB_OWNER_FILE" 2>/dev/null || echo "")
-  [ -n "$JOB_OWNER_PING" ] && echo "JOB OWNER ping string: $JOB_OWNER_PING"
+  # Pass owner objects through to slack_message.jq so they use the same person()
+  # rendering logic as other people sections (including representative suffixes).
+  # Keep entries that have either a name OR a slack_id -- mention-token parsing
+  # in fetch_job_owner.py can produce ID-only entries when the directory cache
+  # is missing the user/group; person() in slack_message.jq still renders those
+  # as a ping or as the raw ID, which is preferable to silently dropping them.
+  JOB_OWNER_JSON=$(jq -c '
+    if type == "array" then
+      map(select(((.name // "") != "") or ((.slack_id // "") != "")))
+    else
+      []
+    end
+  ' "$JOB_OWNER_FILE" 2>/dev/null || echo "[]")
 fi
 
 TEXT=$(jq -r -f "$SCRIPT_DIR/slack_message.jq" \
@@ -163,7 +165,7 @@ TEXT=$(jq -r -f "$SCRIPT_DIR/slack_message.jq" \
   --arg workflow_name "$WORKFLOW_NAME" \
   --arg auto_fix "${AUTO_FIX_NOTE:-}" \
   --arg allow_pings "${ALLOW_PINGS:-false}" \
-  --arg job_owner_ping "$JOB_OWNER_PING" \
+  --argjson job_owner "$JOB_OWNER_JSON" \
   "$MESSAGE_PATH")
 
 # Special-case ping for triage evaluation:

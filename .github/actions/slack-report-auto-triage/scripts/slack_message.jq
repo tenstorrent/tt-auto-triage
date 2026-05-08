@@ -2,7 +2,7 @@
 # Single source of truth for person, join_people, section_line, commit_entry, etc.
 # Used by build_slack_payload.sh for normal (non-cancellation) reports.
 #
-# Expects --arg run_url, run_label, job_name, workflow_name, auto_fix, allow_pings, job_owner_ping
+# Expects --arg run_url, run_label, job_name, workflow_name, auto_fix, allow_pings, --argjson job_owner
 
 def short_hash(h):
   if (h // "") == "" then "unknown" else (h[0:8]) end;
@@ -17,7 +17,8 @@ def person(p; use_slack_id):
   if p == null then
     "Unknown"
   else
-    (p.name // p.login // "Unknown") as $display_name
+    # Treat empty string name as absent so we fall through to slack_id or "Unknown"
+    (if (p.name // "") != "" then p.name elif (p.login // "") != "" then p.login elif (p.slack_id // "") != "" then p.slack_id else "Unknown" end) as $display_name
     # Only ping if allow_pings is true AND use_slack_id is true AND slack_id exists.
     # resolve_group_pings.py pre-resolves S-prefixed group IDs to a U-prefixed individual;
     # any remaining S-prefixed IDs are unresolvable and are excluded from pings.
@@ -42,6 +43,20 @@ def section_line(lbl; txt):
 def section_people(lbl; arr; use_slack_id):
   if (arr | type) == "array" and (arr | length) > 0 then
     "*\(lbl):* " + join_people(arr; use_slack_id) + "\n"
+  else "" end;
+
+def person_job_owner(p; use_slack_id):
+  person(p; use_slack_id)
+  + (if (p.is_default_owner // false) then
+      " (As one of two representatives for the metalinfra team. Metalinfra was chosen as the default owner as this job has no owner. Please find a suitable owner)."
+    else "" end);
+
+def join_job_owners(arr; use_slack_id):
+  arr | map(person_job_owner(.; use_slack_id)) | join(", ");
+
+def section_job_owners(lbl; arr; use_slack_id):
+  if (arr | type) == "array" and (arr | length) > 0 then
+    "*\(lbl):* " + join_job_owners(arr; use_slack_id) + "\n"
   else "" end;
 
 def section_files(lbl; arr):
@@ -84,7 +99,7 @@ def commits_section(arr):
   else "" end;
 
 # Main expression: build text from slack_message.json
-# Input: JSON from slack_message_path; args: run_url, run_label, job_name, workflow_name, auto_fix, allow_pings, job_owner_ping
+# Input: JSON from slack_message_path; args: run_url, run_label, job_name, workflow_name, auto_fix, allow_pings, job_owner
 (.case | tostring) as $case
 | (if ((.commits | type) == "array" and (.commits | length) > 0) then true else false end) as $has_commits
 | ($case == "4") as $is_case4
@@ -114,6 +129,12 @@ def commits_section(arr):
   + (if $is_case4 then section_line("NOTE"; "Could not identify a single high-confidence culprit commit.") else "" end)
   + section_line("NOTES"; .notes)
   + (if ($auto_fix // "") != "" then "\n*AUTO-FIX:* Draft PR created -> <\($auto_fix)|link>\n" else "" end)
-  + (if ($job_owner_ping != "") and (($case == "1") or ($case == "2") or ($case == "4")) then "\n*JOB OWNER:* " + $job_owner_ping + "\n" else "" end)
+  + (if (($case == "1") or ($case == "2") or ($case == "4")) and (($job_owner | type) == "array") and (($job_owner | length) > 0)
+     # Prepend "\n" so JOB OWNER is visually separated from the previous section,
+     # matching the leading-newline convention used by AUTO-FIX above. The trailing
+     # gsub("\n{3,}"; "\n\n") collapses any extra newlines that may stack up.
+     then "\n" + section_job_owners("JOB OWNER"; $job_owner; true)
+     else ""
+     end)
   + "\n---\n_DISCLAIMER: This analysis has been done by AI. Do not take the results as absolute truth since it has been inaccurate in the past._"
 ) | gsub("\n{3,}"; "\n\n")
