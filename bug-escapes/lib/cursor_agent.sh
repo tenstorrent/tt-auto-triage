@@ -106,22 +106,55 @@ cursor_agent_query() {
     local exit_code=0
     local stderr_file
     stderr_file="$(mktemp)"
-    if [ "$backend" = "copilot" ]; then
-      timeout "$CURSOR_AGENT_TIMEOUT" \
-        env -i HOME="$HOME" PATH="$PATH" \
-          ${COPILOT_GITHUB_TOKEN:+GH_TOKEN="$COPILOT_GITHUB_TOKEN"} \
-        bash -c 'copilot -p "$(cat "$1")" --allow-all-tools' -- "$_prompt_file" \
-        > "$output_file" 2>"$stderr_file" || exit_code=$?
+
+    # Live-stream the agent's stdout when running under GitHub Actions:
+    #   stdbuf -oL forces the agent to line-buffer its stdout (otherwise pipes
+    #     trigger block buffering and nothing appears for minutes).
+    #   `tee /dev/stderr` duplicates stdout to stderr (visible in the live
+    #     job log) AND its own stdout (which we redirect to $output_file).
+    #   pipefail makes the pipeline reflect the agent's exit code, not tee's.
+    # Outside GHA we keep the original capture-only path to avoid noisy local
+    # output when this is run from a developer terminal.
+    if [ "$in_gha" = "1" ]; then
+      if [ "$backend" = "copilot" ]; then
+        ( set -o pipefail; \
+          timeout "$CURSOR_AGENT_TIMEOUT" \
+            env -i HOME="$HOME" PATH="$PATH" \
+              ${COPILOT_GITHUB_TOKEN:+GH_TOKEN="$COPILOT_GITHUB_TOKEN"} \
+            bash -c 'stdbuf -oL copilot -p "$(cat "$1")" --allow-all-tools' -- "$_prompt_file" \
+            2>"$stderr_file" \
+            | tee /dev/stderr > "$output_file" \
+        ) || exit_code=$?
+      else
+        ( set -o pipefail; \
+          timeout "$CURSOR_AGENT_TIMEOUT" \
+            env -i HOME="$HOME" PATH="$PATH" \
+              ${CURSOR_API_KEY:+CURSOR_API_KEY="$CURSOR_API_KEY"} \
+            bash -c 'stdbuf -oL agent --trust --model auto -p "$(cat "$1")"' -- "$_prompt_file" \
+            2>"$stderr_file" \
+            | tee /dev/stderr > "$output_file" \
+        ) || exit_code=$?
+      fi
     else
-      timeout "$CURSOR_AGENT_TIMEOUT" \
-        env -i HOME="$HOME" PATH="$PATH" \
-          ${CURSOR_API_KEY:+CURSOR_API_KEY="$CURSOR_API_KEY"} \
-        bash -c 'agent --trust --model auto -p "$(cat "$1")"' -- "$_prompt_file" \
-        > "$output_file" 2>"$stderr_file" || exit_code=$?
+      if [ "$backend" = "copilot" ]; then
+        timeout "$CURSOR_AGENT_TIMEOUT" \
+          env -i HOME="$HOME" PATH="$PATH" \
+            ${COPILOT_GITHUB_TOKEN:+GH_TOKEN="$COPILOT_GITHUB_TOKEN"} \
+          bash -c 'copilot -p "$(cat "$1")" --allow-all-tools' -- "$_prompt_file" \
+          > "$output_file" 2>"$stderr_file" || exit_code=$?
+      else
+        timeout "$CURSOR_AGENT_TIMEOUT" \
+          env -i HOME="$HOME" PATH="$PATH" \
+            ${CURSOR_API_KEY:+CURSOR_API_KEY="$CURSOR_API_KEY"} \
+          bash -c 'agent --trust --model auto -p "$(cat "$1")"' -- "$_prompt_file" \
+          > "$output_file" 2>"$stderr_file" || exit_code=$?
+      fi
     fi
 
     if [ "$exit_code" -eq 0 ] && [ -s "$output_file" ]; then
-      _emit_live_agent_response "$output_file"
+      # In GHA we already streamed stdout live via tee; skip the post-call
+      # bulk dump to avoid duplicating the entire response in the log.
+      [ "$in_gha" != "1" ] && _emit_live_agent_response "$output_file"
       rm -f "$stderr_file" "$_prompt_file"
       [ "$in_gha" = "1" ] && echo "::endgroup::" >&2
       return 0
@@ -135,9 +168,11 @@ cursor_agent_query() {
         log_warn "${backend}_agent stderr: $(head -c 500 "$stderr_file")"
       fi
     fi
-    # Surface partial output too — when the agent fails we still want to see
-    # whatever it printed before exiting, since that often explains why.
-    [ -s "$output_file" ] && _emit_live_agent_response "$output_file"
+    # Outside GHA, surface partial output on failure — when streaming was off,
+    # this is the operator's only chance to see what the agent actually wrote.
+    if [ "$in_gha" != "1" ] && [ -s "$output_file" ]; then
+      _emit_live_agent_response "$output_file"
+    fi
     rm -f "$stderr_file"
 
     attempt=$((attempt + 1))
