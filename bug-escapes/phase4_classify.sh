@@ -30,12 +30,15 @@ echo '{}' > "$SEEN_ESCAPES_FILE"
 
 _restore_seen_escapes_cache() {
   local token="${GITHUB_TOKEN:-${GITHUB_READ_TOKEN:-}}"
-  [ -z "$token" ] && return
+  if [ -z "$token" ]; then
+    log_warn "Seen-escapes cache: neither GITHUB_TOKEN nor GITHUB_READ_TOKEN is set — dedup is effectively disabled for this run"
+    return 0
+  fi
   local artifact_id
   artifact_id=$(curl -s -H "Authorization: Bearer $token" \
     "https://api.github.com/repos/${AT_OWNER_REPO}/actions/artifacts?name=bug-escapes-seen-escapes-cache&per_page=1" \
     | jq -r '.artifacts[0].id // empty' 2>/dev/null || echo "")
-  [ -z "$artifact_id" ] && { log_info "Seen-escapes cache: no prior artifact (first run)"; return; }
+  [ -z "$artifact_id" ] && { log_info "Seen-escapes cache: no prior artifact (first run)"; return 0; }
   local tmpzip
   tmpzip=$(mktemp --suffix=.zip)
   if curl -s -H "Authorization: Bearer $token" -L \
@@ -51,11 +54,23 @@ with zipfile.ZipFile('$tmpzip') as z:
         sys.exit(0)
 sys.exit(1)
 " 2>/dev/null; then
-      jq -s '.[0] * .[1]' "$SEEN_ESCAPES_FILE" "${SEEN_ESCAPES_FILE}.dl" \
-        > "${SEEN_ESCAPES_FILE}.merged" 2>/dev/null \
-        && mv "${SEEN_ESCAPES_FILE}.merged" "$SEEN_ESCAPES_FILE" || true
+      # Merge prior cache into the in-memory file. Failure here means the
+      # downloaded artifact is corrupt or unparseable — log loudly so an
+      # operator can see why dedup is empty rather than silently no-opping.
+      if jq -s '.[0] * .[1]' "$SEEN_ESCAPES_FILE" "${SEEN_ESCAPES_FILE}.dl" \
+           > "${SEEN_ESCAPES_FILE}.merged" 2>/dev/null \
+         && [ -s "${SEEN_ESCAPES_FILE}.merged" ]; then
+        mv "${SEEN_ESCAPES_FILE}.merged" "$SEEN_ESCAPES_FILE"
+      else
+        log_warn "Seen-escapes cache: failed to merge prior artifact (likely corrupt) — proceeding with empty cache"
+        rm -f "${SEEN_ESCAPES_FILE}.merged"
+      fi
       rm -f "${SEEN_ESCAPES_FILE}.dl"
+    else
+      log_warn "Seen-escapes cache: artifact ZIP did not contain seen_escapes.json — proceeding with empty cache"
     fi
+  else
+    log_warn "Seen-escapes cache: artifact download failed (id=$artifact_id) — proceeding with empty cache"
   fi
   rm -f "$tmpzip"
 }
@@ -65,13 +80,27 @@ _evict_stale_escapes() {
   ttl_s=$(( SEEN_ESCAPES_TTL_DAYS * 86400 ))
   now_s=$(date -u +%s)
   before_count=$(jq 'length' "$SEEN_ESCAPES_FILE" 2>/dev/null || echo 0)
+  # Strip fractional seconds (e.g. "2026-05-06T18:57:00.123Z" -> "2026-05-06T18:57:00Z")
+  # before strptime so microsecond timestamps don't fail to parse and get evicted as
+  # "unparseable = age unknown". gsub does the cleanup in-jq.
   jq --argjson now "$now_s" --argjson ttl "$ttl_s" '
     with_entries(
       select(
         (.value | type == "object") and
         ((.value.t // "") != "") and
         (
-          (now - ((.value.t | split("T")[0] + "T" + (.value.t | split("T")[1] | split("Z")[0]) | strptime("%Y-%m-%dT%H:%M:%S") | mktime) // 0)) < $ttl
+          (.value.t | gsub("\\.[0-9]+Z$"; "Z")) as $ts |
+          ($ts | split("T")) as $parts |
+          (
+            ($parts | length == 2)
+            and (($parts[1] | endswith("Z")))
+            and (
+              (now - (
+                ($parts[0] + "T" + ($parts[1] | rtrimstr("Z")))
+                | strptime("%Y-%m-%dT%H:%M:%S") | mktime
+              )) < $ttl
+            )
+          )
         )
       )
     )
@@ -97,10 +126,18 @@ _is_escape_seen() {
 _mark_escape_seen() {
   local key="$1" etype="$2" conf="$3" now_ts
   now_ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-  jq --arg k "$key" --arg etype "$etype" --arg conf "$conf" --arg t "$now_ts" \
-    '. + {($k): {"t": $t, "type": $etype, "confidence": $conf}}' "$SEEN_ESCAPES_FILE" \
-    > "${SEEN_ESCAPES_FILE}.tmp" 2>/dev/null \
-    && mv "${SEEN_ESCAPES_FILE}.tmp" "$SEEN_ESCAPES_FILE" || true
+  if jq --arg k "$key" --arg etype "$etype" --arg conf "$conf" --arg t "$now_ts" \
+       '. + {($k): {"t": $t, "type": $etype, "confidence": $conf}}' "$SEEN_ESCAPES_FILE" \
+       > "${SEEN_ESCAPES_FILE}.tmp" 2>/dev/null \
+     && [ -s "${SEEN_ESCAPES_FILE}.tmp" ] \
+     && jq empty "${SEEN_ESCAPES_FILE}.tmp" 2>/dev/null; then
+    mv "${SEEN_ESCAPES_FILE}.tmp" "$SEEN_ESCAPES_FILE"
+  else
+    log_warn "Seen-escapes cache: write failed for key '${key:0:60}' — resetting cache to empty to avoid poisoning subsequent writes"
+    echo '{}' > "$SEEN_ESCAPES_FILE"
+    rm -f "${SEEN_ESCAPES_FILE}.tmp"
+  fi
+  return 0
 }
 
 _restore_seen_escapes_cache
