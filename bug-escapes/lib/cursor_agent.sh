@@ -89,12 +89,19 @@ cursor_agent_query() {
 
   # Open a GHA log group for this call so the response is visually grouped
   # under a collapsible header (call sequence is the saved-log seq + 1).
+  # Also issue ::stop-commands:: with a unique token so any "##[error]…" or
+  # similar workflow-command syntax inside the agent's response is treated as
+  # plain text rather than being lifted into the run-summary error annotations.
+  # We re-enable command processing on every return path before ::endgroup::.
   local in_gha=0
+  local stop_token=""
   if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
     in_gha=1
     local prompt_bytes
     prompt_bytes=$(wc -c < "$_prompt_file" 2>/dev/null || echo 0)
+    stop_token="bug-escapes-stop-$$-$(date +%s%N 2>/dev/null || date +%s)-$RANDOM"
     echo "::group::${backend}_agent #$((_AGENT_CALL_SEQ + 1)): ${label} (prompt ${prompt_bytes}B)" >&2
+    echo "::stop-commands::${stop_token}" >&2
   fi
 
   while [ "$attempt" -le "$max_retries" ]; do
@@ -156,7 +163,10 @@ cursor_agent_query() {
       # bulk dump to avoid duplicating the entire response in the log.
       [ "$in_gha" != "1" ] && _emit_live_agent_response "$output_file"
       rm -f "$stderr_file" "$_prompt_file"
-      [ "$in_gha" = "1" ] && echo "::endgroup::" >&2
+      if [ "$in_gha" = "1" ]; then
+        echo "::${stop_token}::" >&2
+        echo "::endgroup::" >&2
+      fi
       return 0
     fi
 
@@ -180,7 +190,10 @@ cursor_agent_query() {
 
   rm -f "$_prompt_file"
   log_error "${backend}_agent: all attempts exhausted"
-  [ "$in_gha" = "1" ] && echo "::endgroup::" >&2
+  if [ "$in_gha" = "1" ]; then
+    echo "::${stop_token}::" >&2
+    echo "::endgroup::" >&2
+  fi
   return 1
 }
 
