@@ -217,6 +217,22 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
+      # Hard-fail early when auto-verify is on but the cross-repo dispatch
+      # token is missing. Otherwise the verify-all matrix would silently fall
+      # through to github.token (which can't dispatch to tt-metal) and every
+      # leg would 404 deep inside verify.sh — confusing and budget-burning.
+      - name: Require GITHUB_WRITE_TOKEN for auto-verify
+        if: always() && inputs.auto-verify == 'true'
+        env:
+          HAS_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_TOKEN:-false}" != "true" ]; then
+            echo "::error::auto-verify=true requires the GITHUB_WRITE_TOKEN secret (PAT with repo+workflow scope on tt-metal). Refusing to proceed — verify-all would silently 404 on cross-repo dispatch."
+            exit 1
+          fi
+          echo "GITHUB_WRITE_TOKEN present — auto-verify can proceed."
+
       # --- Autonomous mode: prepare the verify matrix -----------------------
       # Emit a JSON array of escapes that qualify for verification: must be
       # type=vertical with fix_confidence=high or medium and a real fix_commit_sha.
@@ -269,7 +285,20 @@ jobs:
 
       - name: Detect summary
         if: always()
+        env:
+          LLM_BACKEND: ${{ inputs.llm-backend }}
         run: |
+          # Count agent calls by listing files in agent-logs/. The cursor_agent
+          # wrapper writes one ${seq}_${label}_raw.txt per call. Empty when the
+          # run hard-failed before any agent invocation.
+          if [ -d bug-escapes/output/agent-logs ]; then
+            agent_calls=$(find bug-escapes/output/agent-logs -maxdepth 1 -type f -name '*_raw.txt' 2>/dev/null | wc -l | tr -d ' ')
+            agent_failed=$(find bug-escapes/output/agent-logs -maxdepth 1 -type f -name '*_FAILED_raw.txt' 2>/dev/null | wc -l | tr -d ' ')
+          else
+            agent_calls=0
+            agent_failed=0
+          fi
+
           if [ -f bug-escapes/output/bug-escapes-output.json ]; then
             total=$(jq '.bug_escapes | length' bug-escapes/output/bug-escapes-output.json)
             horizontal=$(jq '[.bug_escapes[] | select(.type == "horizontal")] | length' bug-escapes/output/bug-escapes-output.json)
@@ -278,6 +307,8 @@ jobs:
             unknown=$(jq '[.bug_escapes[] | select(.type == "unknown")] | length' bug-escapes/output/bug-escapes-output.json)
             {
               echo "## Bug Escape Detection"
+              echo "- **LLM backend**: \`${LLM_BACKEND:-cursor}\`"
+              echo "- **Agent calls**: ${agent_calls} (failed: ${agent_failed})"
               echo "- **max-phase**: ${{ inputs.max-phase }}"
               echo "- **consecutive-runs threshold**: ${{ inputs.consecutive-runs }}"
               echo "- **lookback-days**: ${{ inputs.lookback-days }}"
@@ -299,6 +330,8 @@ jobs:
           else
             {
               echo "## Bug Escape Detection"
+              echo "- **LLM backend**: \`${LLM_BACKEND:-cursor}\`"
+              echo "- **Agent calls**: ${agent_calls} (failed: ${agent_failed})"
               echo "- **max-phase**: ${{ inputs.max-phase }}"
               echo "- **lookback-days**: ${{ inputs.lookback-days }}"
               if [ -n "${{ inputs.test-workflows }}" ]; then
@@ -343,6 +376,19 @@ jobs:
       matrix:
         escape: ${{ fromJson(needs.detect.outputs.verify-matrix) }}
     steps:
+      # Belt-and-suspenders: detect already failed earlier if the token was
+      # missing, but the matrix can be reached via reruns/replays where the
+      # detect-side guard didn't run. Fail fast and clearly here too.
+      - name: Require GITHUB_WRITE_TOKEN
+        env:
+          HAS_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_TOKEN:-false}" != "true" ]; then
+            echo "::error::verify-all requires the GITHUB_WRITE_TOKEN secret (PAT with repo+workflow scope on tt-metal). Cannot proceed."
+            exit 1
+          fi
+
       - name: Checkout tt-auto-triage (verify scripts)
         uses: actions/checkout@v4
         with:
