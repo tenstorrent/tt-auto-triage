@@ -8,8 +8,8 @@ trap 'echo "[ERR] phase3 crashed at line $LINENO — exit $?" >&2' ERR
 #   1. Skip if marked likely_flaky by Phase 2
 #   2. Walk forward through subsequent runs of the same workflow/job
 #   3. Find the first run where the job passed
-#   4. Use gh api compare to get commits between SHAs (bash, fast)
-#   5. Pass compact commit list to agent for analysis (no tool calls needed)
+#   4. Use gh api compare to get commits between SHAs; enrich each with files, PR metadata, Copilot review
+#   5. Pass enriched commit list to agent for analysis (no tool calls needed)
 #   6. Write fix-points.json
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -263,7 +263,7 @@ for i in $(seq 0 $((num_failures - 1))); do
 
   log_info "    Transition: $last_failing_run_sha -> $first_passing_run_sha"
 
-  # ---- Get commits via gh api compare (bash, fast) ----
+  # ---- Get commits via compare API ----
   commits_json=$(gh api "repos/${AT_OWNER_REPO}/compare/${last_failing_run_sha}...${first_passing_run_sha}" \
     --jq '[.commits[] | {sha: .sha, msg: (.commit.message | split("\n")[0])}]' 2>/dev/null || echo "[]")
 
@@ -284,12 +284,105 @@ for i in $(seq 0 $((num_failures - 1))); do
     continue
   fi
 
-  # Build compact list for agent prompt
+  # Truncation caps based on window size — keeps prompt manageable for large windows
+  if [ "$num_commits" -gt 60 ]; then
+    _PR_BODY_CAP=100; _COPILOT_CAP=0; _MAX_FILES=10
+  elif [ "$num_commits" -gt 30 ]; then
+    _PR_BODY_CAP=200; _COPILOT_CAP=150; _MAX_FILES=15
+  else
+    _PR_BODY_CAP=500; _COPILOT_CAP=300; _MAX_FILES=20
+  fi
+
+  # ---- Build enriched commit list for agent prompt ----
+  # For each commit: fetch changed files, PR title+body, and Copilot review overview.
+  # This gives the LLM much stronger signal than commit messages alone.
   commits_list=""
   for c in $(seq 0 $((num_commits - 1))); do
     sha=$(echo "$commits_json" | jq -r ".[$c].sha")
     msg=$(echo "$commits_json" | jq -r ".[$c].msg")
-    commits_list="${commits_list}${sha} ${msg}
+
+    # Changed files (1 API call per commit)
+    files_raw=$(gh api "repos/${AT_OWNER_REPO}/commits/${sha}" \
+      --jq '[.files[].filename]' 2>/dev/null || echo '[]')
+    file_count=$(echo "$files_raw" | jq 'length' 2>/dev/null || echo 0)
+    if [ "$file_count" -gt "$_MAX_FILES" ]; then
+      overflow=$((file_count - _MAX_FILES))
+      files_str=$(echo "$files_raw" | jq -r --argjson cap "$_MAX_FILES" '.[0:$cap] | join(", ")' 2>/dev/null || echo "")
+      files_str="${files_str} ... and ${overflow} more"
+    else
+      files_str=$(echo "$files_raw" | jq -r 'join(", ")' 2>/dev/null || echo "(files unavailable)")
+    fi
+
+    # PR number: extract from merge commit message "(#NNNN)" pattern
+    pr_number=$(echo "$msg" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | tail -1 || true)
+    # Fallback: commits/{sha}/pulls API (1 API call, only if message parse failed)
+    if [ -z "$pr_number" ]; then
+      pr_number=$(gh api "repos/${AT_OWNER_REPO}/commits/${sha}/pulls" \
+        --jq '.[0].number // empty' 2>/dev/null || true)
+    fi
+
+    pr_block=""
+    copilot_block=""
+
+    if [ -n "$pr_number" ]; then
+      # PR title + body (1 API call)
+      pr_json=$(gh api "repos/${AT_OWNER_REPO}/pulls/${pr_number}" 2>/dev/null || echo "{}")
+      pr_title=$(echo "$pr_json" | jq -r '.title // empty' 2>/dev/null || true)
+      pr_body_raw=$(echo "$pr_json" | jq -r '.body // ""' 2>/dev/null || true)
+
+      if [ "${#pr_body_raw}" -gt "$_PR_BODY_CAP" ]; then
+        pr_body="${pr_body_raw:0:$_PR_BODY_CAP}..."
+      else
+        pr_body="$pr_body_raw"
+      fi
+      pr_body=$(echo "$pr_body" | tr '\n' ' ' | tr -s ' ')
+
+      if [ -n "$pr_title" ]; then
+        pr_block="  PR #${pr_number}: ${pr_title}"
+        if [ -n "$pr_body" ] && [ "$pr_body" != " " ]; then
+          pr_block="${pr_block}
+  PR description: ${pr_body}"
+        fi
+      fi
+
+      # Copilot review overview (1 API call, only if cap > 0)
+      if [ "$_COPILOT_CAP" -gt 0 ]; then
+        reviews_json=$(gh api "repos/${AT_OWNER_REPO}/pulls/${pr_number}/reviews" 2>/dev/null || echo "[]")
+        copilot_body=$(echo "$reviews_json" | jq -r '
+          [.[] | select(.user.login | test("copilot"; "i")) | .body // ""]
+          | .[0] // ""
+        ' 2>/dev/null || true)
+
+        if [ -n "$copilot_body" ] && [ "$copilot_body" != "null" ]; then
+          # Extract the overview section (text after "Overview" heading, before next ##)
+          overview_text=$(echo "$copilot_body" | sed -n '/[Oo]verview/,/^##/{/^##[^#]/!p}' | head -8 | tr '\n' ' ' | tr -s ' ')
+          if [ -z "$overview_text" ] || [ "$overview_text" = " " ]; then
+            overview_text="${copilot_body:0:$_COPILOT_CAP}"
+          fi
+          if [ "${#overview_text}" -gt "$_COPILOT_CAP" ]; then
+            overview_text="${overview_text:0:$_COPILOT_CAP}..."
+          fi
+          if [ -n "$overview_text" ] && [ "$overview_text" != " " ]; then
+            copilot_block="  Copilot overview: ${overview_text}"
+          fi
+        fi
+      fi
+    fi
+
+    # Assemble enriched block for this commit
+    commits_list="${commits_list}COMMIT ${sha}
+  Message: ${msg}
+  Files (${file_count}): ${files_str}
+"
+    if [ -n "$pr_block" ]; then
+      commits_list="${commits_list}${pr_block}
+"
+    fi
+    if [ -n "$copilot_block" ]; then
+      commits_list="${commits_list}${copilot_block}
+"
+    fi
+    commits_list="${commits_list}
 "
   done
 
