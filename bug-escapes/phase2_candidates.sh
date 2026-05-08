@@ -646,9 +646,24 @@ ${_snippet_for_prompt}
         confidence=$(echo "$result" | jq -r '.confidence // "low"' 2>/dev/null || echo "low")
         reasoning=$(echo "$result" | jq -r '.reasoning // ""' 2>/dev/null || echo "")
 
+        # Job-level fallback when the agent can't pin down a specific test name.
+        # Many CI jobs are shell-script wrappers (TTNN tutorials, didt-tests,
+        # sdpa-stress, etc.) whose error tail contains "exit code 1" or "Killed"
+        # without a pytest/gtest identifier. Phase 3's fix-point search keys on
+        # job_name (not test_name), so dropping these entirely loses real signal.
+        # Instead, use agent_job as the identifier and floor confidence to "low"
+        # so Phase 4's medium/high verify-matrix filter naturally excludes them
+        # from auto-verification while still surfacing them in the report.
         if [ "$test_name" = "null" ] || [ "$test_name" = "unknown" ] || [ -z "$test_name" ]; then
-          log_info "      Skipping '$agent_job': agent confirmed failure but couldn't identify the test name"
-          continue
+          if [ -n "$agent_job" ]; then
+            log_info "      Job-level confirmed (no test name extracted): '$agent_job' — using job name as identifier, confidence floored to low"
+            test_name="$agent_job"
+            confidence="low"
+            reasoning="[no specific test name extractable from logs] $reasoning"
+          else
+            log_warn "      Skipping: agent confirmed failure but returned neither test_name nor job"
+            continue
+          fi
         fi
 
         # Match back to candidate metadata to get failing_run_ids and cache key
