@@ -31,10 +31,11 @@ def _resolve_metalinfra_representatives(group_id: str, count: int = 2) -> list:
     """Call Slack usergroups.users.list to get members and pick *count* at random.
 
     Returns a list of distinct U-prefixed user ID strings (length between 0
-    and *count*).  If fewer than *count* active members are available, returns
-    as many as possible (minimum 1).  Requires SLACK_BOT_TOKEN in the
-    environment (already guaranteed by the calling shell script
-    fetch_job_owner.sh).
+    and *count*). If fewer than *count* members are available, returns as
+    many as possible. May return an empty list if the group has no members or
+    if the lookup cannot be completed (for example, missing token or Slack API
+    error). Requires SLACK_BOT_TOKEN in the environment (already guaranteed by
+    the calling shell script fetch_job_owner.sh).
     """
     token = os.environ.get("SLACK_BOT_TOKEN", "")
     if not token:
