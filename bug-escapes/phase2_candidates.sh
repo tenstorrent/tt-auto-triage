@@ -608,20 +608,20 @@ ${_snippet_for_prompt}
 
     log_info "    Chunk $((chunk_idx+1))/$num_chunks: candidates $((chunk_start+1))-$((chunk_end+1))"
 
-    # Pre-mark all candidates in this chunk as infra_noise before calling the LLM.
-    # Confirmed ones will be overwritten to "confirmed" below.  This ensures that
-    # even if the LLM call fails or times out, these candidates are not re-tried
-    # on the next hourly run (they'd just be noise again anyway).
-    for _pci in $(seq "$chunk_start" "$chunk_end"); do
-      _mark_seen "${candidates_keys[$_pci]}" "infra_noise"
-    done
-
     agent_output="$(mktemp)"
     if cursor_agent_from_template "$PROMPT_TEMPLATE" "$agent_output" \
          "WORKFLOW_PATH=$wf_path" \
          "TEST_LAYER=$test_layer" \
          "CONSECUTIVE_RUNS=$CONSECUTIVE_RUNS" \
          "CANDIDATES_SUMMARY=$chunk_summary"; then
+
+      # Mark all candidates in this chunk as infra_noise now that the LLM has
+      # responded successfully.  Confirmed ones will be overwritten to "confirmed"
+      # below.  We do this AFTER the LLM call (not before) so that a timeout or
+      # bad response does not suppress real failures for up to EXACT_KEY_TTL_HOURS.
+      for _pci in $(seq "$chunk_start" "$chunk_end"); do
+        _mark_seen "${candidates_keys[$_pci]}" "infra_noise"
+      done
 
       # The agent returns a JSON array. Iterate and match back by job name.
       # Use head -1 so a multi-doc output file (two arrays) doesn't produce
