@@ -66,7 +66,10 @@ def _resolve_metalinfra_representatives(group_id: str, count: int = 2) -> list:
     pick = min(count, len(users))
     rng = secrets.SystemRandom()
     chosen = rng.sample(users, pick)
-    print(f"Resolved metalinfra group {group_id} to {pick} representative(s): {chosen}", file=sys.stderr)
+    if os.environ.get("FETCH_JOB_OWNER_DEBUG"):
+        print(f"Resolved metalinfra group {group_id} to {pick} representative(s): {chosen}", file=sys.stderr)
+    else:
+        print(f"Resolved metalinfra group {group_id} to {pick} representative(s)", file=sys.stderr)
     return chosen
 
 

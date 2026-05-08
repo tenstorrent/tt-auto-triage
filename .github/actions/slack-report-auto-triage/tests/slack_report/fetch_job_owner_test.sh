@@ -149,32 +149,12 @@ SLACK_DATA_DIR="$tmpdir/slack_data_mi2"
 export JOB_OWNER_FILE THREAD_TEXT_FILE SLACK_DATA_DIR
 
 python3 -c "
-import sys, importlib.util, unittest.mock
+import sys, importlib.util, os, unittest.mock
 
+# exec_module first so _resolve_metalinfra_representatives is defined on mod,
+# then patch it and call main() explicitly.  The 'if __name__ == \"__main__\"'
+# guard in the script prevents main() from running during exec_module.
 spec = importlib.util.spec_from_file_location('fetch_job_owner', '$PYTHON_SCRIPT')
-mod = importlib.util.module_from_spec(spec)
-
-with unittest.mock.patch.dict('os.environ', {
-    'JOB_NAME': '$JOB_NAME',
-    'JOB_OWNER_FILE': '$JOB_OWNER_FILE',
-    'THREAD_TEXT_FILE': '$THREAD_TEXT_FILE',
-    'SLACK_DATA_DIR': '$SLACK_DATA_DIR',
-}):
-    # Patch the resolution function to return two fake user IDs
-    with unittest.mock.patch.object(
-        mod, '_resolve_metalinfra_representatives', return_value=['UREP1', 'UREP2']
-    ):
-        # Need to patch at module level before main() runs
-        spec.loader.exec_module(mod)
-        # The module-level guard calls main(); patch must be in place first.
-" 2>/dev/null || \
-python3 -c "
-import sys, json, os, unittest.mock
-
-# Direct approach: import, patch, call
-sys.path.insert(0, os.path.dirname('$PYTHON_SCRIPT'))
-import importlib.util
-spec = importlib.util.spec_from_file_location('fjo', '$PYTHON_SCRIPT')
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 

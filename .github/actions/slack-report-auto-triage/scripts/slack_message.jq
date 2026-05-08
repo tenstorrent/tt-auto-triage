@@ -17,7 +17,8 @@ def person(p; use_slack_id):
   if p == null then
     "Unknown"
   else
-    (p.name // p.login // "Unknown") as $display_name
+    # Treat empty string name as absent so we fall through to slack_id or "Unknown"
+    (if (p.name // "") != "" then p.name elif (p.login // "") != "" then p.login elif (p.slack_id // "") != "" then p.slack_id else "Unknown" end) as $display_name
     # Only ping if allow_pings is true AND use_slack_id is true AND slack_id exists.
     # resolve_group_pings.py pre-resolves S-prefixed group IDs to a U-prefixed individual;
     # any remaining S-prefixed IDs are unresolvable and are excluded from pings.
