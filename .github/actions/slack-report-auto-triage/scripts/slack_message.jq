@@ -47,7 +47,7 @@ def section_people(lbl; arr; use_slack_id):
 def person_job_owner(p; use_slack_id):
   person(p; use_slack_id)
   + (if (p.is_default_owner // false) then
-      " (As a representative for the metalinfra team. Metalinfra was chosen as the default owner as this job has no owner. Please find a suitable owner)."
+      " (As one of two representatives for the metalinfra team. Metalinfra was chosen as the default owner as this job has no owner. Please find a suitable owner)."
     else "" end);
 
 def join_job_owners(arr; use_slack_id):

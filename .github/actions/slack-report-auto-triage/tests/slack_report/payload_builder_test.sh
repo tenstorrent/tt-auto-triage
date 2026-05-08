@@ -311,7 +311,8 @@ rm -f "$tmpdir/github_output"
 
 cat > "$tmpdir/.auto_triage/data/job_owner.json" <<'EOF'
 [
-  {"name": "Rose Li (representing Metal Infra Team)", "slack_id": "U08DEGUJY3H", "is_default_owner": true}
+  {"name": "Rose Li (representing Metal Infra Team)", "slack_id": "U08DEGUJY3H", "is_default_owner": true},
+  {"name": "Neil Sexton (representing Metal Infra Team)", "slack_id": "U08TVGQGGAE", "is_default_owner": true}
 ]
 EOF
 
@@ -320,10 +321,14 @@ bash "$BUILD_SCRIPT"
 cd - >/dev/null
 
 text_default_owner=$(jq -r '.text // empty' "$tmpdir/.auto_triage/slack_payload.json")
-assert "Default-owner metalinfra is pinged" \
+assert "Default-owner metalinfra rep 1 is pinged" \
   [ -n "$(echo "$text_default_owner" | grep -F '<@U08DEGUJY3H>' || true)" ]
+assert "Default-owner metalinfra rep 2 is pinged" \
+  [ -n "$(echo "$text_default_owner" | grep -F '<@U08TVGQGGAE>' || true)" ]
 assert "Default-owner disclaimer is appended" \
   [ -n "$(echo "$text_default_owner" | grep -F 'Metalinfra was chosen as the default owner' || true)" ]
+assert "Default-owner disclaimer says one of two representatives" \
+  [ -n "$(echo "$text_default_owner" | grep -F 'one of two representatives' || true)" ]
 assert "Default-owner disclaimer includes action request" \
   [ -n "$(echo "$text_default_owner" | grep -F 'Please find a suitable owner' || true)" ]
 

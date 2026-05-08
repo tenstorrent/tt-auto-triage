@@ -27,17 +27,19 @@ def add_owner(owners, seen, name, slack_id):
     owners.append({"name": (name or "").strip(), "slack_id": (slack_id or "").strip()})
 
 
-def _resolve_metalinfra_representative(group_id: str) -> str:
-    """Call Slack usergroups.users.list to get members and pick one at random.
+def _resolve_metalinfra_representatives(group_id: str, count: int = 2) -> list:
+    """Call Slack usergroups.users.list to get members and pick *count* at random.
 
-    Returns a U-prefixed user ID string, or "" on failure.  Requires
-    SLACK_BOT_TOKEN in the environment (already guaranteed by the calling
-    shell script fetch_job_owner.sh).
+    Returns a list of distinct U-prefixed user ID strings (length between 0
+    and *count*).  If fewer than *count* active members are available, returns
+    as many as possible (minimum 1).  Requires SLACK_BOT_TOKEN in the
+    environment (already guaranteed by the calling shell script
+    fetch_job_owner.sh).
     """
     token = os.environ.get("SLACK_BOT_TOKEN", "")
     if not token:
-        print("Warning: SLACK_BOT_TOKEN not set, cannot resolve metalinfra representative", file=sys.stderr)
-        return ""
+        print("Warning: SLACK_BOT_TOKEN not set, cannot resolve metalinfra representatives", file=sys.stderr)
+        return []
 
     url = f"https://slack.com/api/usergroups.users.list?usergroup={group_id}"
     req = urllib.request.Request(url, headers={
@@ -49,19 +51,21 @@ def _resolve_metalinfra_representative(group_id: str) -> str:
             data = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
         print(f"Warning: Slack API call failed for group {group_id}: {e}", file=sys.stderr)
-        return ""
+        return []
 
     if not data.get("ok"):
         print(f"Warning: Slack API returned error for group {group_id}: {data.get('error', 'unknown')}", file=sys.stderr)
-        return ""
+        return []
 
     users = data.get("users", [])
     if not users:
         print(f"Warning: metalinfra group {group_id} has no members", file=sys.stderr)
-        return ""
+        return []
 
-    chosen = secrets.choice(users)
-    print(f"Resolved metalinfra group {group_id} to representative {chosen}", file=sys.stderr)
+    pick = min(count, len(users))
+    rng = secrets.SystemRandom()
+    chosen = rng.sample(users, pick)
+    print(f"Resolved metalinfra group {group_id} to {pick} representative(s): {chosen}", file=sys.stderr)
     return chosen
 
 
@@ -208,31 +212,46 @@ def main():
     owners_result = deduped
 
     # Detect default metalinfra owner: when the metalinfra team is assigned as
-    # fallback (no explicit owner for the job), resolve the group to a specific
-    # representative member and mark the entry so the Slack formatter can append
-    # a disclaimer.  The known metalinfra group ID in tt-metal is S0985AN7TC5;
-    # we also match by name pattern for resilience.
+    # fallback (no explicit owner for the job), resolve the group to TWO
+    # specific representative members and mark each entry so the Slack
+    # formatter can append a disclaimer.  The known metalinfra group ID in
+    # tt-metal is S0985AN7TC5; we also match by name pattern for resilience.
     _METALINFRA_IDS = {"S0985AN7TC5"}
     _METALINFRA_NAME_PATTERNS = {"metal infra", "metalinfra", "metal infra team"}
+    metalinfra_expanded = False
+    new_owners = []
     for owner in owners_result:
         sid = (owner.get("slack_id") or "").strip()
         name_lower = (owner.get("name") or "").strip().lower()
         if sid in _METALINFRA_IDS or name_lower in _METALINFRA_NAME_PATTERNS:
-            owner["is_default_owner"] = True
-            # Resolve group to a specific representative via Slack API so the
-            # message pings a real person instead of showing the team name.
-            representative_id = _resolve_metalinfra_representative(sid or "S0985AN7TC5")
-            if representative_id:
-                # Look up a display name from the directory if available
-                rep_user = users_by_id.get(representative_id, {})
-                rep_name = (
-                    rep_user.get("display_name")
-                    or rep_user.get("real_name")
-                    or rep_user.get("username")
-                    or representative_id
-                )
-                owner["slack_id"] = representative_id
-                owner["name"] = rep_name
+            # Only expand the first metalinfra entry; skip subsequent duplicates
+            if metalinfra_expanded:
+                continue
+            metalinfra_expanded = True
+            # Resolve group to two specific representatives via Slack API so
+            # the message pings real people instead of showing the team name.
+            rep_ids = _resolve_metalinfra_representatives(sid or "S0985AN7TC5", count=2)
+            if rep_ids:
+                for rep_id in rep_ids:
+                    rep_user = users_by_id.get(rep_id, {})
+                    rep_name = (
+                        rep_user.get("display_name")
+                        or rep_user.get("real_name")
+                        or rep_user.get("username")
+                        or rep_id
+                    )
+                    new_owners.append({
+                        "name": rep_name,
+                        "slack_id": rep_id,
+                        "is_default_owner": True,
+                    })
+            else:
+                # API failed — keep original entry with the flag
+                owner["is_default_owner"] = True
+                new_owners.append(owner)
+        else:
+            new_owners.append(owner)
+    owners_result = new_owners
 
     owner_dir = os.path.dirname(owner_file)
     if owner_dir:

@@ -127,6 +127,80 @@ python3 "$PYTHON_SCRIPT"
 mi_is_default=$(jq -r '.[0].is_default_owner // false' "$JOB_OWNER_FILE")
 assert_eq "Known metalinfra group ID is marked as default owner" "$mi_is_default" "true"
 
+# -- Python: metalinfra resolves to TWO representatives when API succeeds ------
+# We monkey-patch _resolve_metalinfra_representatives to return two fake user IDs
+# without requiring a real SLACK_BOT_TOKEN / Slack API call.
+mkdir -p "$tmpdir/slack_data_mi2"
+cat > "$tmpdir/slack_data_mi2/slack_directory.json" <<'EOF'
+{"users": [
+  {"id": "UREP1", "real_name": "Rep One", "deleted": false, "is_bot": false},
+  {"id": "UREP2", "display_name": "Rep Two", "deleted": false, "is_bot": false}
+]}
+EOF
+cat > "$tmpdir/slack_data_mi2/slack_groups.json" <<'EOF'
+{"usergroups": [
+  {"id": "S0985AN7TC5", "name": "metal infra team", "handle": "metalinfra"}
+]}
+EOF
+echo 'Job blackhole-demo failing. Owner: <!subteam^S0985AN7TC5|metalinfra>' > "$tmpdir/thread_mi2.txt"
+JOB_OWNER_FILE="$tmpdir/job_owner_mi2.json"
+THREAD_TEXT_FILE="$tmpdir/thread_mi2.txt"
+SLACK_DATA_DIR="$tmpdir/slack_data_mi2"
+export JOB_OWNER_FILE THREAD_TEXT_FILE SLACK_DATA_DIR
+
+python3 -c "
+import sys, importlib.util, unittest.mock
+
+spec = importlib.util.spec_from_file_location('fetch_job_owner', '$PYTHON_SCRIPT')
+mod = importlib.util.module_from_spec(spec)
+
+with unittest.mock.patch.dict('os.environ', {
+    'JOB_NAME': '$JOB_NAME',
+    'JOB_OWNER_FILE': '$JOB_OWNER_FILE',
+    'THREAD_TEXT_FILE': '$THREAD_TEXT_FILE',
+    'SLACK_DATA_DIR': '$SLACK_DATA_DIR',
+}):
+    # Patch the resolution function to return two fake user IDs
+    with unittest.mock.patch.object(
+        mod, '_resolve_metalinfra_representatives', return_value=['UREP1', 'UREP2']
+    ):
+        # Need to patch at module level before main() runs
+        spec.loader.exec_module(mod)
+        # The module-level guard calls main(); patch must be in place first.
+" 2>/dev/null || \
+python3 -c "
+import sys, json, os, unittest.mock
+
+# Direct approach: import, patch, call
+sys.path.insert(0, os.path.dirname('$PYTHON_SCRIPT'))
+import importlib.util
+spec = importlib.util.spec_from_file_location('fjo', '$PYTHON_SCRIPT')
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+os.environ['JOB_NAME'] = '$JOB_NAME'
+os.environ['JOB_OWNER_FILE'] = '$JOB_OWNER_FILE'
+os.environ['THREAD_TEXT_FILE'] = '$THREAD_TEXT_FILE'
+os.environ['SLACK_DATA_DIR'] = '$SLACK_DATA_DIR'
+
+with unittest.mock.patch.object(mod, '_resolve_metalinfra_representatives', return_value=['UREP1', 'UREP2']):
+    mod.main()
+"
+mi2_count=$(jq 'length' "$JOB_OWNER_FILE")
+assert_eq "Metalinfra fallback resolves to TWO representative entries" "$mi2_count" "2"
+mi2_id0=$(jq -r '.[0].slack_id' "$JOB_OWNER_FILE")
+mi2_id1=$(jq -r '.[1].slack_id' "$JOB_OWNER_FILE")
+assert_eq "First metalinfra rep has correct slack_id" "$mi2_id0" "UREP1"
+assert_eq "Second metalinfra rep has correct slack_id" "$mi2_id1" "UREP2"
+mi2_name0=$(jq -r '.[0].name' "$JOB_OWNER_FILE")
+mi2_name1=$(jq -r '.[1].name' "$JOB_OWNER_FILE")
+assert_eq "First metalinfra rep name resolved from directory" "$mi2_name0" "Rep One"
+assert_eq "Second metalinfra rep name resolved from directory" "$mi2_name1" "Rep Two"
+mi2_def0=$(jq -r '.[0].is_default_owner' "$JOB_OWNER_FILE")
+mi2_def1=$(jq -r '.[1].is_default_owner' "$JOB_OWNER_FILE")
+assert_eq "First metalinfra rep marked as default owner" "$mi2_def0" "true"
+assert_eq "Second metalinfra rep marked as default owner" "$mi2_def1" "true"
+
 # -- Python: non-metalinfra owner does NOT get is_default_owner ---------------
 echo 'Job blackhole-demo failing. Owner: <@U111>' > "$tmpdir/thread_non_mi.txt"
 JOB_OWNER_FILE="$tmpdir/job_owner_non_mi.json"
