@@ -1,22 +1,13 @@
 {
-    "case": "1",
-    "scenario": "Deterministic failure - single culprit commit identified",
-    "workflow_name": "t3000-perf-tests",
-    "failing_job_name": "t3k_DiT_SD3.5_model_perf_tests",
-    "failing_test_name": "tests/perf/test_dit_sd35.py",
-    "failure_message": "[E2E TEST] Mock failure for default-owner disclaimer verification",
-    "failing_run_url": "https://github.com/tenstorrent/tt-metal/actions/runs/0",
-    "failing_run_label": "Run #0 (E2E test)",
-    "commits": [
-        {
-            "hash": "deadbeef",
-            "url": "https://github.com/tenstorrent/tt-metal/commit/deadbeef",
-            "author": {"name": "E2E Test Author", "slack_id": ""},
-            "approvers": [],
-            "relevant_files": ["tests/perf/test_dit_sd35.py"],
-            "confidence": 50
-        }
-    ],
-    "notes": "E2E test: verifying default-owner disclaimer appears for Case 1 when metalinfra is fallback owner.",
-    "slack_message": "[E2E TEST] Mock failure for default-owner disclaimer verification"
+    "case": "3",
+    "scenario": "Failure likely outside tt-metal",
+    "workflow_name": "t3000-unit-tests",
+    "failing_job_name": "t3k llama3.2-11b-vision tests",
+    "failing_test_name": "models/tt_transformers/tests/multimodal/test_llama_class_embedding.py",
+    "failure_message": "[2025-11-30T10:15:32Z] ERROR runner: ssh: connect to host 10.2.8.45 port 22: Connection timed out (t3k llama3.2-11b-vision tests never starts)",
+    "failing_run_url": "https://github.com/tenstorrent/tt-metal/actions/runs/1234567892/job/3333333333",
+    "failing_run_label": "Run #1234567892 (latest job)",
+    "commits": [],
+    "notes": "No tt-metal commits touch llama3.2-11b-vision test code in window; logs show runners lose SSH connectivity mid-setup before tests execute, pointing to infrastructure instability rather than code changes.",
+    "slack_message": "Hanging jobs traced to runner connectivity loss (timeout before tests start). Evidence suggests infra instability rather than tt-metal changes. Please loop in infra-oncall."
 }
