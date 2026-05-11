@@ -62,7 +62,7 @@ _evict_commit_cache() {
   local after_count
   after_count=$(jq 'length' "$COMMIT_CACHE_FILE" 2>/dev/null || echo 0)
   local evicted=$(( before_count - after_count ))
-  [ "$evicted" -gt 0 ] && log_info "Commit cache: evicted $evicted stale entries"
+  [ "$evicted" -gt 0 ] && log_info "Commit cache: evicted $evicted stale entries" || true
 }
 _evict_commit_cache
 log_info "Commit cache loaded: $(jq 'length' "$COMMIT_CACHE_FILE" 2>/dev/null || echo 0) entries (TTL=${COMMIT_CACHE_TTL_DAYS}d)"
