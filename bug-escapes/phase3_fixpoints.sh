@@ -32,6 +32,67 @@ export CURSOR_AGENT_TIMEOUT=120
 echo '[]' > "$FIX_POINTS_OUTPUT"
 echo '[]' > "$ONGOING_FAILURES_OUTPUT"
 
+# B3: Commit-detail cache (files + PR number per SHA). Avoids re-fetching the same
+# fix commit that appears in multiple failing tests (common for widely-impacting PRs).
+# TTL: 7 days. Key: SHA. Value: {files, pr_number, pr_title, pr_body, copilot}.
+COMMIT_CACHE_FILE="$SCRIPT_DIR/state/commit-cache.json"
+COMMIT_CACHE_TTL_DAYS="${COMMIT_CACHE_TTL_DAYS:-7}"
+mkdir -p "$SCRIPT_DIR/state"
+if [ ! -f "$COMMIT_CACHE_FILE" ] || ! jq empty "$COMMIT_CACHE_FILE" 2>/dev/null; then
+  echo '{}' > "$COMMIT_CACHE_FILE"
+fi
+
+# Evict stale commit-cache entries
+_evict_commit_cache() {
+  local ttl_s now_s
+  ttl_s=$(( COMMIT_CACHE_TTL_DAYS * 86400 ))
+  now_s=$(date -u +%s)
+  local before_count
+  before_count=$(jq 'length' "$COMMIT_CACHE_FILE" 2>/dev/null || echo 0)
+  jq --argjson now "$now_s" --argjson ttl "$ttl_s" '
+    with_entries(
+      select(
+        (.value | type == "object") and
+        (.value.t != null) and
+        (($now - (.value.t | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime)? // 0) < $ttl)
+      )
+    )
+  ' "$COMMIT_CACHE_FILE" > "${COMMIT_CACHE_FILE}.tmp" 2>/dev/null \
+    && mv "${COMMIT_CACHE_FILE}.tmp" "$COMMIT_CACHE_FILE" || true
+  local after_count
+  after_count=$(jq 'length' "$COMMIT_CACHE_FILE" 2>/dev/null || echo 0)
+  local evicted=$(( before_count - after_count ))
+  [ "$evicted" -gt 0 ] && log_info "Commit cache: evicted $evicted stale entries"
+}
+_evict_commit_cache
+log_info "Commit cache loaded: $(jq 'length' "$COMMIT_CACHE_FILE" 2>/dev/null || echo 0) entries (TTL=${COMMIT_CACHE_TTL_DAYS}d)"
+
+_commit_cache_get() {
+  local sha="$1" field="$2"
+  jq -r --arg sha "$sha" --arg f "$field" '.[$sha][$f] // empty' "$COMMIT_CACHE_FILE" 2>/dev/null || true
+}
+
+_commit_cache_set() {
+  local sha="$1"
+  local files_json="$2"
+  local pr_number="$3"
+  local pr_title="$4"
+  local pr_body="$5"
+  local copilot="$6"
+  local now_ts
+  now_ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  jq --arg sha "$sha" \
+     --argjson files "$files_json" \
+     --arg pr_number "$pr_number" \
+     --arg pr_title "$pr_title" \
+     --arg pr_body "$pr_body" \
+     --arg copilot "$copilot" \
+     --arg t "$now_ts" \
+     '. + {($sha): {"files": $files, "pr_number": $pr_number, "pr_title": $pr_title, "pr_body": $pr_body, "copilot": $copilot, "t": $t}}' \
+     "$COMMIT_CACHE_FILE" > "${COMMIT_CACHE_FILE}.tmp" 2>/dev/null \
+     && mv "${COMMIT_CACHE_FILE}.tmp" "$COMMIT_CACHE_FILE" || true
+}
+
 num_failures=$(jq 'length' "$FAILURES_INPUT" 2>/dev/null || echo 0)
 log_info "Phase 3: analyzing $num_failures consistent failures for fix points"
 
@@ -295,15 +356,31 @@ for i in $(seq 0 $((num_failures - 1))); do
 
   # ---- Build enriched commit list for agent prompt ----
   # For each commit: fetch changed files, PR title+body, and Copilot review overview.
-  # This gives the LLM much stronger signal than commit messages alone.
+  # B3: Results are cached in state/commit-cache.json (7-day TTL) so the same fix
+  # commit seen across multiple failing tests only incurs API calls once.
   commits_list=""
   for c in $(seq 0 $((num_commits - 1))); do
     sha=$(echo "$commits_json" | jq -r ".[$c].sha")
     msg=$(echo "$commits_json" | jq -r ".[$c].msg")
 
-    # Changed files (1 API call per commit)
-    files_raw=$(gh api "repos/${AT_OWNER_REPO}/commits/${sha}" \
-      --jq '[.files[].filename]' 2>/dev/null || echo '[]')
+    # B3: Check commit cache before making API calls
+    _cached_files_json=$(_commit_cache_get "$sha" "files")
+    _cache_hit=false
+    if [ -n "$_cached_files_json" ] && [ "$_cached_files_json" != "null" ]; then
+      _cache_hit=true
+      files_raw="$_cached_files_json"
+      pr_number=$(_commit_cache_get "$sha" "pr_number")
+      _cached_pr_title=$(_commit_cache_get "$sha" "pr_title")
+      _cached_pr_body=$(_commit_cache_get "$sha" "pr_body")
+      _cached_copilot=$(_commit_cache_get "$sha" "copilot")
+    fi
+
+    if [ "$_cache_hit" = "false" ]; then
+      # Changed files (1 API call per commit)
+      files_raw=$(gh api "repos/${AT_OWNER_REPO}/commits/${sha}" \
+        --jq '[.files[].filename]' 2>/dev/null || echo '[]')
+    fi
+
     file_count=$(echo "$files_raw" | jq 'length' 2>/dev/null || echo 0)
     if [ "$file_count" -gt "$_MAX_FILES" ]; then
       overflow=$((file_count - _MAX_FILES))
@@ -313,29 +390,38 @@ for i in $(seq 0 $((num_failures - 1))); do
       files_str=$(echo "$files_raw" | jq -r 'join(", ")' 2>/dev/null || echo "(files unavailable)")
     fi
 
-    # PR number: extract from merge commit message "(#NNNN)" pattern
-    pr_number=$(echo "$msg" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | tail -1 || true)
-    # Fallback: commits/{sha}/pulls API (1 API call, only if message parse failed)
-    if [ -z "$pr_number" ]; then
-      pr_number=$(gh api "repos/${AT_OWNER_REPO}/commits/${sha}/pulls" \
-        --jq '.[0].number // empty' 2>/dev/null || true)
+    if [ "$_cache_hit" = "false" ]; then
+      # PR number: extract from merge commit message "(#NNNN)" pattern
+      pr_number=$(echo "$msg" | grep -oE '\(#[0-9]+\)' | grep -oE '[0-9]+' | tail -1 || true)
+      # Fallback: commits/{sha}/pulls API (1 API call, only if message parse failed)
+      if [ -z "$pr_number" ]; then
+        pr_number=$(gh api "repos/${AT_OWNER_REPO}/commits/${sha}/pulls" \
+          --jq '.[0].number // empty' 2>/dev/null || true)
+      fi
     fi
 
     pr_block=""
     copilot_block=""
 
     if [ -n "$pr_number" ]; then
-      # PR title + body (1 API call)
-      pr_json=$(gh api "repos/${AT_OWNER_REPO}/pulls/${pr_number}" 2>/dev/null || echo "{}")
-      pr_title=$(echo "$pr_json" | jq -r '.title // empty' 2>/dev/null || true)
-      pr_body_raw=$(echo "$pr_json" | jq -r '.body // ""' 2>/dev/null || true)
-
-      if [ "${#pr_body_raw}" -gt "$_PR_BODY_CAP" ]; then
-        pr_body="${pr_body_raw:0:$_PR_BODY_CAP}..."
+      if [ "$_cache_hit" = "true" ]; then
+        pr_title="$_cached_pr_title"
+        pr_body="$_cached_pr_body"
+        _copilot_cached="$_cached_copilot"
       else
-        pr_body="$pr_body_raw"
+        # PR title + body (1 API call)
+        pr_json=$(gh api "repos/${AT_OWNER_REPO}/pulls/${pr_number}" 2>/dev/null || echo "{}")
+        pr_title=$(echo "$pr_json" | jq -r '.title // empty' 2>/dev/null || true)
+        pr_body_raw=$(echo "$pr_json" | jq -r '.body // ""' 2>/dev/null || true)
+
+        if [ "${#pr_body_raw}" -gt "$_PR_BODY_CAP" ]; then
+          pr_body="${pr_body_raw:0:$_PR_BODY_CAP}..."
+        else
+          pr_body="$pr_body_raw"
+        fi
+        pr_body=$(echo "$pr_body" | tr '\n' ' ' | tr -s ' ')
+        _copilot_cached=""
       fi
-      pr_body=$(echo "$pr_body" | tr '\n' ' ' | tr -s ' ')
 
       if [ -n "$pr_title" ]; then
         pr_block="  PR #${pr_number}: ${pr_title}"
@@ -345,28 +431,41 @@ for i in $(seq 0 $((num_failures - 1))); do
         fi
       fi
 
-      # Copilot review overview (1 API call, only if cap > 0)
+      # Copilot review overview (1 API call, only if cap > 0; skip on cache hit)
       if [ "$_COPILOT_CAP" -gt 0 ]; then
-        reviews_json=$(gh api "repos/${AT_OWNER_REPO}/pulls/${pr_number}/reviews" 2>/dev/null || echo "[]")
-        copilot_body=$(echo "$reviews_json" | jq -r '
-          [.[] | select(.user.login | test("copilot"; "i")) | .body // ""]
-          | .[0] // ""
-        ' 2>/dev/null || true)
+        if [ "$_cache_hit" = "true" ] && [ -n "$_copilot_cached" ] && [ "$_copilot_cached" != "null" ]; then
+          # Use cached Copilot overview
+          if [ -n "$_copilot_cached" ] && [ "$_copilot_cached" != " " ]; then
+            copilot_block="  Copilot overview: ${_copilot_cached}"
+          fi
+        else
+          reviews_json=$(gh api "repos/${AT_OWNER_REPO}/pulls/${pr_number}/reviews" 2>/dev/null || echo "[]")
+          copilot_body=$(echo "$reviews_json" | jq -r '
+            [.[] | select(.user.login | test("copilot"; "i")) | .body // ""]
+            | .[0] // ""
+          ' 2>/dev/null || true)
 
-        if [ -n "$copilot_body" ] && [ "$copilot_body" != "null" ]; then
-          # Extract the overview section (text after "Overview" heading, before next ##)
-          overview_text=$(echo "$copilot_body" | sed -n '/[Oo]verview/,/^##/{/^##[^#]/!p}' | head -8 | tr '\n' ' ' | tr -s ' ')
-          if [ -z "$overview_text" ] || [ "$overview_text" = " " ]; then
-            overview_text="${copilot_body:0:$_COPILOT_CAP}"
-          fi
-          if [ "${#overview_text}" -gt "$_COPILOT_CAP" ]; then
-            overview_text="${overview_text:0:$_COPILOT_CAP}..."
-          fi
-          if [ -n "$overview_text" ] && [ "$overview_text" != " " ]; then
-            copilot_block="  Copilot overview: ${overview_text}"
+          if [ -n "$copilot_body" ] && [ "$copilot_body" != "null" ]; then
+            # Extract the overview section (text after "Overview" heading, before next ##)
+            overview_text=$(echo "$copilot_body" | sed -n '/[Oo]verview/,/^##/{/^##[^#]/!p}' | head -8 | tr '\n' ' ' | tr -s ' ')
+            if [ -z "$overview_text" ] || [ "$overview_text" = " " ]; then
+              overview_text="${copilot_body:0:$_COPILOT_CAP}"
+            fi
+            if [ "${#overview_text}" -gt "$_COPILOT_CAP" ]; then
+              overview_text="${overview_text:0:$_COPILOT_CAP}..."
+            fi
+            if [ -n "$overview_text" ] && [ "$overview_text" != " " ]; then
+              copilot_block="  Copilot overview: ${overview_text}"
+              _copilot_cached="$overview_text"
+            fi
           fi
         fi
       fi
+    fi
+
+    # B3: Write to commit cache if this was a fresh fetch
+    if [ "$_cache_hit" = "false" ]; then
+      _commit_cache_set "$sha" "${files_raw:-[]}" "${pr_number:-}" "${pr_title:-}" "${pr_body:-}" "${_copilot_cached:-}"
     fi
 
     # Assemble enriched block for this commit

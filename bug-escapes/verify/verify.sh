@@ -46,12 +46,33 @@ CURSOR_API_KEY="${CURSOR_API_KEY:-}"
 EXPECTED_FAILURE_SIG="${EXPECTED_FAILURE_SIG:-}"
 
 MOCK_VERIFY="${MOCK_VERIFY:-false}"
+DRY_RUN="${DRY_RUN:-false}"
 
 # ---- Mock mode (no hardware dispatches) ----
 if [ "$MOCK_VERIFY" = "true" ]; then
   mkdir -p "$VERIFY_OUTPUT_DIR"
   verify_info "MOCK_VERIFY=true — skipping actual CI dispatch, writing mock confirmed result"
   write_result "confirmed" "mock verification (MOCK_VERIFY=true — no hardware runs dispatched)"     "failure" "success" 0 0
+  exit 0
+fi
+
+# B4: Dry-run mode — print what would be dispatched without doing it.
+# Useful for pre-validating the verification queue before burning CI slots.
+if [ "$DRY_RUN" = "true" ] || [ "$DRY_RUN" = "1" ]; then
+  verify_info "DRY_RUN=true — printing dispatch plan without executing"
+  SHORT_SHA_DRY="${FIX_COMMIT_SHA:0:8}"
+  echo "=== DRY RUN: Bug Escape Verification Plan ==="
+  echo "  Fix commit:   $FIX_COMMIT_SHA"
+  echo "  Test pipeline: $TEST_PIPELINE"
+  echo "  Test job:      $TEST_JOB"
+  echo "  Test name:     $TEST_NAME"
+  echo "  Repo:          $OWNER_REPO"
+  echo "  Branch BEFORE: verify-${SHORT_SHA_DRY}-before  (parent of fix commit — expects FAILURE)"
+  echo "  Branch AFTER:  verify-${SHORT_SHA_DRY}-after   (at fix commit — expects PASS)"
+  echo "  Poll interval: ${POLL_INTERVAL}s"
+  echo "  Expected duration: ~$(( (MAX_WAIT_START_MINUTES + MAX_WAIT_FINISH_MINUTES) / 60 + 1 )) hours"
+  echo "  GH API calls (estimated): ~28"
+  echo "=== END DRY RUN ==="
   exit 0
 fi
 

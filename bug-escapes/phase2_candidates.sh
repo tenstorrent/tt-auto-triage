@@ -82,8 +82,14 @@ _restore_seen_cache
 # Exact-key entries (not _noisy) now use {"v":"verdict","t":"ISO_ts"} format.
 # Old-format string entries are expired immediately (no timestamp = unknown age).
 # _noisy entries keep their own 6-hour TTL enforced by _is_job_noisy().
-# EXACT_KEY_TTL_HOURS: exact-key entries older than this are evicted (default: 48h).
-EXACT_KEY_TTL_HOURS="${EXACT_KEY_TTL_HOURS:-48}"
+# B6: Extend seen-candidate cache TTL to match LOOKBACK_DAYS so subsequent runs skip
+# everything already analyzed rather than re-doing the full lookback scan.
+# 1 day = 24 hours; default TTL = LOOKBACK_DAYS * 24 hours.
+_lookback_days_for_ttl="${LOOKBACK_DAYS:-14}"
+_default_ttl_hours=$(( _lookback_days_for_ttl * 24 ))
+# EXACT_KEY_TTL_HOURS: exact-key entries older than this are evicted.
+# Default changed from 48h to LOOKBACK_DAYS * 24h for efficiency during long scans.
+EXACT_KEY_TTL_HOURS="${EXACT_KEY_TTL_HOURS:-${_default_ttl_hours}}"
 _evict_stale_entries() {
   local now_s ttl_s before_count after_count
   now_s=$(date -u +%s)
@@ -176,6 +182,29 @@ mkdir -p "$LOGS_DIR"
 # Initialize output
 echo '[]' > "$FAILURES_OUTPUT"
 
+# B2: Check GH API rate limit before starting. If critically low, abort cleanly.
+_check_rate_limit() {
+  local remaining
+  remaining=$(gh api /rate_limit --jq '.rate.remaining' 2>/dev/null || echo 9999)
+  echo "$remaining"
+}
+_initial_remaining=$(_check_rate_limit)
+log_info "Phase 2: GH API rate limit remaining at start: ${_initial_remaining}"
+if [ "${_initial_remaining}" -lt 500 ]; then
+  log_warn "Phase 2: rate limit critically low (${_initial_remaining} remaining) — aborting to avoid exhaustion"
+  exit 2
+fi
+
+# B2: Helper — check rate limit mid-run and pause if needed.
+_maybe_pause_for_rate_limit() {
+  local remaining
+  remaining=$(gh api /rate_limit --jq '.rate.remaining' 2>/dev/null || echo 9999)
+  if [ "$remaining" -lt 1000 ]; then
+    log_warn "Phase 2: rate limit low (${remaining} remaining) — writing partial output and exiting (exit 2 = resume later)"
+    exit 2
+  fi
+}
+
 # Get "other" workflows from pipeline config
 other_workflows=$(jq -c '[.workflows[] | select(.classification == "other")]' "$PIPELINE_CONFIG")
 num_workflows=$(echo "$other_workflows" | jq 'length')
@@ -192,6 +221,9 @@ for i in $(seq 0 $((num_workflows - 1))); do
   wf_basename=$(basename "$wf_path")
 
   log_info "  [$((i+1))/$num_workflows] $wf_path (layer=$test_layer)"
+
+  # B2: Rate limit guard — check before each workflow (each workflow = ~50+ API calls)
+  _maybe_pause_for_rate_limit
 
   # Resolve workflow to numeric ID
   wf_id=$(cached_get_workflow_id "$wf_basename")

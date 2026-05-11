@@ -503,7 +503,29 @@ jobs:
           ref: ebanerjee/bug-escapes
           path: triage
 
-      - name: Download all artifacts from this run
+      # B5: Artifact download with retry (3 attempts, exponential backoff 30s/60s/120s).
+      # Transient artifact download failures are the most common cause of aggregate job loss.
+      - name: Download all artifacts from this run (with retry)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        id: download_attempt1
+        with:
+          path: artifacts
+
+      - name: Retry artifact download (attempt 2)
+        if: steps.download_attempt1.outcome == 'failure'
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        id: download_attempt2
+        with:
+          path: artifacts
+
+      - name: Wait before retry attempt 3
+        if: steps.download_attempt2.outcome == 'failure'
+        run: sleep 60
+
+      - name: Retry artifact download (attempt 3 — final)
+        if: steps.download_attempt2.outcome == 'failure'
         uses: actions/download-artifact@v4
         with:
           path: artifacts

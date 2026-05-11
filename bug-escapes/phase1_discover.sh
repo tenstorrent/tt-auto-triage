@@ -40,6 +40,34 @@ else
   jq '{workflows: .workflows}' "$STATIC_CONFIG" > "$PIPELINE_CONFIG"
 fi
 
+# B1: Apply WORKFLOW_BATCH post-filter (basename match, comma-separated)
+# Applied AFTER TEST_WORKFLOWS so both filters can be combined independently.
+if [ -n "${WORKFLOW_BATCH:-}" ]; then
+  log_info "Phase 1: applying WORKFLOW_BATCH filter: $WORKFLOW_BATCH"
+  IFS=',' read -ra batch_filter <<< "$WORKFLOW_BATCH"
+  batch_jq='[.workflows[] | select('
+  first=true
+  for wf in "${batch_filter[@]}"; do
+    wf=$(echo "$wf" | xargs)  # trim whitespace
+    if [ "$first" = true ]; then
+      batch_jq+="(.path | endswith(\"/\" + \"$wf\") or . == \"$wf\")"
+      first=false
+    else
+      batch_jq+=" or (.path | endswith(\"/\" + \"$wf\") or . == \"$wf\")"
+    fi
+  done
+  batch_jq+=')]'
+  jq "{workflows: $batch_jq}" "$PIPELINE_CONFIG" > "${PIPELINE_CONFIG}.tmp" && mv "${PIPELINE_CONFIG}.tmp" "$PIPELINE_CONFIG"
+fi
+
+# B7: Apply MAX_WORKFLOWS_PER_RUN cap (hard safety limit)
+max_wf="${MAX_WORKFLOWS_PER_RUN:-999}"
+current_count=$(jq '.workflows | length' "$PIPELINE_CONFIG")
+if [ "$current_count" -gt "$max_wf" ]; then
+  log_warn "Phase 1: capping workflows from $current_count to MAX_WORKFLOWS_PER_RUN=$max_wf"
+  jq "{workflows: .workflows[:${max_wf}]}" "$PIPELINE_CONFIG" > "${PIPELINE_CONFIG}.tmp" && mv "${PIPELINE_CONFIG}.tmp" "$PIPELINE_CONFIG"
+fi
+
 total=$(jq '.workflows | length' "$PIPELINE_CONFIG")
 other_count=$(jq '[.workflows[] | select(.classification == "other")] | length' "$PIPELINE_CONFIG")
 non_other_count=$(jq '[.workflows[] | select(.classification != "other")] | length' "$PIPELINE_CONFIG")

@@ -5,12 +5,14 @@ set -euo pipefail
 # Runs phases 0-4 sequentially, writing intermediate results to output/.
 #
 # Scoping controls (env vars):
-#   MAX_PHASE         — stop after this phase (0-4, default 4)
-#   TEST_WORKFLOWS    — comma-separated workflow paths to process (default: all)
-#   MAX_CANDIDATES    — max confirmed failures before Phase 2 stops (default 999)
-#   MAX_LOG_BYTES     — per-run log truncation in bytes (default 50000)
-#   MAX_ESCAPES       — max bug escapes before Phase 4 stops (default 999)
-#   CONSECUTIVE_RUNS  — consecutive failure threshold (default 3)
+#   MAX_PHASE              — stop after this phase (0-4, default 4)
+#   TEST_WORKFLOWS         — comma-separated workflow paths to process (default: all)
+#   WORKFLOW_BATCH         — comma-separated workflow basenames to process (post-Phase 1 filter)
+#   MAX_CANDIDATES         — max confirmed failures before Phase 2 stops (default 999)
+#   MAX_WORKFLOWS_PER_RUN  — max workflows to process in Phase 2 (safety cap, default 999)
+#   MAX_LOG_BYTES          — per-run log truncation in bytes (default 50000)
+#   MAX_ESCAPES            — max bug escapes before Phase 4 stops (default 999)
+#   CONSECUTIVE_RUNS       — consecutive failure threshold (default 3)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -31,9 +33,11 @@ log_info "Working directory: $SCRIPT_DIR"
 log_info "MAX_PHASE=$MAX_PHASE"
 log_info "CONSECUTIVE_RUNS=${CONSECUTIVE_RUNS:-3}"
 log_info "MAX_CANDIDATES=${MAX_CANDIDATES:-999}"
+log_info "MAX_WORKFLOWS_PER_RUN=${MAX_WORKFLOWS_PER_RUN:-999}"
 log_info "MAX_LOG_BYTES=${MAX_LOG_BYTES:-50000}"
 log_info "MAX_ESCAPES=${MAX_ESCAPES:-999}"
 [ -n "${TEST_WORKFLOWS:-}" ] && log_info "TEST_WORKFLOWS=$TEST_WORKFLOWS"
+[ -n "${WORKFLOW_BATCH:-}" ] && log_info "WORKFLOW_BATCH=$WORKFLOW_BATCH"
 
 mkdir -p "$SCRIPT_DIR/output"
 
