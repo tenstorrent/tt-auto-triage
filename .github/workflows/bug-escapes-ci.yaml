@@ -96,6 +96,14 @@ on:
         description: "LLM backend for agent-driven steps: 'cursor' (default) or 'copilot'"
         type: string
         default: "cursor"
+      workflow-batch:
+        description: "Comma-separated workflow basenames to process (B1 post-Phase1 filter, e.g. 'fast-dispatch-frequent-tests.yaml,umd-unit-tests-wrapper.yaml')"
+        type: string
+        default: ""
+      max-workflows-per-run:
+        description: "Hard cap on number of workflows Phase 2 will process (B7 safety limit)"
+        type: string
+        default: "999"
     secrets:
       GITHUB_READ_TOKEN:
         description: "Token with read access to target-repo workflow runs"
@@ -188,6 +196,8 @@ jobs:
           MAX_ESCAPES: ${{ inputs.max-escapes }}
           LOOKBACK_DAYS: ${{ inputs.lookback-days }}
           INCREMENTAL_DAYS: ${{ inputs.incremental-days }}
+          WORKFLOW_BATCH: ${{ inputs.workflow-batch }}
+          MAX_WORKFLOWS_PER_RUN: ${{ inputs.max-workflows-per-run }}
         run: |
           set -euo pipefail
           chmod +x bug-escapes/run.sh
@@ -508,7 +518,29 @@ jobs:
           ref: ebanerjee/bug-escapes
           path: triage
 
-      - name: Download all artifacts from this run
+      # B5: Artifact download with retry (3 attempts, exponential backoff 30s/60s/120s).
+      # Transient artifact download failures are the most common cause of aggregate job loss.
+      - name: Download all artifacts from this run (with retry)
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        id: download_attempt1
+        with:
+          path: artifacts
+
+      - name: Retry artifact download (attempt 2)
+        if: steps.download_attempt1.outcome == 'failure'
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        id: download_attempt2
+        with:
+          path: artifacts
+
+      - name: Wait before retry attempt 3
+        if: steps.download_attempt2.outcome == 'failure'
+        run: sleep 60
+
+      - name: Retry artifact download (attempt 3 — final)
+        if: steps.download_attempt2.outcome == 'failure'
         uses: actions/download-artifact@v4
         with:
           path: artifacts
