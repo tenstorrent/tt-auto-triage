@@ -475,7 +475,8 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
                 f"*Closed by tt-auto-triage lifecycle bot.*"
             )
             if CLOSE_ISSUES:
-                _post_comment(number, comment, ISSUE_WRITE_TOKEN)
+                # Skip the comment in check-passing-only mode to avoid flooding
+                # issue authors with notifications; the Step Summary captures the details.
                 _close_issue(number, ISSUE_WRITE_TOKEN)
                 log(f"  #{number}: ✅ CLOSED (check-passing-only)")
             else:
