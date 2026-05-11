@@ -30,6 +30,7 @@ MAX_LOG_BYTES="${MAX_LOG_BYTES:-100000}"
 # 6000 bytes ≈ 30 typical log lines — sufficient for failure type classification.
 MAX_SNIPPET_BYTES="${MAX_SNIPPET_BYTES:-6000}"
 MAX_RUNS_PER_WORKFLOW="${MAX_RUNS_PER_WORKFLOW:-50}"
+MAX_CANDIDATES_PER_WORKFLOW="${MAX_CANDIDATES_PER_WORKFLOW:-10}"
 PHASE2_CHUNK_SIZE="${PHASE2_CHUNK_SIZE:-20}"
 # INFRA_NOISE_RECHECK_HOURS: force re-check of cached infra_noise entries older
 # than this many hours. Guards against wrong LLM classification silencing a real
@@ -350,6 +351,44 @@ for i in $(seq 0 $((num_workflows - 1))); do
   _pre_filter_dropped=$(( _pre_filter_before - _pre_filter_after ))
   if [ "$_pre_filter_dropped" -gt 0 ]; then
     log_info "    Still-failing pre-filter: dropped $_pre_filter_dropped of $_pre_filter_before candidates (most recent run not passing)"
+  fi
+  # ────────────────────────────────────────────────────────────────────────
+
+  # ── Per-workflow candidate cap ──────────────────────────────────────────
+  # Prevent a single noisy workflow from saturating the global MAX_CANDIDATES
+  # budget. Truncate to the first MAX_CANDIDATES_PER_WORKFLOW entries.
+  _wf_cap_before=$(echo "$candidate_jobs" | jq 'length')
+  if [ "$_wf_cap_before" -gt "$MAX_CANDIDATES_PER_WORKFLOW" ]; then
+    candidate_jobs=$(echo "$candidate_jobs" | jq -c --argjson cap "$MAX_CANDIDATES_PER_WORKFLOW" '.[:$cap]')
+    log_info "    Per-workflow cap: kept $MAX_CANDIDATES_PER_WORKFLOW of $_wf_cap_before candidates from $wf_basename"
+  fi
+  # ────────────────────────────────────────────────────────────────────────
+
+  # ── Job-name deduplication ──────────────────────────────────────────────
+  # At this stage test_name/failure_signature are not yet available (they
+  # come from log download + LLM later). Dedup by normalized job name:
+  # strip hardware suffixes like " - BH0", " - WH0", " - N300-0", etc.
+  # so the same test across 5 hardware configs contributes one candidate.
+  _dedup_before=$(echo "$candidate_jobs" | jq 'length')
+  candidate_jobs=$(echo "$candidate_jobs" | jq -c '
+    # Normalize: strip trailing " - <HARDWARE_SUFFIX>" patterns
+    # Matches: " - BH0", " - WH0", " - N300-0", " - bh_loudbox", etc.
+    def normalize_job:
+      gsub(" - [A-Za-z0-9_]+([-][0-9]+)?$"; "");
+
+    [foreach .[] as $cand (
+      {seen: {}, out: []};
+      ($cand.job | normalize_job) as $key |
+      if .seen[$key] then .
+      else .seen[$key] = true | .out += [$cand]
+      end;
+      .
+    )] | last.out // []
+  ')
+  _dedup_after=$(echo "$candidate_jobs" | jq 'length')
+  _dedup_removed=$(( _dedup_before - _dedup_after ))
+  if [ "$_dedup_removed" -gt 0 ]; then
+    log_info "    Dedup: removed $_dedup_removed duplicate job-name variants (hardware suffixes stripped)"
   fi
   # ────────────────────────────────────────────────────────────────────────
 

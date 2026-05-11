@@ -48,6 +48,10 @@ on:
         description: "Max confirmed failures before Phase 2 stops"
         type: string
         default: "999"
+      max-candidates-per-workflow:
+        description: "Max candidates a single workflow can contribute (prevents one noisy workflow from saturating the budget)"
+        type: string
+        default: "10"
       max-log-bytes:
         description: "Per-run log truncation in bytes"
         type: string
@@ -179,6 +183,7 @@ jobs:
           MAX_PHASE: ${{ inputs.max-phase }}
           TEST_WORKFLOWS: ${{ inputs.test-workflows }}
           MAX_CANDIDATES: ${{ inputs.max-candidates }}
+          MAX_CANDIDATES_PER_WORKFLOW: ${{ inputs.max-candidates-per-workflow }}
           MAX_LOG_BYTES: ${{ inputs.max-log-bytes }}
           MAX_ESCAPES: ${{ inputs.max-escapes }}
           LOOKBACK_DAYS: ${{ inputs.lookback-days }}

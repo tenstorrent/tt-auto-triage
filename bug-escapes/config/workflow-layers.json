@@ -1,116 +1,20 @@
 {
-  "_comment": "Static mapping of tt-metal CI workflows to architectural layers. Maintained by hand \u2014 update when workflows are added/removed/renamed.",
-  "_last_updated": "2026-04-24",
+  "_comment": "Static mapping of tt-metal CI workflows to architectural layers. Maintained by hand — update when workflows are added/removed/renamed. ORDER MATTERS: workflows are scanned in this order by Phase 2. High-escape-potential workflows (ttnn, metalium, e2e) come first; model-only perf/demo workflows come last to avoid saturating the candidate budget.",
+  "_last_updated": "2026-05-11",
+  "_scan_order": [
+    "Priority 1 (HIGH): ttnn layer — vertical escape: metalium/llk fix breaks ttnn test",
+    "Priority 2 (HIGH): multi-layer e2e and fast-tests — cross-layer coverage",
+    "Priority 3 (HIGH): tt-metalium unit/functional tests",
+    "Priority 4 (MEDIUM): tt-metalium profiler/stress/benchmarks",
+    "Priority 5 (MEDIUM): models integration/e2e — some cross-layer signal",
+    "Priority 6 (LOW): model-only perf/demo/nightly — rarely vertical escapes",
+    "Gates: filtered out by Phase 2 (classification != other)"
+  ],
   "workflows": [
-    {
-      "path": ".github/workflows/blackhole-post-commit.yaml",
-      "classification": "other",
-      "test_layer": "multi-layer"
-    },
-    {
-      "path": ".github/workflows/blackhole-demo-tests.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
-    {
-      "path": ".github/workflows/galaxy-profiler-tests.yaml",
-      "classification": "other",
-      "test_layer": "tt-metalium"
-    },
-    {
-      "path": ".github/workflows/galaxy-multi-user-isolation-tests.yaml",
-      "classification": "other",
-      "test_layer": "tt-metalium"
-    },
-    {
-      "path": ".github/workflows/galaxy-deepseek-tests.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
-    {
-      "path": ".github/workflows/galaxy-demo-tests.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
-    {
-      "path": ".github/workflows/galaxy-unit-tests.yaml",
-      "classification": "other",
-      "test_layer": "tt-metalium"
-    },
-    {
-      "path": ".github/workflows/galaxy-stress-tests.yaml",
-      "classification": "other",
-      "test_layer": "tt-metalium"
-    },
-    {
-      "path": ".github/workflows/t3000-perf-tests.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
-    {
-      "path": ".github/workflows/t3000-e2e-tests.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
-    {
-      "path": ".github/workflows/t3000-integration-tests.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
-    {
-      "path": ".github/workflows/t3000-profiler-tests.yaml",
-      "classification": "other",
-      "test_layer": "tt-metalium"
-    },
-    {
-      "path": ".github/workflows/t3000-perplexity-tests.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
-    {
-      "path": ".github/workflows/t3000-demo-tests.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
-    {
-      "path": ".github/workflows/t3000-unit-tests.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
-    {
-      "path": ".github/workflows/t3000-fast-tests.yaml",
-      "classification": "other",
-      "test_layer": "multi-layer"
-    },
-    {
-      "path": ".github/workflows/fast-dispatch-frequent-tests.yaml",
-      "classification": "other",
-      "test_layer": "tt-metalium"
-    },
-    {
-      "path": ".github/workflows/perf-device-models.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
-    {
-      "path": ".github/workflows/perf-models.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
     {
       "path": ".github/workflows/fast-dispatch-full-regressions-and-models.yaml",
       "classification": "other",
       "test_layer": "ttnn"
-    },
-    {
-      "path": ".github/workflows/single-card-demo-tests.yaml",
-      "classification": "other",
-      "test_layer": "models"
-    },
-    {
-      "path": ".github/workflows/tt-metal-l2-nightly.yaml",
-      "classification": "other",
-      "test_layer": "multi-layer"
     },
     {
       "path": ".github/workflows/ttnn-run-sweeps.yaml",
@@ -123,22 +27,27 @@
       "test_layer": "ttnn"
     },
     {
-      "path": ".github/workflows/vllm-nightly-tests.yaml",
+      "path": ".github/workflows/blackhole-e2e-tests.yaml",
       "classification": "other",
-      "test_layer": "models"
+      "test_layer": "multi-layer"
     },
     {
-      "path": ".github/workflows/metal-run-microbenchmarks.yaml",
+      "path": ".github/workflows/t3000-fast-tests.yaml",
       "classification": "other",
-      "test_layer": "tt-metalium"
+      "test_layer": "multi-layer"
     },
     {
-      "path": ".github/workflows/tt-cnn-post-commit.yaml",
+      "path": ".github/workflows/blackhole-post-commit.yaml",
       "classification": "other",
-      "test_layer": "models"
+      "test_layer": "multi-layer"
     },
     {
-      "path": ".github/workflows/didt-tests.yaml",
+      "path": ".github/workflows/tt-metal-l2-nightly.yaml",
+      "classification": "other",
+      "test_layer": "multi-layer"
+    },
+    {
+      "path": ".github/workflows/galaxy-unit-tests.yaml",
       "classification": "other",
       "test_layer": "tt-metalium"
     },
@@ -148,19 +57,49 @@
       "test_layer": "tt-metalium"
     },
     {
-      "path": ".github/workflows/merge-gate.yaml",
-      "classification": "merge-gate",
-      "test_layer": "multi-layer"
-    },
-    {
-      "path": ".github/workflows/pr-gate.yaml",
-      "classification": "pr-gate",
-      "test_layer": "multi-layer"
-    },
-    {
-      "path": ".github/workflows/blackhole-e2e-tests.yaml",
+      "path": ".github/workflows/fast-dispatch-frequent-tests.yaml",
       "classification": "other",
-      "test_layer": "multi-layer"
+      "test_layer": "tt-metalium"
+    },
+    {
+      "path": ".github/workflows/didt-tests.yaml",
+      "classification": "other",
+      "test_layer": "tt-metalium"
+    },
+    {
+      "path": ".github/workflows/metal-run-microbenchmarks.yaml",
+      "classification": "other",
+      "test_layer": "tt-metalium"
+    },
+    {
+      "path": ".github/workflows/galaxy-stress-tests.yaml",
+      "classification": "other",
+      "test_layer": "tt-metalium"
+    },
+    {
+      "path": ".github/workflows/galaxy-profiler-tests.yaml",
+      "classification": "other",
+      "test_layer": "tt-metalium"
+    },
+    {
+      "path": ".github/workflows/galaxy-multi-user-isolation-tests.yaml",
+      "classification": "other",
+      "test_layer": "tt-metalium"
+    },
+    {
+      "path": ".github/workflows/t3000-profiler-tests.yaml",
+      "classification": "other",
+      "test_layer": "tt-metalium"
+    },
+    {
+      "path": ".github/workflows/t3000-integration-tests.yaml",
+      "classification": "other",
+      "test_layer": "models"
+    },
+    {
+      "path": ".github/workflows/t3000-e2e-tests.yaml",
+      "classification": "other",
+      "test_layer": "models"
     },
     {
       "path": ".github/workflows/models-t1-e2e-tests.yaml",
@@ -183,9 +122,79 @@
       "test_layer": "models"
     },
     {
+      "path": ".github/workflows/t3000-unit-tests.yaml",
+      "classification": "other",
+      "test_layer": "models"
+    },
+    {
+      "path": ".github/workflows/t3000-perplexity-tests.yaml",
+      "classification": "other",
+      "test_layer": "models"
+    },
+    {
+      "path": ".github/workflows/tt-cnn-post-commit.yaml",
+      "classification": "other",
+      "test_layer": "models"
+    },
+    {
+      "path": ".github/workflows/vllm-nightly-tests.yaml",
+      "classification": "other",
+      "test_layer": "models"
+    },
+    {
+      "path": ".github/workflows/galaxy-deepseek-tests.yaml",
+      "classification": "other",
+      "test_layer": "models"
+    },
+    {
+      "path": ".github/workflows/perf-models.yaml",
+      "classification": "other",
+      "test_layer": "models"
+    },
+    {
+      "path": ".github/workflows/perf-device-models.yaml",
+      "classification": "other",
+      "test_layer": "models"
+    },
+    {
+      "path": ".github/workflows/t3000-perf-tests.yaml",
+      "classification": "other",
+      "test_layer": "models"
+    },
+    {
       "path": ".github/workflows/galaxy-perf-tests.yaml",
       "classification": "other",
       "test_layer": "models"
+    },
+    {
+      "path": ".github/workflows/blackhole-demo-tests.yaml",
+      "classification": "other",
+      "test_layer": "models"
+    },
+    {
+      "path": ".github/workflows/galaxy-demo-tests.yaml",
+      "classification": "other",
+      "test_layer": "models"
+    },
+    {
+      "path": ".github/workflows/t3000-demo-tests.yaml",
+      "classification": "other",
+      "test_layer": "models"
+    },
+    {
+      "path": ".github/workflows/single-card-demo-tests.yaml",
+      "classification": "other",
+      "test_layer": "models"
+    },
+    {
+      "path": ".github/workflows/merge-gate.yaml",
+      "classification": "merge-gate",
+      "test_layer": "multi-layer"
+    },
+    {
+      "path": ".github/workflows/pr-gate.yaml",
+      "classification": "pr-gate",
+      "test_layer": "multi-layer"
     }
   ]
 }
