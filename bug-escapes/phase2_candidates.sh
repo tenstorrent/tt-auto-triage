@@ -327,11 +327,37 @@ for i in $(seq 0 $((num_workflows - 1))); do
     | not
   )]')
 
+  # ── Still-failing pre-filter ─────────────────────────────────────────────
+  # Drop any job whose MOST RECENT run in the timeline is not a success.
+  # If a job is still failing (or in-progress/unknown) today, Phase 3 would
+  # discard it anyway (no fix transition exists). Skipping upfront avoids
+  # expensive log downloads and LLM calls in Phase 2.
+  _pre_filter_before=$(echo "$candidate_jobs" | jq 'length')
+  candidate_jobs=$(echo "$candidate_jobs" | jq -c --slurpfile tl "$job_timeline_file" '
+    [.[] | . as $cand |
+      ($tl[0][$cand.job] // []) as $runs |
+      ($runs | sort_by(.created_at)) as $sorted |
+      if ($sorted | length) == 0 then .
+      else
+        $sorted[-1].conclusion as $latest |
+        if $latest == "success" then .
+        else empty
+        end
+      end
+    ]
+  ')
+  _pre_filter_after=$(echo "$candidate_jobs" | jq 'length')
+  _pre_filter_dropped=$(( _pre_filter_before - _pre_filter_after ))
+  if [ "$_pre_filter_dropped" -gt 0 ]; then
+    log_info "    Still-failing pre-filter: dropped $_pre_filter_dropped of $_pre_filter_before candidates (most recent run not passing)"
+  fi
+  # ────────────────────────────────────────────────────────────────────────
+
   num_candidates=$(echo "$candidate_jobs" | jq 'length')
 
   if [ "$num_candidates" -eq 0 ]; then
     rm -f "$job_timeline_file"
-    log_info "    No consecutive failures found (after filtering infrastructure jobs)"
+    log_info "    No consecutive failures found (after filtering infrastructure + still-failing jobs)"
     continue
   fi
 
