@@ -374,7 +374,7 @@ def _call_agent(
     issue_body: str,
     log_paths: list[str],
 ) -> dict[str, Any] | None:
-    """Build the prompt, run the Cursor agent, parse and return its JSON."""
+    """Build the prompt, run the LLM agent, parse and return its JSON."""
     log_sections = "\n".join(
         f"- Run {i} local path: {p}" for i, p in enumerate(log_paths, 1)
     )
