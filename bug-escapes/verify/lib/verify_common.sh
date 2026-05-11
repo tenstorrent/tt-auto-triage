@@ -21,38 +21,165 @@ verify_error() { printf '[verify][ERR] %s\n' "$*" >&2; }
 verify_die()   { verify_error "$*"; exit 1; }
 
 # ---------------------------------------------------------------------------
-# discover_tests_yaml_path WORKFLOW_FILE REPO_DIR
+# _extract_impl_yaml_path IMPL_FILE
 #
-# Finds the TESTS_YAML_PATH for a given workflow by inspecting its -impl.yaml.
-# E.g. galaxy-e2e-tests.yaml -> galaxy-e2e-tests-impl.yaml -> ./tests/pipeline_reorg/galaxy_e2e_tests.yaml
-# Returns the relative path (from repo root) on stdout.
+# Checks if an impl workflow has a TESTS_YAML_PATH env var.
+# Returns the path on stdout, or empty string if not found.
 # ---------------------------------------------------------------------------
-discover_tests_yaml_path() {
-  local wf_file="$1" repo_dir="$2"
-  local wf_basename impl_path tests_yaml_path
+_extract_impl_yaml_path() {
+  local impl_file="$1"
+  local tests_yaml_path
 
-  wf_basename=$(basename "$wf_file" .yaml)
-  impl_path="$repo_dir/.github/workflows/${wf_basename}-impl.yaml"
-
-  if [ ! -f "$impl_path" ]; then
-    verify_warn "Impl workflow not found: $impl_path"
-    return 1
-  fi
-
-  tests_yaml_path=$(grep -E '^\s*TESTS_YAML_PATH:' "$impl_path" \
+  tests_yaml_path=$(grep -E '^\s*TESTS_YAML_PATH:' "$impl_file" 2>/dev/null \
     | head -1 \
     | sed 's/.*TESTS_YAML_PATH:\s*//' \
     | sed 's/^[[:space:]]*//' \
     | sed 's/[[:space:]]*$//')
 
-  if [ -z "$tests_yaml_path" ]; then
-    verify_warn "TESTS_YAML_PATH not found in $impl_path"
+  if [ -n "$tests_yaml_path" ]; then
+    # Strip leading ./
+    echo "${tests_yaml_path#./}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# _impl_has_inline_test_match IMPL_FILE TEST_JOB
+#
+# Checks if an impl workflow YAML has an inline test matrix (heredoc or
+# strategy.matrix) containing a test entry whose name matches TEST_JOB
+# (substring match, stripping arch/runner-label prefixes).
+# Returns 0 if match found, 1 otherwise.
+# ---------------------------------------------------------------------------
+_impl_has_inline_test_match() {
+  local impl_file="$1" test_job="$2"
+
+  python3 -c "
+import sys, re
+
+test_job = '''$test_job'''
+impl_file = '''$impl_file'''
+
+# Read the raw file content
+with open(impl_file) as f:
+    content = f.read()
+
+# Look for '- name: ...' lines anywhere in the file (covers heredoc inline matrices)
+name_pattern = re.compile(r'^\s*-\s*name:\s*(.+)', re.MULTILINE)
+names = [m.group(1).strip().strip('\"').strip(\"'\") for m in name_pattern.finditer(content)]
+
+if not names:
+    sys.exit(1)
+
+# Try matching: the CI job name is typically '{arch} {runner-label} {test-name}'
+# Strip known prefixes to get the bare test name for matching
+for name in names:
+    # Exact match
+    if name == test_job:
+        sys.exit(0)
+    # test_job ends with the name (e.g. 'blackhole P300-viommu sdpa nightly tests' ends with 'sdpa nightly tests')
+    if test_job.endswith(name):
+        sys.exit(0)
+    # name is contained in test_job
+    if name in test_job:
+        sys.exit(0)
+
+sys.exit(1)
+" 2>/dev/null
+}
+
+# ---------------------------------------------------------------------------
+# discover_tests_yaml_path_from_main_workflow WF_FILE REPO_DIR TEST_JOB
+#
+# Fallback discovery: scans the main workflow YAML for 'uses:' references
+# to child impl workflows. For each child:
+#   1. If child has TESTS_YAML_PATH env var → return that (existing pattern)
+#   2. If child has inline test matrix with a name matching TEST_JOB →
+#      return the child impl path itself (caller detects impl-mode by
+#      checking if path matches .github/workflows/*-impl.yaml)
+#
+# Returns the path on stdout.
+# All info/warn logging goes to stderr to avoid polluting $(…) capture.
+# ---------------------------------------------------------------------------
+discover_tests_yaml_path_from_main_workflow() {
+  local wf_file="$1" repo_dir="$2" test_job="$3"
+  local wf_path="$repo_dir/.github/workflows/$wf_file"
+
+  if [ ! -f "$wf_path" ]; then
+    verify_warn "Main workflow not found: $wf_path"
     return 1
   fi
 
-  # Strip leading ./
-  tests_yaml_path="${tests_yaml_path#./}"
-  echo "$tests_yaml_path"
+  # Extract all 'uses: ./.github/workflows/...-impl.yaml' references
+  local child_impls
+  child_impls=$(grep -oP 'uses:\s*\./\.github/workflows/\K[^\s]+' "$wf_path" 2>/dev/null \
+    | grep -E '\-impl\.yaml$' || true)
+
+  if [ -z "$child_impls" ]; then
+    verify_warn "No child impl workflows found in $wf_path"
+    return 1
+  fi
+
+  local child_file child_path tyaml
+  while IFS= read -r child_file; do
+    child_path="$repo_dir/.github/workflows/$child_file"
+    [ -f "$child_path" ] || continue
+
+    # Fallback 1: child has TESTS_YAML_PATH
+    tyaml=$(_extract_impl_yaml_path "$child_path")
+    if [ -n "$tyaml" ]; then
+      printf '[verify] discover (fallback1): found TESTS_YAML_PATH=%s in child %s\n' "$tyaml" "$child_file" >&2
+      echo "$tyaml"
+      return 0
+    fi
+
+    # Fallback 2: child has inline test matrix matching test_job
+    if _impl_has_inline_test_match "$child_path" "$test_job"; then
+      printf '[verify] discover (fallback2): inline test match in %s for job %s\n' "$child_file" "$test_job" >&2
+      echo ".github/workflows/$child_file"
+      return 0
+    fi
+  done <<< "$child_impls"
+
+  verify_warn "No child impl matched test job '$test_job' in $wf_path"
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# discover_tests_yaml_path WORKFLOW_FILE REPO_DIR [TEST_JOB]
+#
+# Finds the TESTS_YAML_PATH for a given workflow by inspecting its -impl.yaml.
+# E.g. galaxy-e2e-tests.yaml -> galaxy-e2e-tests-impl.yaml -> ./tests/pipeline_reorg/galaxy_e2e_tests.yaml
+# Returns the relative path (from repo root) on stdout.
+#
+# When the direct -impl.yaml is not found, falls back to scanning child
+# workflows referenced by the main workflow YAML (requires TEST_JOB arg).
+# ---------------------------------------------------------------------------
+discover_tests_yaml_path() {
+  local wf_file="$1" repo_dir="$2" test_job="${3:-}"
+  local wf_basename impl_path tests_yaml_path
+
+  wf_basename=$(basename "$wf_file" .yaml)
+  impl_path="$repo_dir/.github/workflows/${wf_basename}-impl.yaml"
+
+  # Primary path: direct -impl.yaml with TESTS_YAML_PATH
+  if [ -f "$impl_path" ]; then
+    tests_yaml_path=$(_extract_impl_yaml_path "$impl_path")
+    if [ -n "$tests_yaml_path" ]; then
+      echo "$tests_yaml_path"
+      return 0
+    fi
+    verify_warn "TESTS_YAML_PATH not found in $impl_path, trying fallback"
+  fi
+
+  # Fallback: scan child workflows called by the main workflow
+  if [ -n "$test_job" ]; then
+    printf '[verify] discover: trying child-workflow fallback for %s\n' "$wf_file" >&2
+    discover_tests_yaml_path_from_main_workflow "$wf_file" "$repo_dir" "$test_job"
+    return $?
+  fi
+
+  verify_warn "Impl workflow not found and no TEST_JOB provided for fallback: $impl_path"
+  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -61,6 +188,11 @@ discover_tests_yaml_path() {
 # Finds the YAML entry in the test matrix whose 'name' matches TEST_JOB.
 # Outputs the full entry as JSON on stdout.
 # Requires: python3 + PyYAML (available in CI, and locally via pip).
+#
+# When TESTS_YAML_IS_IMPL=true, the file is a workflow impl YAML with an
+# inline test matrix (heredoc in a generate-matrix step). In that case,
+# we extract '- name: ...' blocks from the raw file content instead of
+# loading a top-level YAML list.
 # ---------------------------------------------------------------------------
 find_test_entry() {
   local test_job="$1" tests_yaml_path="$2" repo_dir="$3"
@@ -72,31 +204,130 @@ find_test_entry() {
   fi
 
   python3 -c "
-import yaml, json, sys
-with open('$full_path') as f:
-    tests = yaml.safe_load(f)
+import yaml, json, sys, re
+
+full_path = '''$full_path'''
 target = '''$test_job'''
-# Pass 1: exact match
-for entry in tests:
-    if entry.get('name', '') == target:
-        print(json.dumps(entry))
-        sys.exit(0)
-# Pass 2: target is the suffix after ' / ' (GitHub Actions adds workflow prefix)
-stripped = target.split(' / ')[-1] if ' / ' in target else target
-for entry in tests:
-    if entry.get('name', '') == stripped:
-        print(json.dumps(entry))
-        sys.exit(0)
-# Pass 3: substring match (prefer longer name matches to avoid WH matching before BH)
-matches = []
-for entry in tests:
-    name = entry.get('name', '')
-    if target in name or name in target:
-        matches.append((len(name), entry))
-if matches:
-    matches.sort(key=lambda x: -x[0])
-    print(json.dumps(matches[0][1]))
+is_impl = '''${TESTS_YAML_IS_IMPL:-false}'''
+
+def match_entries(tests, target):
+    \"\"\"Try to match target against a list of test entry dicts.\"\"\"
+    # Pass 1: exact match
+    for entry in tests:
+        if entry.get('name', '') == target:
+            return entry
+    # Pass 2: strip GitHub Actions workflow prefix ('workflow / job')
+    stripped = target.split(' / ')[-1] if ' / ' in target else target
+    for entry in tests:
+        if entry.get('name', '') == stripped:
+            return entry
+    # Pass 3: substring match (prefer longer name matches)
+    matches = []
+    for entry in tests:
+        name = entry.get('name', '')
+        if target in name or name in target:
+            matches.append((len(name), entry))
+    if matches:
+        matches.sort(key=lambda x: -x[0])
+        return matches[0][1]
+    return None
+
+with open(full_path) as f:
+    content = f.read()
+
+tests = None
+
+if is_impl == 'true':
+    # Impl YAML: extract inline test list from heredoc or embedded YAML.
+    # Look for YAML list blocks starting with '- name:' in the file.
+    # These are typically inside a bash heredoc like:
+    #   all_tests_yaml=\$(cat <<'YAML_EOF'
+    #   - name: test1
+    #     cmd: ...
+    #   - name: test2
+    #     cmd: ...
+    #   YAML_EOF
+    #   )
+
+    # Strategy: find heredoc content between <<'..._EOF' and the EOF marker,
+    # then parse it as YAML.
+    heredoc_pattern = re.compile(
+        r\"\"\"<<\s*['\"]?(\w+_EOF)['\"]?\s*\n(.*?)\n\s*\1\b\"\"\",
+        re.DOTALL
+    )
+    for m in heredoc_pattern.finditer(content):
+        block = m.group(2)
+        try:
+            parsed = yaml.safe_load(block)
+            if isinstance(parsed, list) and len(parsed) > 0 and isinstance(parsed[0], dict) and 'name' in parsed[0]:
+                tests = parsed
+                break
+        except Exception:
+            continue
+
+    # Fallback: try to find any YAML-list-looking block with '- name:' entries
+    if tests is None:
+        # Collect all lines that look like they belong to a YAML list of test entries
+        lines = content.split('\n')
+        yaml_blocks = []
+        in_block = False
+        block_lines = []
+        indent = 0
+        for line in lines:
+            stripped_line = line.lstrip()
+            if stripped_line.startswith('- name:'):
+                if in_block and block_lines:
+                    yaml_blocks.append('\n'.join(block_lines))
+                in_block = True
+                indent = len(line) - len(stripped_line)
+                block_lines = [stripped_line]
+            elif in_block:
+                cur_indent = len(line) - len(line.lstrip())
+                if line.strip() == '' or cur_indent > indent:
+                    block_lines.append(stripped_line)
+                elif stripped_line.startswith('- name:'):
+                    yaml_blocks.append('\n'.join(block_lines))
+                    block_lines = [stripped_line]
+                else:
+                    yaml_blocks.append('\n'.join(block_lines))
+                    in_block = False
+                    block_lines = []
+        if block_lines:
+            yaml_blocks.append('\n'.join(block_lines))
+
+        if yaml_blocks:
+            full_yaml = '\n'.join(yaml_blocks)
+            try:
+                tests = yaml.safe_load(full_yaml)
+            except Exception:
+                pass
+else:
+    # Standard test matrix YAML (top-level list)
+    try:
+        tests = yaml.safe_load(content)
+    except Exception:
+        pass
+
+    # If top-level is a dict (unexpected), try to walk into common matrix paths
+    if isinstance(tests, dict):
+        for job_key, job_val in tests.get('jobs', {}).items():
+            matrix = job_val.get('strategy', {}).get('matrix', {})
+            for mk, mv in matrix.items():
+                if isinstance(mv, list) and len(mv) > 0 and isinstance(mv[0], dict) and 'name' in mv[0]:
+                    tests = mv
+                    break
+            if isinstance(tests, list):
+                break
+
+if not isinstance(tests, list) or len(tests) == 0:
+    print('null')
+    sys.exit(1)
+
+result = match_entries(tests, target)
+if result:
+    print(json.dumps(result))
     sys.exit(0)
+
 print('null')
 sys.exit(1)
 " 2>/dev/null

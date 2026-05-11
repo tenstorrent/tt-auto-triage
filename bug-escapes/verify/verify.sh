@@ -276,7 +276,16 @@ verify_info "Parent commit: $PARENT_SHA"
 # ---- Step 2: Discover test YAML path ----
 
 WF_BASENAME=$(basename "$TEST_PIPELINE")
-TESTS_YAML_PATH=$(discover_tests_yaml_path "$WF_BASENAME" "$REPO_DIR")
+TESTS_YAML_PATH=$(discover_tests_yaml_path "$WF_BASENAME" "$REPO_DIR" "$TEST_JOB")
+
+# Detect if the discovered path is a workflow impl YAML (inline test matrix)
+# vs a standard tests-list YAML. Impl YAMLs live under .github/workflows/
+# and end with -impl.yaml.
+TESTS_YAML_IS_IMPL=false
+if [[ "$TESTS_YAML_PATH" == .github/workflows/*-impl.yaml ]]; then
+  TESTS_YAML_IS_IMPL=true
+fi
+export TESTS_YAML_IS_IMPL
 if [ -z "$TESTS_YAML_PATH" ]; then
   write_result "inconclusive" "Could not discover TESTS_YAML_PATH for $TEST_PIPELINE"
   exit 1
