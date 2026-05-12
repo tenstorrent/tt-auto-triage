@@ -628,6 +628,63 @@ print(yaml.dump([pruned], default_flow_style=False).rstrip())
 # to "in_progress" or "completed"). Polls every 60 seconds.
 # Returns 0 if run started within the deadline, 1 if it timed out.
 # ---------------------------------------------------------------------------
+# build_pruned_impl_workflow_content CONTENT_FILE ENTRY_JSON_FILE
+#
+# Impl-mode variant: given paths to (a) the full workflow impl YAML and
+# (b) a JSON file with the target test entry, replace ONLY the heredoc
+# test-list section with a single-entry list. The rest of the workflow is
+# preserved as a valid GHA workflow.  Prints the modified content to stdout.
+# ---------------------------------------------------------------------------
+build_pruned_impl_workflow_content() {
+  local content_file="$1" entry_json_file="$2"
+
+  python3 - "$content_file" "$entry_json_file" << 'PYEOF'
+import sys, re, json, yaml
+
+content_file   = sys.argv[1]
+entry_json_file = sys.argv[2]
+
+with open(content_file) as f:
+    content = f.read()
+
+with open(entry_json_file) as f:
+    entry = json.load(f)
+
+# Match: all_tests_yaml=$(cat <<'YAML_EOF'  ...content...  YAML_EOF)
+heredoc_re = re.compile(
+    r'(?P<prefix>all_tests_yaml=\$\(cat <<\s*[\'"]?(?P<marker>[A-Z_]+)[\'"]?\s*\n)'
+    r'(?P<body>.*?)'
+    r'(?P<suffix>\n[ \t]*(?P=marker)(?:[ \t]*\))?)',
+    re.DOTALL
+)
+
+m = heredoc_re.search(content)
+if not m:
+    sys.stderr.write("build_pruned_impl_workflow_content: heredoc not found, returning original\n")
+    sys.stdout.write(content)
+    sys.exit(0)
+
+# Detect leading indent from first non-blank line of original body
+indent = ''
+for line in m.group('body').splitlines():
+    if line.strip():
+        indent = re.match(r'^(\s*)', line).group(1)
+        break
+
+entry_yaml = yaml.dump([entry], default_flow_style=False).rstrip()
+indented = '\n'.join(indent + line for line in entry_yaml.splitlines())
+replacement_body = indent + '# Pruned to single test for bug escape verification\n' + indented
+
+new_content = (content[:m.start()]
+               + m.group('prefix')
+               + replacement_body
+               + m.group('suffix')
+               + content[m.end():])
+sys.stdout.write(new_content)
+PYEOF
+}
+
+# ---------------------------------------------------------------------------
 poll_run_start() {
   local run_id="$1" start_wait="${2:-240}"
   local deadline=$((SECONDS + start_wait * 60))

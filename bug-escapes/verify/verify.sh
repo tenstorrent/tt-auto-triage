@@ -115,6 +115,15 @@ api_create_or_reset_branch() {
   fi
 }
 
+api_get_file_content() {
+  # Fetch the raw (decoded) content of a file on a branch.
+  local branch="$1" file_path="$2"
+  curl -sf \
+    -H "Authorization: token $GITHUB_TOKEN" \
+    "https://api.github.com/repos/$OWNER_REPO/contents/$file_path?ref=$branch" \
+    | python3 -c "import sys,json,base64; d=json.load(sys.stdin); print(base64.b64decode(d['content']).decode())"
+}
+
 api_update_file() {
   local branch="$1" file_path="$2" content="$3"
 
@@ -317,15 +326,38 @@ verify_info "Pruned YAML generated ($(echo "$PRUNED_YAML" | wc -l) lines)"
 
 cleanup_branches
 
+# Helper: update TESTS_YAML_PATH on a branch with either:
+#   - The pruned test list (normal mode), or
+#   - A surgically modified workflow that replaces only the heredoc section (impl mode)
+_apply_pruned_yaml_to_branch() {
+  local branch="$1" base_sha="$2"
+  api_create_or_reset_branch "$branch" "$base_sha"
+  verify_info "Updating $TESTS_YAML_PATH on $branch"
+
+  if [ "$TESTS_YAML_IS_IMPL" = "true" ]; then
+    # Impl-mode: fetch the current full workflow file and replace only the
+    # inline test heredoc, preserving the rest of the GHA workflow structure.
+    local _tmp_content _tmp_entry _tmp_out
+    _tmp_content=$(mktemp)
+    _tmp_entry=$(mktemp)
+    _tmp_out=$(mktemp)
+    api_get_file_content "$branch" "$TESTS_YAML_PATH" > "$_tmp_content"
+    echo "$TEST_ENTRY_JSON" > "$_tmp_entry"
+    build_pruned_impl_workflow_content "$_tmp_content" "$_tmp_entry" > "$_tmp_out"
+    local modified_content
+    modified_content=$(cat "$_tmp_out")
+    rm -f "$_tmp_content" "$_tmp_entry" "$_tmp_out"
+    api_update_file "$branch" "$TESTS_YAML_PATH" "$modified_content"
+  else
+    api_update_file "$branch" "$TESTS_YAML_PATH" "$PRUNED_YAML"
+  fi
+}
+
 verify_info "Creating branch $BRANCH_BEFORE at $PARENT_SHA"
-api_create_or_reset_branch "$BRANCH_BEFORE" "$PARENT_SHA"
-verify_info "Updating $TESTS_YAML_PATH on $BRANCH_BEFORE"
-api_update_file "$BRANCH_BEFORE" "$TESTS_YAML_PATH" "$PRUNED_YAML"
+_apply_pruned_yaml_to_branch "$BRANCH_BEFORE" "$PARENT_SHA"
 
 verify_info "Creating branch $BRANCH_AFTER at $FIX_COMMIT_SHA"
-api_create_or_reset_branch "$BRANCH_AFTER" "$FIX_COMMIT_SHA"
-verify_info "Updating $TESTS_YAML_PATH on $BRANCH_AFTER"
-api_update_file "$BRANCH_AFTER" "$TESTS_YAML_PATH" "$PRUNED_YAML"
+_apply_pruned_yaml_to_branch "$BRANCH_AFTER" "$FIX_COMMIT_SHA"
 
 # ---- Step 6: Dispatch workflow runs ----
 
