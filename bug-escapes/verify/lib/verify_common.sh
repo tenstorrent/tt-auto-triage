@@ -109,18 +109,14 @@ discover_tests_yaml_path_from_main_workflow() {
     return 1
   fi
 
-  # Extract all 'uses: ./.github/workflows/...-impl.yaml' references
+  # Pass 1: scan *-impl.yaml children (original behavior)
   local child_impls
   child_impls=$(grep -oP 'uses:\s*\./\.github/workflows/\K[^\s]+' "$wf_path" 2>/dev/null \
     | grep -E '\-impl\.yaml$' || true)
 
-  if [ -z "$child_impls" ]; then
-    verify_warn "No child impl workflows found in $wf_path"
-    return 1
-  fi
-
   local child_file child_path tyaml
   while IFS= read -r child_file; do
+    [ -n "$child_file" ] || continue
     child_path="$repo_dir/.github/workflows/$child_file"
     [ -f "$child_path" ] || continue
 
@@ -140,7 +136,65 @@ discover_tests_yaml_path_from_main_workflow() {
     fi
   done <<< "$child_impls"
 
-  verify_warn "No child impl matched test job '$test_job' in $wf_path"
+  # Pass 2: find the child workflow whose job KEY in the main YAML matches test_job.
+  # Handles patterns like:
+  #   jobs:
+  #     profiler-regression:
+  #       uses: ./.github/workflows/run-profiler-regression.yaml
+  # where the job key is the CI display name and there is no *-impl.yaml.
+  local matched_child
+  matched_child=$(python3 -c "
+import sys, re
+
+test_job = '''$test_job'''
+wf_path  = '''$wf_path'''
+
+try:
+    with open(wf_path) as f:
+        content = f.read()
+except Exception as e:
+    sys.exit(1)
+
+# Parse job-key -> uses mappings with a simple regex (no full YAML parser needed).
+# Matches:
+#   <key>:\n    ...uses: ./.github/workflows/<file>
+# within the jobs: block.  We capture the first 'uses:' that follows each job key.
+job_uses_pattern = re.compile(
+    r'^(?P<indent>\s{0,4})(?P<key>[A-Za-z0-9_-]+):\s*\n'
+    r'(?:(?P=indent)\s[^\n]*\n)*?'
+    r'(?P=indent)\s+uses:\s+\./\.github/workflows/(?P<child>\S+)',
+    re.MULTILINE
+)
+
+for m in job_uses_pattern.finditer(content):
+    key   = m.group('key')
+    child = m.group('child')
+    # Match: job key == test_job, or either is a substring of the other
+    if key == test_job or key in test_job or test_job in key:
+        print(child)
+        sys.exit(0)
+
+sys.exit(1)
+" 2>/dev/null || true)
+
+  if [ -n "$matched_child" ]; then
+    local matched_path="$repo_dir/.github/workflows/$matched_child"
+    if [ -f "$matched_path" ]; then
+      # Try TESTS_YAML_PATH in the matched child
+      tyaml=$(_extract_impl_yaml_path "$matched_path")
+      if [ -n "$tyaml" ]; then
+        printf '[verify] discover (fallback3a): TESTS_YAML_PATH=%s in job-key child %s\n' "$tyaml" "$matched_child" >&2
+        echo "$tyaml"
+        return 0
+      fi
+      # Return the child itself as an impl-mode path
+      printf '[verify] discover (fallback3b): job-key match -> child %s (impl-mode)\n' "$matched_child" >&2
+      echo ".github/workflows/$matched_child"
+      return 0
+    fi
+  fi
+
+  verify_warn "No child workflow matched test job '$test_job' in $wf_path"
   return 1
 }
 
