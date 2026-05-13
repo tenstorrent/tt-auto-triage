@@ -127,28 +127,42 @@ api_get_file_content() {
 api_update_file() {
   local branch="$1" file_path="$2" content="$3"
 
-  # Get current file SHA on the branch
-  local file_sha
-  file_sha=$(curl -sf \
+  # Get current file SHA on the branch (may return empty if file is new in fix commit)
+  local file_sha api_resp
+  api_resp=$(curl -s \
     -H "Authorization: token $GITHUB_TOKEN" \
-    "https://api.github.com/repos/$OWNER_REPO/contents/$file_path?ref=$branch" \
-    | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'])")
+    "https://api.github.com/repos/$OWNER_REPO/contents/$file_path?ref=$branch" 2>/dev/null || echo "")
+  file_sha=$(echo "$api_resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sha',''))" 2>/dev/null || echo "")
 
   # Base64-encode content (no line wrapping — API expects unwrapped)
   local encoded_content
   encoded_content=$(echo "$content" | base64 -w0)
+
+  # Build JSON payload: include sha only when updating an existing file
+  local payload
+  if [ -n "$file_sha" ]; then
+    payload="{
+      \"message\": \"verify: prune test matrix for bug escape verification\",
+      \"content\": \"$encoded_content\",
+      \"sha\": \"$file_sha\",
+      \"branch\": \"$branch\"
+    }"
+  else
+    # File doesn't exist on this branch (e.g. was added by the fix commit) — create it
+    verify_info "api_update_file: $file_path not found on $branch, creating new file"
+    payload="{
+      \"message\": \"verify: create test matrix for bug escape verification\",
+      \"content\": \"$encoded_content\",
+      \"branch\": \"$branch\"
+    }"
+  fi
 
   local result
   result=$(curl -sf -X PUT \
     -H "Authorization: token $GITHUB_TOKEN" \
     -H "Content-Type: application/json" \
     "https://api.github.com/repos/$OWNER_REPO/contents/$file_path" \
-    -d "{
-      \"message\": \"verify: prune test matrix for bug escape verification\",
-      \"content\": \"$encoded_content\",
-      \"sha\": \"$file_sha\",
-      \"branch\": \"$branch\"
-    }")
+    -d "$payload")
 
   echo "$result" | python3 -c "import sys,json; r=json.load(sys.stdin); print('Updated', r.get('commit',{}).get('sha','?'))"
 }
