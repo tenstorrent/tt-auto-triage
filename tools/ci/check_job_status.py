@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from .helpers import api_get, log
@@ -70,6 +71,73 @@ def _resolve_workflow_file(
         # just the filename.  We only need the filename for API calls.
         return workflow_file_hint.split("/")[-1]
     return workflow_file_for(workflow_name, target_repo, token)
+
+
+def get_runs_per_day(
+    workflow_name: str,
+    target_repo: str,
+    token: str | None,
+    workflow_file_hint: str | None = None,
+    lookback_days: int = 7,
+) -> float:
+    """Return the average number of completed workflow runs per calendar day.
+
+    Fetches the last `lookback_days` * 5 runs (capped at 100) and divides the
+    count by the span between the newest and oldest run, in days.  Returns 0.0
+    if there is insufficient data to compute a rate.
+    """
+    owner, repo = target_repo.split("/")
+    wf_file = _resolve_workflow_file(workflow_name, target_repo, token, workflow_file_hint)
+    if not wf_file:
+        return 0.0
+
+    per_page = min(lookback_days * 5, 100)
+    url = (
+        f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/"
+        f"{wf_file}/runs?status=completed&per_page={per_page}"
+    )
+    try:
+        data = api_get(url, token)
+    except Exception as exc:
+        log(f"  Warning: could not fetch runs for frequency estimate: {exc}")
+        return 0.0
+
+    runs = data.get("workflow_runs", [])
+    if len(runs) < 2:
+        return 0.0
+
+    def _parse_ts(run: dict[str, Any]) -> datetime | None:
+        raw = run.get("created_at") or run.get("run_started_at")
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    timestamps = [t for r in runs if (t := _parse_ts(r)) is not None]
+    if len(timestamps) < 2:
+        return 0.0
+
+    newest = max(timestamps)
+    oldest = min(timestamps)
+    span_days = (newest - oldest).total_seconds() / 86400.0
+    if span_days < 0.1:
+        return 0.0
+
+    return len(timestamps) / span_days
+
+
+def get_dynamic_threshold(runs_per_day: float) -> int:
+    """Return the number of consecutive runs required to confirm a change.
+
+    Thresholds:
+      < 5 runs/day  → 2  (fewer data points per day, lower bar)
+      >= 5 runs/day → 5  (many runs/day, require more evidence)
+    """
+    if runs_per_day >= 5.0:
+        return 5
+    return 2
 
 
 def _get_recent_job_conclusions(

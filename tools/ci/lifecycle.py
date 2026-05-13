@@ -28,15 +28,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tools.ci.helpers import api_post, gh, log
+from tools.ci.helpers import api_get, api_post, gh, log
 from tools.ci.check_job_status import (
     JobStatus,
     _resolve_workflow_file,
     check_job_status,
     fetch_workflow_yaml,
+    get_dynamic_threshold,
     get_most_recent_run_id,
     get_recent_failing_run_jobs,
     get_recent_passing_runs,
+    get_runs_per_day,
     workflow_file_for,
 )
 
@@ -261,6 +263,49 @@ def load_open_issues(issue_repo: str, token: str) -> list[dict[str, Any]]:
     return json.loads(raw)
 
 
+def count_runs_since(
+    workflow_name: str,
+    target_repo: str,
+    token: str | None,
+    since_iso: str,
+    workflow_file_hint: str | None = None,
+) -> int:
+    """Return how many completed workflow runs occurred after `since_iso`.
+
+    `since_iso` is an ISO-8601 string (e.g. '2026-05-07T15:00:00Z').
+    Fetches up to 30 recent runs and counts those newer than the timestamp.
+    """
+    owner, repo = target_repo.split("/")
+    wf_file = _resolve_workflow_file(workflow_name, target_repo, token, workflow_file_hint)
+    if not wf_file:
+        return 0
+    url = (
+        f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/"
+        f"{wf_file}/runs?status=completed&per_page=30"
+    )
+    try:
+        data = api_get(url, token)
+    except Exception as exc:
+        log(f"  Warning: could not fetch run count since {since_iso}: {exc}")
+        return 0
+
+    try:
+        cutoff = datetime.fromisoformat(since_iso.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+
+    count = 0
+    for run in data.get("workflow_runs", []):
+        raw = run.get("created_at") or run.get("run_started_at", "")
+        try:
+            ts = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if ts > cutoff:
+                count += 1
+        except ValueError:
+            pass
+    return count
+
+
 def extract_issue_run_ids(body: str) -> set[int]:
     """Extract GitHub Actions run IDs embedded in the issue body.
 
@@ -402,6 +447,7 @@ def _call_agent(
     status: str,
     issue_body: str,
     log_paths: list[str],
+    runs_to_evaluate: int = 3,
 ) -> dict[str, Any] | None:
     """Build the prompt, run the LLM agent, parse and return its JSON."""
     log_sections = "\n".join(
@@ -411,7 +457,7 @@ def _call_agent(
         workflow_name=workflow_name,
         job_name=job_name,
         api_status=status,
-        runs_to_evaluate=RUNS_TO_EVALUATE,
+        runs_to_evaluate=runs_to_evaluate,
         issue_body=issue_body,
         log_sections=log_sections,
         marker=MARKER,
@@ -455,11 +501,39 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
 
     log(f"  #{number}: checking '{workflow_name} / {job_name}'...")
 
-    # Step 1: cheap API-based preliminary filter.
+    # Step 1: Compute per-workflow dynamic threshold.
+    # Use the global RUNS_TO_EVALUATE only as a floor / override when explicitly
+    # set (i.e. when the env var is non-default).  Otherwise derive from frequency.
+    token = GITHUB_TOKEN or None
+    rpd = get_runs_per_day(workflow_name, TARGET_REPO, token, workflow_file_hint=wf_hint)
+    dynamic = get_dynamic_threshold(rpd)
+    effective_threshold = max(RUNS_TO_EVALUATE, dynamic) if RUNS_TO_EVALUATE != 3 else dynamic
+    log(f"  #{number}: runs/day={rpd:.1f}, threshold={effective_threshold}")
+
+    # Step 2: Gate on enough NEW runs since the issue was created.
+    # We need `effective_threshold` completed runs after the issue's creation
+    # date before we have enough signal to act.  If fewer have occurred, skip.
+    created_at = issue.get("createdAt", "")
+    if created_at:
+        new_runs = count_runs_since(
+            workflow_name, TARGET_REPO, token,
+            since_iso=created_at, workflow_file_hint=wf_hint,
+        )
+        log(f"  #{number}: new runs since issue creation: {new_runs} (need {effective_threshold})")
+        if new_runs < effective_threshold:
+            log(f"  #{number}: not enough new runs yet -- skipping")
+            return {
+                "number": number, "title": title, "url": url,
+                "workflow": workflow_name, "job": job_name,
+                "action": "kept_open",
+                "reason": f"only {new_runs}/{effective_threshold} new runs since issue creation",
+            }
+
+    # Step 3: API-based status check using the dynamic threshold.
     status = check_job_status(
         workflow_name, job_name, TARGET_REPO,
-        token=GITHUB_TOKEN or None,
-        consecutive=RUNS_TO_EVALUATE,
+        token=token,
+        consecutive=effective_threshold,
         workflow_file_hint=wf_hint,
     )
     log(f"  #{number}: API status = {status}")
@@ -478,30 +552,11 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
             "reason": reason_map.get(status, status),
         }
 
-    # Step 2: Check whether any runs have happened since the issue was created.
-    # If the most recent workflow run was already in the issue's original run
-    # list, there is no new information -- the agent would be comparing the
-    # issue against itself, which is meaningless.
-    issue_run_ids = extract_issue_run_ids(body)
-    if issue_run_ids:
-        newest_run_id = get_most_recent_run_id(
-            workflow_name, TARGET_REPO, GITHUB_TOKEN or None,
-            workflow_file_hint=wf_hint,
-        )
-        if newest_run_id is not None and newest_run_id in issue_run_ids:
-            log(f"  #{number}: most recent run ({newest_run_id}) is already in the issue -- no new data, skipping")
-            return {
-                "number": number, "title": title, "url": url,
-                "workflow": workflow_name, "job": job_name,
-                "action": "kept_open",
-                "reason": "no new workflow runs since issue was created",
-            }
-
-    # Step 2b: Update failing job URLs in the issue body if still failing.
+    # Step 4: Update failing job URLs in the issue body if still failing.
     if status == JobStatus.STILL_FAILING and ISSUE_WRITE_TOKEN:
         failing_runs = get_recent_failing_run_jobs(
             workflow_name, job_name, TARGET_REPO,
-            GITHUB_TOKEN or None, RUNS_TO_EVALUATE,
+            token, effective_threshold,
             workflow_file_hint=wf_hint,
         )
         updated = _update_failing_urls(number, body, failing_runs, ISSUE_WRITE_TOKEN)
@@ -511,11 +566,6 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
     # CHECK_PASSING_ONLY fast path: deterministic close for passing jobs, no agent.
     if CHECK_PASSING_ONLY:
         if status == JobStatus.RESOLVED:
-            comment = (
-                f"Closing: job `{job_name}` in workflow `{workflow_name}` has been passing "
-                f"for the last {RUNS_TO_EVALUATE} consecutive runs.\n\n"
-                f"*Closed by tt-auto-triage lifecycle bot.*"
-            )
             if CLOSE_ISSUES:
                 # Skip the comment in check-passing-only mode to avoid flooding
                 # issue authors with notifications; the Step Summary captures the details.
@@ -562,7 +612,7 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
 
     # Step 5: Run the agent.
     log(f"  #{number}: running {LLM_BACKEND} agent...")
-    agent_result = _call_agent(workflow_name, job_name, status, body, log_paths)
+    agent_result = _call_agent(workflow_name, job_name, status, body, log_paths, runs_to_evaluate=effective_threshold)
 
     if agent_result is None:
         log(f"  #{number}: agent failed -- keeping open")
@@ -574,13 +624,28 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
         }
 
     should_close = agent_result.get("should_close", False)
+    should_update = agent_result.get("should_update", False)
     reason = agent_result.get("reason", "")
     comment_body = agent_result.get("comment_body", "")
     fix_pr_hint = agent_result.get("fix_pr_hint", "")
 
-    log(f"  #{number}: agent decision: should_close={should_close}, fix_pr_hint={fix_pr_hint!r}")
+    log(f"  #{number}: agent decision: should_close={should_close}, should_update={should_update}, fix_pr_hint={fix_pr_hint!r}")
 
-    # Step 5: Agent says keep open.
+    # Step 6: Agent says "update" — same test still failing but signature changed.
+    # Post a comment noting the change; keep the issue open.
+    if should_update and not should_close:
+        log(f"  #{number}: posting update comment (signature changed, keeping open)")
+        if CLOSE_ISSUES and comment_body:
+            _post_comment(number, comment_body, ISSUE_WRITE_TOKEN)
+        return {
+            "number": number, "title": title, "url": url,
+            "workflow": workflow_name, "job": job_name,
+            "action": "updated" if CLOSE_ISSUES else "dry_run_update",
+            "status": status,
+            "agent_reason": reason,
+        }
+
+    # Step 7: Agent says keep open entirely.
     if not should_close:
         return {
             "number": number, "title": title, "url": url,
@@ -589,7 +654,7 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
             "reason": reason,
         }
 
-    # Step 6: Agent says close -- do it unconditionally (with or without a fix PR).
+    # Step 8: Agent says close -- do it unconditionally (with or without a fix PR).
     log(f"  #{number}: closing (fix_pr={fix_pr_hint!r})")
     if CLOSE_ISSUES:
         _post_comment(number, comment_body, ISSUE_WRITE_TOKEN)
@@ -614,6 +679,7 @@ def render_summary(results: list[dict[str, Any]]) -> str:
     lines = ["# Issue Lifecycle Summary\n"]
 
     closed = [r for r in results if r["action"] in ("closed", "dry_run_close")]
+    updated = [r for r in results if r["action"] in ("updated", "dry_run_update")]
     agent_kept = [r for r in results if r["action"] == "agent_kept_open"]
     kept = [r for r in results if r["action"] == "kept_open"]
     skipped = [r for r in results if r["action"] in ("skipped_no_markers", "skipped_do_not_close")]
@@ -625,6 +691,13 @@ def render_summary(results: list[dict[str, Any]]) -> str:
             fix = r.get("fix_pr", "")
             fix_str = f" — fix: {fix}" if fix else ""
             lines.append(f"- [#{r['number']}]({r['url']}) {r['title']}{fix_str}")
+        lines.append("")
+
+    if updated:
+        verb = "Updated (signature changed, kept open)" if CLOSE_ISSUES else "Would update (dry run)"
+        lines.append(f"## {verb} ({len(updated)})\n")
+        for r in updated:
+            lines.append(f"- [#{r['number']}]({r['url']}) {r['title']} — _{r.get('agent_reason', '')}_")
         lines.append("")
 
     if agent_kept:
@@ -678,9 +751,10 @@ def main() -> int:
             results.append(result)
 
     closed_count = sum(1 for r in results if r["action"] in ("closed", "dry_run_close"))
+    updated_count = sum(1 for r in results if r["action"] in ("updated", "dry_run_update"))
     kept_count = sum(1 for r in results if r["action"] in ("kept_open", "agent_kept_open"))
 
-    log(f"\nDone: {closed_count} closed, {kept_count} kept open")
+    log(f"\nDone: {closed_count} closed, {updated_count} updated, {kept_count} kept open")
 
     md = render_summary(results)
     if SUMMARY_OUTPUT:
@@ -691,6 +765,7 @@ def main() -> int:
 
     print(json.dumps({
         "closed": closed_count,
+        "updated": updated_count,
         "kept_open": kept_count,
         "results": results,
     }, indent=2), file=sys.stderr)
