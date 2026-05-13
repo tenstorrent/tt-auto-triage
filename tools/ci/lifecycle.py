@@ -254,7 +254,7 @@ def load_open_issues(issue_repo: str, token: str) -> list[dict[str, Any]]:
     raw = gh(
         "issue", "list",
         f"--repo={issue_repo}", "--state=open", "--limit=200",
-        "--json=number,title,body,url,createdAt",
+        "--json=number,title,body,url,createdAt,labels",
         "--label=CI auto triage",
         token=token,
     )
@@ -438,6 +438,12 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
     body = issue.get("body") or ""
     url = issue.get("url", f"#{number}")
 
+    # Honour the do-not-auto-close label: skip this issue entirely.
+    issue_labels = [lbl.get("name", "") for lbl in issue.get("labels", [])]
+    if "do-not-auto-close" in issue_labels:
+        log(f"  #{number}: skipping -- 'do-not-auto-close' label present")
+        return {"number": number, "title": title, "url": url, "action": "skipped_do_not_close"}
+
     workflow_name, job_name, workflow_file = extract_markers(body)
     if not workflow_name or not job_name:
         log(f"  #{number}: skipping -- no Auto-triage-workflow/job-name markers")
@@ -583,22 +589,8 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
             "reason": reason,
         }
 
-    # Step 6: Agent says close but couldn't identify a fix PR.
-    if not fix_pr_hint:
-        log(f"  #{number}: resolved but no fix PR -- adding '{LABEL_UNKNOWN_FIX}' label")
-        if CLOSE_ISSUES:
-            _add_label(number, LABEL_UNKNOWN_FIX, ISSUE_WRITE_TOKEN)
-            _post_comment(number, comment_body, ISSUE_WRITE_TOKEN)
-        return {
-            "number": number, "title": title, "url": url,
-            "workflow": workflow_name, "job": job_name,
-            "action": "labeled_unknown_fix" if CLOSE_ISSUES else "dry_run_label",
-            "status": status,
-            "agent_reason": reason,
-        }
-
-    # Step 7: Agent says close and found the fix -- close with agent-drafted comment.
-    log(f"  #{number}: closing (fixed by {fix_pr_hint})")
+    # Step 6: Agent says close -- do it unconditionally (with or without a fix PR).
+    log(f"  #{number}: closing (fix_pr={fix_pr_hint!r})")
     if CLOSE_ISSUES:
         _post_comment(number, comment_body, ISSUE_WRITE_TOKEN)
         _close_issue(number, ISSUE_WRITE_TOKEN)
@@ -622,10 +614,9 @@ def render_summary(results: list[dict[str, Any]]) -> str:
     lines = ["# Issue Lifecycle Summary\n"]
 
     closed = [r for r in results if r["action"] in ("closed", "dry_run_close")]
-    labeled = [r for r in results if r["action"] in ("labeled_unknown_fix", "dry_run_label")]
     agent_kept = [r for r in results if r["action"] == "agent_kept_open"]
     kept = [r for r in results if r["action"] == "kept_open"]
-    skipped = [r for r in results if r["action"] == "skipped_no_markers"]
+    skipped = [r for r in results if r["action"] in ("skipped_no_markers", "skipped_do_not_close")]
 
     if closed:
         verb = "Closed" if CLOSE_ISSUES else "Would close (dry run)"
@@ -634,15 +625,6 @@ def render_summary(results: list[dict[str, Any]]) -> str:
             fix = r.get("fix_pr", "")
             fix_str = f" — fix: {fix}" if fix else ""
             lines.append(f"- [#{r['number']}]({r['url']}) {r['title']}{fix_str}")
-        lines.append("")
-
-    if labeled:
-        verb = "Labeled" if CLOSE_ISSUES else "Would label (dry run)"
-        lines.append(f"## {verb} `{LABEL_UNKNOWN_FIX}` ({len(labeled)})\n")
-        lines.append("Agent confirmed resolved but could not identify the fix PR. Left open for manual review.\n")
-        for r in labeled:
-            reason = r.get("agent_reason", "")
-            lines.append(f"- [#{r['number']}]({r['url']}) {r['title']} — _{reason}_")
         lines.append("")
 
     if agent_kept:
@@ -659,10 +641,10 @@ def render_summary(results: list[dict[str, Any]]) -> str:
         lines.append("")
 
     if skipped:
-        lines.append(f"## Skipped (no markers) ({len(skipped)})\n")
-        lines.append("Missing `Auto-triage-workflow` / `Auto-triage-job-name` markers.\n")
+        lines.append(f"## Skipped ({len(skipped)})\n")
         for r in skipped:
-            lines.append(f"- [#{r['number']}]({r['url']}) {r['title']}")
+            reason = "no markers" if r["action"] == "skipped_no_markers" else "do-not-auto-close"
+            lines.append(f"- [#{r['number']}]({r['url']}) {r['title']} — _{reason}_")
         lines.append("")
 
     return "\n".join(lines)
@@ -696,10 +678,9 @@ def main() -> int:
             results.append(result)
 
     closed_count = sum(1 for r in results if r["action"] in ("closed", "dry_run_close"))
-    labeled_count = sum(1 for r in results if r["action"] in ("labeled_unknown_fix", "dry_run_label"))
     kept_count = sum(1 for r in results if r["action"] in ("kept_open", "agent_kept_open"))
 
-    log(f"\nDone: {closed_count} closed, {labeled_count} labeled unknown-fix, {kept_count} kept open")
+    log(f"\nDone: {closed_count} closed, {kept_count} kept open")
 
     md = render_summary(results)
     if SUMMARY_OUTPUT:
@@ -710,7 +691,6 @@ def main() -> int:
 
     print(json.dumps({
         "closed": closed_count,
-        "labeled_unknown_fix": labeled_count,
         "kept_open": kept_count,
         "results": results,
     }, indent=2), file=sys.stderr)
