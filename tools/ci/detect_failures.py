@@ -80,6 +80,8 @@ def find_failing_jobs(
         for rid in all_run_ids[1:]:
             common_jobs &= set(run_failed_jobs[rid])
 
+        workflow_file = sorted_runs[0].get("path", "") if sorted_runs else ""
+
         for job_name in sorted(common_jobs):
             if tracked_pairs and (workflow_name, job_name) in tracked_pairs:
                 log(f"  Skipping already-tracked job: {workflow_name} / {job_name}")
@@ -91,6 +93,7 @@ def find_failing_jobs(
                 "job_name": job_name,
                 "job_urls": job_urls,
                 "run_urls": run_urls,
+                "workflow_file": workflow_file,
             })
 
     log(f"  Found {len(results)} deterministically-failing jobs")

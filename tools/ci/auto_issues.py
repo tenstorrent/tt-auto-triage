@@ -83,6 +83,9 @@ def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> tuple[str
         body += f"\n`Auto-triage-workflow: {job['workflow_name']}`"
     if "Auto-triage-job-name:" not in body:
         body += f"\n`Auto-triage-job-name: {job['job_name']}`"
+    workflow_file = job.get("workflow_file", "")
+    if workflow_file and "Auto-triage-workflow-file:" not in body:
+        body += f"\n`Auto-triage-workflow-file: {workflow_file}`"
 
     raw = gh(
         "issue", "create",
