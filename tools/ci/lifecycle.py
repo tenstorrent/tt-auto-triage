@@ -31,6 +31,7 @@ from typing import Any
 from tools.ci.helpers import api_post, gh, log
 from tools.ci.check_job_status import (
     JobStatus,
+    _resolve_workflow_file,
     check_job_status,
     fetch_workflow_yaml,
     get_most_recent_run_id,
@@ -155,6 +156,7 @@ def _download_evidence(
     job_name: str,
     status: str,
     logs_dir: Path,
+    workflow_file_hint: str | None = None,
 ) -> list[str]:
     """Download evidence files for the agent to analyze.
 
@@ -167,7 +169,7 @@ def _download_evidence(
     token = GITHUB_TOKEN or None
 
     if status == JobStatus.REMOVED:
-        wf_file = workflow_file_for(workflow_name, TARGET_REPO, token)
+        wf_file = _resolve_workflow_file(workflow_name, TARGET_REPO, token, workflow_file_hint)
         if not wf_file:
             log(f"  Warning: could not find workflow file for '{workflow_name}'")
             return []
@@ -185,7 +187,8 @@ def _download_evidence(
 
     if status == JobStatus.STILL_FAILING:
         failing_runs = get_recent_failing_run_jobs(
-            workflow_name, job_name, TARGET_REPO, token, RUNS_TO_EVALUATE
+            workflow_name, job_name, TARGET_REPO, token, RUNS_TO_EVALUATE,
+            workflow_file_hint=workflow_file_hint,
         )
         if not failing_runs:
             log(f"  Warning: no failing runs found for log download")
@@ -216,7 +219,8 @@ def _download_evidence(
 
     # RESOLVED: download logs from recent passing runs.
     passing_runs = get_recent_passing_runs(
-        workflow_name, job_name, TARGET_REPO, token, RUNS_TO_EVALUATE
+        workflow_name, job_name, TARGET_REPO, token, RUNS_TO_EVALUATE,
+        workflow_file_hint=workflow_file_hint,
     )
     if not passing_runs:
         log(f"  Warning: no passing runs found for log download")
@@ -269,13 +273,23 @@ def extract_issue_run_ids(body: str) -> set[int]:
     }
 
 
-def extract_markers(body: str) -> tuple[str, str]:
-    """Extract (workflow_name, job_name) from issue body markers."""
+def extract_markers(body: str) -> tuple[str, str, str]:
+    """Extract (workflow_name, job_name, workflow_file) from issue body markers.
+
+    workflow_file is the value of the optional Auto-triage-workflow-file field
+    (e.g. '.github/workflows/models-t2-e2e-tests.yaml').  Returns an empty
+    string if the field is absent (old issues without the field).
+    """
     wf_m = re.search(r"Auto-triage-workflow:\s*`?([^`\n]+)`?", body)
     jn_m = re.search(r"Auto-triage-job-name:\s*`?([^`\n]+)`?", body)
+    wf_file_m = re.search(r"Auto-triage-workflow-file:\s*`?([^`\n]+)`?", body)
     if wf_m and jn_m:
-        return wf_m.group(1).strip(), jn_m.group(1).strip()
-    return "", ""
+        return (
+            wf_m.group(1).strip(),
+            jn_m.group(1).strip(),
+            wf_file_m.group(1).strip() if wf_file_m else "",
+        )
+    return "", "", ""
 
 
 # ---------------------------------------------------------------------------
@@ -424,10 +438,14 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
     body = issue.get("body") or ""
     url = issue.get("url", f"#{number}")
 
-    workflow_name, job_name = extract_markers(body)
+    workflow_name, job_name, workflow_file = extract_markers(body)
     if not workflow_name or not job_name:
         log(f"  #{number}: skipping -- no Auto-triage-workflow/job-name markers")
         return {"number": number, "title": title, "url": url, "action": "skipped_no_markers"}
+
+    wf_hint = workflow_file or None  # None = fall back to name-based lookup
+    if wf_hint:
+        log(f"  #{number}: using workflow-file hint '{wf_hint}'")
 
     log(f"  #{number}: checking '{workflow_name} / {job_name}'...")
 
@@ -436,6 +454,7 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
         workflow_name, job_name, TARGET_REPO,
         token=GITHUB_TOKEN or None,
         consecutive=RUNS_TO_EVALUATE,
+        workflow_file_hint=wf_hint,
     )
     log(f"  #{number}: API status = {status}")
 
@@ -460,7 +479,8 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
     issue_run_ids = extract_issue_run_ids(body)
     if issue_run_ids:
         newest_run_id = get_most_recent_run_id(
-            workflow_name, TARGET_REPO, GITHUB_TOKEN or None
+            workflow_name, TARGET_REPO, GITHUB_TOKEN or None,
+            workflow_file_hint=wf_hint,
         )
         if newest_run_id is not None and newest_run_id in issue_run_ids:
             log(f"  #{number}: most recent run ({newest_run_id}) is already in the issue -- no new data, skipping")
@@ -476,6 +496,7 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
         failing_runs = get_recent_failing_run_jobs(
             workflow_name, job_name, TARGET_REPO,
             GITHUB_TOKEN or None, RUNS_TO_EVALUATE,
+            workflow_file_hint=wf_hint,
         )
         updated = _update_failing_urls(number, body, failing_runs, ISSUE_WRITE_TOKEN)
         if updated is not None:
@@ -523,7 +544,7 @@ def process_issue(issue: dict[str, Any], logs_dir: Path) -> dict[str, Any]:
 
     # Step 4: Download evidence for the agent.
     log(f"  #{number}: downloading evidence for agent...")
-    log_paths = _download_evidence(workflow_name, job_name, status, logs_dir)
+    log_paths = _download_evidence(workflow_name, job_name, status, logs_dir, workflow_file_hint=wf_hint)
     if not log_paths:
         log(f"  #{number}: no evidence files -- keeping open")
         return {

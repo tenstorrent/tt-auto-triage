@@ -58,18 +58,33 @@ def _job_present_in_yaml(job_name: str, yaml_text: str) -> bool:
     return job_name in yaml_text
 
 
+def _resolve_workflow_file(
+    workflow_name: str,
+    target_repo: str,
+    token: str | None,
+    workflow_file_hint: str | None,
+) -> str | None:
+    """Return the workflow filename, using hint directly if provided."""
+    if workflow_file_hint:
+        # The hint is either a full path like ".github/workflows/foo.yaml" or
+        # just the filename.  We only need the filename for API calls.
+        return workflow_file_hint.split("/")[-1]
+    return workflow_file_for(workflow_name, target_repo, token)
+
+
 def _get_recent_job_conclusions(
     workflow_name: str,
     job_name: str,
     target_repo: str,
     token: str | None,
     n: int,
+    workflow_file_hint: str | None = None,
 ) -> list[str]:
     """Return the conclusion strings for job_name across the last n completed runs."""
     owner, repo = target_repo.split("/")
 
-    # Find the workflow ID by name so we can filter runs to this workflow only.
-    workflow_file = workflow_file_for(workflow_name, target_repo, token)
+    # Find the workflow file — use hint if available to skip the name lookup.
+    workflow_file = _resolve_workflow_file(workflow_name, target_repo, token, workflow_file_hint)
     if not workflow_file:
         log(f"  Warning: workflow '{workflow_name}' not found in {target_repo}")
         return []
@@ -107,10 +122,11 @@ def get_most_recent_run_id(
     workflow_name: str,
     target_repo: str,
     token: str | None,
+    workflow_file_hint: str | None = None,
 ) -> int | None:
     """Return the run ID of the most recently completed run for this workflow."""
     owner, repo = target_repo.split("/")
-    wf_file = workflow_file_for(workflow_name, target_repo, token)
+    wf_file = _resolve_workflow_file(workflow_name, target_repo, token, workflow_file_hint)
     if not wf_file:
         return None
     url = (
@@ -132,6 +148,7 @@ def get_recent_failing_run_jobs(
     target_repo: str,
     token: str | None,
     n: int,
+    workflow_file_hint: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return metadata for the last n runs where job_name concluded 'failure'.
 
@@ -140,7 +157,7 @@ def get_recent_failing_run_jobs(
     compare against the original error signature in the issue body.
     """
     owner, repo = target_repo.split("/")
-    wf_file = workflow_file_for(workflow_name, target_repo, token)
+    wf_file = _resolve_workflow_file(workflow_name, target_repo, token, workflow_file_hint)
     if not wf_file:
         return []
 
@@ -183,6 +200,7 @@ def get_recent_passing_runs(
     target_repo: str,
     token: str | None,
     n: int,
+    workflow_file_hint: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return metadata for the last n runs where job_name concluded 'success'.
 
@@ -190,7 +208,7 @@ def get_recent_passing_runs(
     Used by lifecycle.py to download logs for the agent to analyze.
     """
     owner, repo = target_repo.split("/")
-    wf_file = workflow_file_for(workflow_name, target_repo, token)
+    wf_file = _resolve_workflow_file(workflow_name, target_repo, token, workflow_file_hint)
     if not wf_file:
         return []
 
@@ -248,6 +266,7 @@ def check_job_status(
     target_repo: str,
     token: str | None = None,
     consecutive: int = 3,
+    workflow_file_hint: str | None = None,
 ) -> str:
     """Return a JobStatus constant describing the current state of the job.
 
@@ -263,13 +282,14 @@ def check_job_status(
     7. Anything else (empty results, API errors) → UNKNOWN.
     """
     conclusions = _get_recent_job_conclusions(
-        workflow_name, job_name, target_repo, token, consecutive
+        workflow_name, job_name, target_repo, token, consecutive,
+        workflow_file_hint=workflow_file_hint,
     )
 
     if not conclusions:
         # Job produced no conclusions in recent runs -- check the YAML.
         log(f"  No recent conclusions for '{job_name}', checking workflow YAML...")
-        workflow_file = workflow_file_for(workflow_name, target_repo, token)
+        workflow_file = _resolve_workflow_file(workflow_name, target_repo, token, workflow_file_hint)
         if not workflow_file:
             return JobStatus.UNKNOWN
         try:
