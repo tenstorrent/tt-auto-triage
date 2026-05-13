@@ -575,11 +575,21 @@ build_pruned_yaml() {
 
   verify_info "build_pruned_yaml: agent unavailable/failed, using Python fallback"
 
-  python3 -c "
+  # Write JSON to a temp file to avoid bash string interpolation mangling
+  # escape sequences like \n, \", etc. that appear in cmd/name fields.
+  local _tmp_entry_json
+  _tmp_entry_json=$(mktemp)
+  printf '%s' "$entry_json" > "$_tmp_entry_json"
+
+  python3 - "$_tmp_entry_json" "$test_name" "$test_job" << 'PYEOF' 2>/dev/null
 import json, sys, yaml, re
 
-entry = json.loads('''$entry_json''')
-test_name = '''$test_name'''
+entry_json_file = sys.argv[1]
+test_name       = sys.argv[2]
+test_job        = sys.argv[3]
+
+with open(entry_json_file) as f:
+    entry = json.load(f)
 
 # Detect if test_name looks like a valid pytest path
 is_pytest_path = ('::' in test_name or
@@ -588,7 +598,7 @@ is_pytest_path = ('::' in test_name or
 if is_pytest_path:
     # Build the pytest command — quote if parametrized (contains brackets)
     if '[' in test_name:
-        cmd = 'pytest \"' + test_name + '\"'
+        cmd = 'pytest "' + test_name + '"'
     else:
         cmd = 'pytest ' + test_name
 else:
@@ -599,12 +609,12 @@ else:
     else:
         # Fallback: generate pytest command anyway for backward compat
         if '[' in test_name:
-            cmd = 'pytest \"' + test_name + '\"'
+            cmd = 'pytest "' + test_name + '"'
         else:
             cmd = 'pytest ' + test_name
 
 pruned = {
-    'name': entry.get('name', '$test_job'),
+    'name': entry.get('name', test_job),
     'cmd': cmd,
     'skus': entry.get('skus', {}),
     'owner_id': entry.get('owner_id', 'UNKNOWN'),
@@ -619,7 +629,10 @@ for k, v in entry.items():
 # Add comment
 print('# Pruned to single test for bug escape verification')
 print(yaml.dump([pruned], default_flow_style=False).rstrip())
-" 2>/dev/null
+PYEOF
+  local _rc=$?
+  rm -f "$_tmp_entry_json"
+  return $_rc
 }
 # ---------------------------------------------------------------------------
 # poll_run_start RUN_ID START_WAIT_MINUTES
