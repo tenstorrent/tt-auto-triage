@@ -318,7 +318,7 @@ verify_info "Tests YAML: $TESTS_YAML_PATH"
 
 # ---- Step 3: Find the original test entry and derive SKU flags ----
 
-TEST_ENTRY_JSON=$(find_test_entry "$TEST_JOB" "$TESTS_YAML_PATH" "$REPO_DIR")
+TEST_ENTRY_JSON=$(find_test_entry "$TEST_JOB" "$TESTS_YAML_PATH" "$REPO_DIR" || echo "null")
 if [ -z "$TEST_ENTRY_JSON" ] || [ "$TEST_ENTRY_JSON" = "null" ]; then
   write_result "inconclusive" "Could not find test entry for job '$TEST_JOB' in $TESTS_YAML_PATH"
   exit 1
