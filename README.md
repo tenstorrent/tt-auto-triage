@@ -1,12 +1,13 @@
 # tt-auto-triage
 
-A GitHub Actions-based system that automatically triages failing CI/CD pipeline jobs using AI (GitHub Copilot CLI) to identify root causes, categorize failures, and notify relevant developers via Slack.
+A GitHub Actions-based system for CI triage and signal hygiene: identify likely culprit commits for failing jobs, create and maintain deterministic-failure issues, and sync recurring Slack errors into actionable GitHub issues.
 
 ## Overview
 
-This repository provides two main capabilities:
+This repository provides the following capabilities:
 
 1. **Auto-Triage**: AI-powered analysis of failing GitHub Actions workflows that:
+   - Invoked via `.github/actions/auto-triage/action.yml`
    - Identifies the last successful run and first failing run
    - Downloads commit metadata between those boundaries
    - Uses GitHub Copilot CLI (LLM) to analyze code changes and determine root causes
@@ -14,12 +15,26 @@ This repository provides two main capabilities:
    - Identifies relevant developers (codeowners, commit authors)
    - Optionally creates auto-fix PRs for simple fixes
    - Sends formatted Slack notifications with triage results
+2. **Deterministic Failure Issue Lifecycle**: Workflow-driven issue management for persistent CI regressions:
+   - Invoked via `.github/workflows/triage-create-issues.yaml` (or orchestrated through `.github/workflows/triage-ci.yaml`)
+   - Detects jobs that fail deterministically across consecutive runs
+   - Drafts issue content from failing logs
+   - Creates new issues (or runs in dry-run mode)
+   - Avoids duplicate issues for already tracked workflow/job pairs
+   - Produces markdown summaries for review
 
-2. **Slack Output Analysis**: Syncs error messages from Slack channels to GitHub issues:
+3. **Slack Output Analysis**: Syncs error messages from Slack channels to GitHub issues:
+   - Invoked via `.github/actions/slack_output_analysis/action.yml`
    - Fetches error messages from Slack channels
-   - Extracts and groups similar errors using ML-based similarity matching
-   - Creates or updates GitHub issues from Slack messages
+   - Extracts errors and generates reports
+   - Groups similar errors for analysis/reporting in rebuild mode
+   - Creates, updates, and closes GitHub issues in sync flows
    - Generates error reports and incremental reports
+
+4. **Bug-Escape Guidance (Separate Workstream)**:
+   - Invoked as guidance in `.github/actions/auto-triage/auto_triage/instructions/instructions_footer_for_llm.txt`
+   - Documents when failures indicate missing lower-level coverage
+   - Recommends shift-left test additions independently of issue grouping/maintenance logic
 
 ## Documentation
 
@@ -40,7 +55,7 @@ For internal usage guides and runbooks, see the [Auto-Triage Confluence page](ht
 - uses: actions/checkout@v4
 - uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
   with:
-    workflow-name: "ci.yml"
+    workflow-name: "galaxy-quick"
     job-name: "test-job"
     copilot-pat: ${{ secrets.COPILOT_PAT }}
   env:
@@ -48,7 +63,32 @@ For internal usage guides and runbooks, see the [Auto-Triage Confluence page](ht
     SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
 ```
 
-That's it! The action will analyze the failure and send results to Slack.
+That's it. The action will analyze the failure, classify it, and send results to Slack.
+
+### Deterministic Failure Issue Lifecycle (Minimal Setup)
+
+**Prerequisites:**
+- Token with read access to workflow runs/artifacts → Store as `AGGREGATE_READ_TOKEN`
+- Token with write access to issue repo → Store as `ISSUE_WRITE_TOKEN`
+- Cursor API key for issue drafting → Store as `CURSOR_API_KEY`
+
+**Minimal workflow (reusable workflow call):**
+
+```yaml
+jobs:
+  create-issues:
+    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-create-issues.yaml@main
+    with:
+      issue-repo: "your-org/ci-issues"
+      target-repo: "tenstorrent/tt-metal"
+      max-issues: 5
+    secrets:
+      AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+      ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+```
+
+This stage finds deterministic failures, drafts issue content from logs, and creates issues while preventing duplicates for already tracked workflow/job pairs.
 
 ### Slack Output Analysis (Minimal Setup)
 
@@ -107,7 +147,7 @@ jobs:
       - name: Run auto-triage
         uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
         with:
-          workflow-name: "your-workflow.yml"
+          workflow-name: "your-workflow"
           job-name: "your-job-name"
           copilot-pat: ${{ secrets.COPILOT_PAT }}
         env:
@@ -117,7 +157,7 @@ jobs:
 
 #### Required Inputs
 
-- `workflow-name`: The workflow file name to inspect (e.g., `"ci.yml"`)
+- `workflow-name`: The workflow name to inspect, without file extension (e.g., `"ci"`)
 - `job-name`: The job/subjob name within the workflow (e.g., `"test-job"`)
 - `copilot-pat`: Personal Access Token for GitHub/Copilot authentication (requires `copilot` scope)
 
@@ -177,7 +217,7 @@ jobs:
       - name: Run auto-triage
         uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
         with:
-          workflow-name: "ci.yml"
+          workflow-name: "ci"
           job-name: ${{ github.event.workflow_run.jobs[0].name }}
           copilot-pat: ${{ secrets.COPILOT_PAT }}
         env:
@@ -288,13 +328,26 @@ jobs:
 6. **Retry Logic (Optional)**: Re-runs deterministic failures on supported hardware to confirm determinism
 7. **Slack Notification**: Formats and sends triage results to Slack
 
+### Deterministic Failure Issue Lifecycle Pipeline
+
+1. **Download Workflow Data**: Reads recent workflow runs and artifacts for the target repository
+2. **Detect Deterministic Failures**: Finds jobs failing for N consecutive runs
+3. **Deduplicate Against Open Issues**: Skips workflow/job pairs that are already tracked
+4. **Draft Issue Content**: Uses Cursor agent output plus run logs to generate issue title/body
+5. **Create Issues**: Opens GitHub issues when `CREATE_ISSUES=true` (or records dry-run results)
+6. **Summarize Results**: Produces markdown summary output for auditing
+
 ### Slack Output Analysis Pipeline
 
 1. **Fetch Messages**: Downloads error messages from the specified Slack channel
 2. **Extract Errors**: Extracts error messages from Slack messages (focuses on non-deterministic errors by default)
-3. **Group Similar Errors**: Uses ML-based similarity matching to group related errors (rebuild mode only)
-4. **Create/Update Issues**: Creates new GitHub issues or updates existing ones with new error occurrences
+3. **Group Similar Errors (Rebuild Mode)**: Uses ML-based similarity matching for grouped analysis/reporting
+4. **Issue Sync**: Creates/updates issues in update mode, recreates issues in rebuild mode, and applies close/cleanup logic during sync
 5. **Generate Reports**: Creates error reports and incremental reports comparing against previous runs
+
+### Bug-Escape Guidance (Separate Workstream)
+
+This is intentionally separate from issue grouping and issue maintenance workflows. It focuses on identifying likely bug escapes and proposing shift-left test coverage improvements in auto-triage outputs.
 
 ## Requirements
 
