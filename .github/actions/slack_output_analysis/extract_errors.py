@@ -4,7 +4,7 @@ Extract error messages from build_slack_export_with_threads.json
 
 When EXTRACT_ALL_ERRORS is False (default):
 - Only includes non-deterministic errors:
-  - Errors from cancelled analysis runs (Auto-triage cancelled) that have "FAILURE MESSAGE:"
+  - Errors from cancelled analysis runs (Regression-handling cancelled) that have "FAILURE MESSAGE:"
   - Errors with scenario "Failure likely outside tt-metal" that have "FAILURE MESSAGE:"
 
 When EXTRACT_ALL_ERRORS is True:
@@ -16,7 +16,7 @@ Entries without "FAILURE MESSAGE:" are skipped.
 Output format: [error_message, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd, full_report_link]
 All fields except error_message can be None if not available.
 is_nd is a boolean indicating if the error is marked as non-deterministic (ND).
-full_report_link is the URL to the auto-triage workflow run that analyzed this failure.
+full_report_link is the URL to the regression-handling workflow run that analyzed this failure.
 """
 
 import json
@@ -50,8 +50,8 @@ def is_non_deterministic(entry):
     full_text = entry.get("full_text", [])
     scenario = entry.get("scenario", "")
 
-    # Check if it's an auto-triage cancelled message
-    if full_text and len(full_text) > 0 and full_text[0] == "Auto-triage cancelled:":
+    # Check if it's an regression-handling cancelled message
+    if full_text and len(full_text) > 0 and full_text[0] == "Regression-handling cancelled:":
         return True
 
     # Check if scenario is "Failure likely outside tt-metal"
@@ -226,7 +226,7 @@ def main():
                     job_name = parsed_job
             # Determine if this is an ND error
             is_nd = is_non_deterministic(entry)
-            # Extract full_report_link (URL to the auto-triage workflow run)
+            # Extract full_report_link (URL to the regression-handling workflow run)
             full_report_link = entry.get("full_report_link", "") or None
             # Save as list: [error_message, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd, full_report_link]
             # Use None if URL, timestamp, job, or workflow not found

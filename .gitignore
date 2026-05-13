@@ -1,5 +1,5 @@
-.github/actions/auto-triage/auto_triage/slack_directory.json
-.github/actions/auto-triage/auto_triage/slack_groups.json
+.github/actions/regression-handling/regression_handling/slack_directory.json
+.github/actions/regression-handling/regression_handling/slack_groups.json
 
 python_env/
 secrets.json
@@ -19,7 +19,7 @@ secrets.json
 temp.json
 issue_dump.json
 
-# Test artifacts - nested auto_triage directories created during tests
-.github/actions/auto-triage/auto_triage/data/data
-.github/actions/auto-triage/auto_triage/logs
-.github/actions/auto-triage/auto_triage/output
+# Test artifacts - nested regression_handling directories created during tests
+.github/actions/regression-handling/regression_handling/data/data
+.github/actions/regression-handling/regression_handling/logs
+.github/actions/regression-handling/regression_handling/output

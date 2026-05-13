@@ -3,12 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from .helpers import api_get
-from .issue_state import AUTO_TRIAGE_LABEL
+from .issue_state import REGRESSION_HANDLING_LABEL
 
 
 def load_all_open_issues(issue_repo: str, token: str) -> list[dict[str, Any]]:
     owner, repo = issue_repo.split("/", 1)
-    label = AUTO_TRIAGE_LABEL.replace(" ", "%20")
+    label = REGRESSION_HANDLING_LABEL.replace(" ", "%20")
     base_url = f"https://api.github.com/repos/{owner}/{repo}/issues?state=open&labels={label}&per_page=100"
     issues: list[dict[str, Any]] = []
     page = 1

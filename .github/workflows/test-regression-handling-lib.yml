@@ -1,0 +1,51 @@
+name: Test Regression Handling Lib
+
+on:
+  push:
+    paths:
+      - '.github/actions/regression-handling/regression_handling/lib/**'
+      - '.github/actions/regression-handling/regression_handling/modules/**'
+      - '.github/actions/regression-handling/regression_handling/tests/**'
+      - '.github/workflows/test-regression-handling-lib.yml'
+  pull_request:
+    paths:
+      - '.github/actions/regression-handling/regression_handling/lib/**'
+      - '.github/actions/regression-handling/regression_handling/modules/**'
+      - '.github/actions/regression-handling/regression_handling/tests/**'
+      - '.github/workflows/test-regression-handling-lib.yml'
+  workflow_dispatch:
+
+jobs:
+  test-lib:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      - name: Run lib smoke tests
+        working-directory: .github/actions/regression-handling/regression_handling
+        run: |
+          for t in tests/lib/*_test.sh; do
+            echo "--- $t ---"
+            bash "$t"
+          done
+      - name: Run modules smoke tests
+        working-directory: .github/actions/regression-handling/regression_handling
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          test_patterns=(
+            "tests/modules/boundaries/*_test.sh"
+            "tests/modules/commit_data/*_test.sh"
+            "tests/modules/logs/*_test.sh"
+            "tests/modules/analysis/*_test.sh"
+            "tests/modules/retry/*_test.sh"
+            "tests/modules/auto_fix/*_test.sh"
+          )
+          for p in "${test_patterns[@]}"; do
+            for t in $p; do
+              [ -f "$t" ] || continue
+              echo "--- $t ---"
+              bash "$t"
+            done
+          done

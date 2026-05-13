@@ -1,0 +1,4 @@
+# Concatenated in order for the main triage Copilot pass (one path per line, relative to regression_handling root).
+
+instructions/instructions_for_llm.txt
+instructions/instructions_footer_for_llm.txt
