@@ -31,6 +31,23 @@ def gh(*args: str, token: str | None = None, timeout: int = 30) -> str:
     return proc.stdout
 
 
+def api_post(url: str, payload: Any, token: str | None = None, method: str = "POST") -> Any:
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=data, method=method, headers={
+        "Accept": "application/vnd.github+json",
+        "Content-Type": "application/json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    })
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"API {method} {url} failed {exc.code}: {body}") from exc
+
+
 def api_get(url: str, token: str | None = None, retries: int = 3) -> Any:
     for attempt in range(retries):
         req = urllib.request.Request(url, headers={

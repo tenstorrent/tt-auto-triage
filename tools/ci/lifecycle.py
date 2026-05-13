@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tools.ci.helpers import gh, log
+from tools.ci.helpers import api_post, gh, log
 from tools.ci.check_job_status import (
     JobStatus,
     check_job_status,
@@ -296,7 +296,22 @@ def _close_issue(issue_number: int, token: str) -> None:
     gh("issue", "close", str(issue_number), f"--repo={ISSUE_REPO}", token=token)
 
 
+def _ensure_label_exists(label: str, token: str) -> None:
+    """Create the label in ISSUE_REPO if it doesn't exist yet (idempotent)."""
+    url = f"https://api.github.com/repos/{ISSUE_REPO}/labels"
+    try:
+        api_post(url, {"name": label, "color": "ededed"}, token=token)
+        log(f"  Created label '{label}' in {ISSUE_REPO}")
+    except RuntimeError as exc:
+        # 422 Unprocessable Entity means the label already exists — that's fine.
+        if "422" in str(exc):
+            pass
+        else:
+            raise
+
+
 def _add_label(issue_number: int, label: str, token: str) -> None:
+    _ensure_label_exists(label, token)
     gh(
         "issue", "edit", str(issue_number),
         f"--repo={ISSUE_REPO}",
