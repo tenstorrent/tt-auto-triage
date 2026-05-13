@@ -1,12 +1,12 @@
 # tt-auto-triage
 
-A GitHub Actions-based system for regression handling and CI signal hygiene: identify likely culprit commits for failing jobs, create and maintain deterministic-failure issues, and sync recurring Slack errors into actionable GitHub issues.
+A GitHub Actions-based system for CI triage and signal hygiene: identify likely culprit commits for failing jobs, create and maintain deterministic-failure issues, and sync recurring Slack errors into actionable GitHub issues.
 
 ## Overview
 
-This repository provides three main capabilities:
+This repository provides four main capabilities:
 
-1. **Regression Handling**: AI-powered analysis of failing GitHub Actions workflows that:
+1. **Auto-Triage**: AI-powered analysis of failing GitHub Actions workflows that:
    - Identifies the last successful run and first failing run
    - Downloads commit metadata between those boundaries
    - Uses GitHub Copilot CLI (LLM) to analyze code changes and determine root causes
@@ -14,21 +14,23 @@ This repository provides three main capabilities:
    - Identifies relevant developers (codeowners, commit authors)
    - Optionally creates auto-fix PRs for simple fixes
    - Sends formatted Slack notifications with triage results
-   - Calls out likely bug escapes and recommends shift-left test coverage improvements in reports
-
 2. **Deterministic Failure Issue Lifecycle**: Workflow-driven issue management for persistent CI regressions:
    - Detects jobs that fail deterministically across consecutive runs
    - Drafts issue content from failing logs
    - Creates new issues (or runs in dry-run mode)
    - Avoids duplicate issues for already tracked workflow/job pairs
-   - Produces markdown and JSON summaries for review
+   - Produces markdown summaries for review
 
 3. **Slack Output Analysis**: Syncs error messages from Slack channels to GitHub issues:
    - Fetches error messages from Slack channels
-   - Extracts and groups similar errors using ML-based similarity matching
-   - Creates or updates GitHub issues from Slack messages
-   - Closes issues when no valid entries remain or when stale-run cleanup criteria are met
+   - Extracts errors and generates reports
+   - Groups similar errors for analysis/reporting in rebuild mode
+   - Creates, updates, and closes GitHub issues in sync flows
    - Generates error reports and incremental reports
+
+4. **Bug-Escape Guidance (Separate Workstream)**:
+   - Documents when failures indicate missing lower-level coverage
+   - Recommends shift-left test additions independently of issue grouping/maintenance logic
 
 ## Documentation
 
@@ -36,7 +38,7 @@ For internal usage guides and runbooks, see the [Auto-Triage Confluence page](ht
 
 ## Quickstart
 
-### Regression Handling (Minimal Setup)
+### Auto-Triage (Minimal Setup)
 
 **Prerequisites:**
 - GitHub Personal Access Token with `copilot` scope → Store as `COPILOT_PAT` secret
@@ -47,7 +49,7 @@ For internal usage guides and runbooks, see the [Auto-Triage Confluence page](ht
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: tenstorrent/tt-auto-triage/.github/actions/regression-handling@main
+- uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
   with:
     workflow-name: "galaxy-quick"
     job-name: "test-job"
@@ -57,7 +59,7 @@ For internal usage guides and runbooks, see the [Auto-Triage Confluence page](ht
     SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
 ```
 
-That's it. The action will analyze the regression, classify it, and send results to Slack.
+That's it. The action will analyze the failure, classify it, and send results to Slack.
 
 ### Deterministic Failure Issue Lifecycle (Minimal Setup)
 
@@ -108,7 +110,7 @@ This will sync errors from Slack to GitHub issues using default settings.
 
 ## Failure Case Categories
 
-The regression-handling system categorizes failures into 5 cases:
+The auto-triage system categorizes failures into 5 cases:
 
 - **Case 1**: Deterministic failure with identified commit - A specific commit clearly explains the failure
 - **Case 2**: Deterministic failure but commit unknown - Failure is deterministic but the exact commit cannot be identified (expired logs, >100 commits, etc.)
@@ -118,9 +120,9 @@ The regression-handling system categorizes failures into 5 cases:
 
 ## Usage
 
-### Regression Handling
+### Auto-Triage
 
-The `regression-handling` action analyzes failing GitHub Actions workflows and produces triage reports.
+The `auto-triage` action analyzes failing GitHub Actions workflows and produces triage reports.
 
 #### Basic Usage
 
@@ -138,8 +140,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run regression-handling
-        uses: tenstorrent/tt-auto-triage/.github/actions/regression-handling@main
+      - name: Run auto-triage
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
         with:
           workflow-name: "your-workflow"
           job-name: "your-job-name"
@@ -180,14 +182,14 @@ The workflow needs the following permissions:
 #### Outputs
 
 The action produces:
-- `explanation.md`: Detailed markdown report in `.regression_handling/output/explanation.md`
-- `slack_message.json`: Formatted Slack message payload in `.regression_handling/output/slack_message.json`
-- Artifacts: Regression-handling data and output are uploaded as workflow artifacts
+- `explanation.md`: Detailed markdown report in `.auto_triage/output/explanation.md`
+- `slack_message.json`: Formatted Slack message payload in `.auto_triage/output/slack_message.json`
+- Artifacts: Auto-triage data and output are uploaded as workflow artifacts
 
 #### Example: Triggering on Workflow Failure
 
 ```yaml
-name: Regression Handling on Failure
+name: Auto Triage on Failure
 
 on:
   workflow_run:
@@ -208,8 +210,8 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_branch }}
 
-      - name: Run regression-handling
-        uses: tenstorrent/tt-auto-triage/.github/actions/regression-handling@main
+      - name: Run auto-triage
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
         with:
           workflow-name: "ci"
           job-name: ${{ github.event.workflow_run.jobs[0].name }}
@@ -312,16 +314,15 @@ jobs:
 
 ## How It Works
 
-### Regression Handling Pipeline
+### Auto-Triage Pipeline
 
 1. **Find Boundaries**: Identifies the last successful run and first failing run for the specified workflow/job
 2. **Download Slack Directory**: Fetches Slack user/group directory for developer lookups
 3. **Filter Stage**: Uses LLM to determine deterministic failures and gather commit metadata
 4. **Analysis Stage**: Uses LLM to analyze commits, assign confidence scores, and categorize the failure
-5. **Bug-Escape Guidance**: Adds shift-left recommendations when failures suggest missing lower-level tests
-6. **Auto-Fix (Optional)**: Attempts to create a draft PR for simple fixes (Case 1/2 only)
-7. **Retry Logic (Optional)**: Re-runs deterministic failures on supported hardware to confirm determinism
-8. **Slack Notification**: Formats and sends triage results to Slack
+5. **Auto-Fix (Optional)**: Attempts to create a draft PR for simple fixes (Case 1/2 only)
+6. **Retry Logic (Optional)**: Re-runs deterministic failures on supported hardware to confirm determinism
+7. **Slack Notification**: Formats and sends triage results to Slack
 
 ### Deterministic Failure Issue Lifecycle Pipeline
 
@@ -330,21 +331,24 @@ jobs:
 3. **Deduplicate Against Open Issues**: Skips workflow/job pairs that are already tracked
 4. **Draft Issue Content**: Uses Cursor agent output plus run logs to generate issue title/body
 5. **Create Issues**: Opens GitHub issues when `CREATE_ISSUES=true` (or records dry-run results)
-6. **Summarize Results**: Produces markdown and JSON summaries for auditing
+6. **Summarize Results**: Produces markdown summary output for auditing
 
 ### Slack Output Analysis Pipeline
 
 1. **Fetch Messages**: Downloads error messages from the specified Slack channel
 2. **Extract Errors**: Extracts error messages from Slack messages (focuses on non-deterministic errors by default)
-3. **Group Similar Errors**: Uses ML-based similarity matching to group related errors (rebuild mode only)
-4. **Create/Update Issues**: Creates new GitHub issues or updates existing ones with new error occurrences
-5. **Close Invalid/Stale Issues**: Closes issues that no longer have valid metadata or exceed cleanup age thresholds
-6. **Generate Reports**: Creates error reports and incremental reports comparing against previous runs
+3. **Group Similar Errors (Rebuild Mode)**: Uses ML-based similarity matching for grouped analysis/reporting
+4. **Issue Sync**: Creates/updates issues in update mode, recreates issues in rebuild mode, and applies close/cleanup logic during sync
+5. **Generate Reports**: Creates error reports and incremental reports comparing against previous runs
+
+### Bug-Escape Guidance (Separate Workstream)
+
+This is intentionally separate from issue grouping and issue maintenance workflows. It focuses on identifying likely bug escapes and proposing shift-left test coverage improvements in auto-triage outputs.
 
 ## Requirements
 
 - GitHub Actions runner with Ubuntu Linux
-- GitHub Copilot CLI access (for regression handling)
+- GitHub Copilot CLI access (for auto-triage)
 - Slack Bot Token with appropriate permissions
 - GitHub Personal Access Token with required scopes
 
@@ -352,8 +356,8 @@ jobs:
 
 Both actions produce artifacts that can be downloaded from workflow runs:
 
-- **regression-handling-data**: Contains commit metadata, boundary information, and intermediate analysis data
-- **regression-handling-output**: Contains the final `explanation.md` and `slack_message.json` files
+- **auto-triage-data**: Contains commit metadata, boundary information, and intermediate analysis data
+- **auto-triage-output**: Contains the final `explanation.md` and `slack_message.json` files
 - **error-report**: Contains the error report JSON (slack_output_analysis)
 - **incremental-error-report**: Contains incremental error report comparing against previous run
 
