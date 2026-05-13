@@ -12,8 +12,8 @@ class CreateIssuesIssueStateTests(unittest.TestCase):
             job_name="linux / unit",
         )
 
-        self.assertIn("`Regression-handling-workflow: Nightly Workflow`", body)
-        self.assertIn("`Regression-handling-job-name: linux / unit`", body)
+        self.assertIn("`Auto-triage-workflow: Nightly Workflow`", body)
+        self.assertIn("`Auto-triage-job-name: linux / unit`", body)
         self.assertNotIn("fingerprint", body)
 
         body_again = append_base_markers(
@@ -30,20 +30,20 @@ class CreateIssuesIssueStateTests(unittest.TestCase):
                 "body": "\n".join(
                     [
                         "something",
-                        "<!-- REGRESSION-HANDLING-METADATA-START -->",
-                        "`Regression-handling-workflow: Workflow A`",
-                        "`Regression-handling-job-name: Job A`",
-                        "<!-- REGRESSION-HANDLING-METADATA-END -->",
+                        "<!-- AUTO-TRIAGE-METADATA-START -->",
+                        "`Auto-triage-workflow: Workflow A`",
+                        "`Auto-triage-job-name: Job A`",
+                        "<!-- AUTO-TRIAGE-METADATA-END -->",
                     ]
                 )
             },
             {
                 "body": "\n".join(
                     [
-                        "<!-- REGRESSION-HANDLING-METADATA-START -->",
-                        "`Regression-handling-workflow: Workflow B`",
-                        "`Regression-handling-job-name: Job B`",
-                        "<!-- REGRESSION-HANDLING-METADATA-END -->",
+                        "<!-- AUTO-TRIAGE-METADATA-START -->",
+                        "`Auto-triage-workflow: Workflow B`",
+                        "`Auto-triage-job-name: Job B`",
+                        "<!-- AUTO-TRIAGE-METADATA-END -->",
                     ]
                 )
             },

@@ -12,7 +12,7 @@ from .detect_failures import download_job_logs, find_failing_jobs
 from .download_data import download_workflow_data
 from .draft_issues import draft_issue_body
 from .helpers import gh, log, sanitize_text
-from .issue_state import REGRESSION_HANDLING_LABEL, append_base_markers, tracked_pairs_from_issues
+from .issue_state import AUTO_TRIAGE_LABEL, append_base_markers, tracked_pairs_from_issues
 from .render_summary import load_all_open_issues, render
 
 TARGET_REPO = os.environ.get("TARGET_REPO", "tenstorrent/tt-metal")
@@ -43,7 +43,7 @@ def create_issue(job: dict[str, Any], agent_result: dict[str, Any]) -> tuple[str
         f"--repo={ISSUE_REPO}",
         f"--title={title}",
         f"--body={body}",
-        f"--label={REGRESSION_HANDLING_LABEL}",
+        f"--label={AUTO_TRIAGE_LABEL}",
         token=ISSUE_WRITE_TOKEN,
     ).strip()
     log(f"  Created issue: {issue_url}")

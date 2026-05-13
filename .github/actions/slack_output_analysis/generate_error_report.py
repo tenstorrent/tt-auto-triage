@@ -898,9 +898,9 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
             "oldest_job_error_message": oldest_run_error_message,
             "oldest_job_slack_ts": oldest_run_timestamp_utc,
             "oldest_job_commit_hash": oldest_run_commit_hash,
-            # Regression-handling run mapping
-            "regression_handling_run_id": extract_run_id_from_url(full_report_link) if full_report_link else None,
-            "regression_handling_run_link": full_report_link,
+            # Auto-triage run mapping
+            "auto_triage_run_id": extract_run_id_from_url(full_report_link) if full_report_link else None,
+            "auto_triage_run_link": full_report_link,
         }
         report_entries.append(report_entry)
     

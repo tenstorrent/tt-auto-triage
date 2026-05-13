@@ -53,7 +53,7 @@ For internal usage guides and runbooks, see the [Auto-Triage Confluence page](ht
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: tenstorrent/tt-auto-triage/.github/actions/regression-handling@main
+- uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
   with:
     workflow-name: "galaxy-quick"
     job-name: "test-job"
@@ -114,7 +114,7 @@ This will sync errors from Slack to GitHub issues using default settings.
 
 ## Failure Case Categories
 
-The regression-handling system categorizes failures into 5 cases:
+The auto-triage system categorizes failures into 5 cases:
 
 - **Case 1**: Deterministic failure with identified commit - A specific commit clearly explains the failure
 - **Case 2**: Deterministic failure but commit unknown - Failure is deterministic but the exact commit cannot be identified (expired logs, >100 commits, etc.)
@@ -126,7 +126,7 @@ The regression-handling system categorizes failures into 5 cases:
 
 ### Auto-Triage
 
-The `regression-handling` action analyzes failing GitHub Actions workflows and produces triage reports.
+The `auto-triage` action analyzes failing GitHub Actions workflows and produces triage reports.
 
 #### Basic Usage
 
@@ -144,8 +144,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run regression-handling
-        uses: tenstorrent/tt-auto-triage/.github/actions/regression-handling@main
+      - name: Run auto-triage
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
         with:
           workflow-name: "your-workflow"
           job-name: "your-job-name"
@@ -186,14 +186,14 @@ The workflow needs the following permissions:
 #### Outputs
 
 The action produces:
-- `explanation.md`: Detailed markdown report in `.regression_handling/output/explanation.md`
-- `slack_message.json`: Formatted Slack message payload in `.regression_handling/output/slack_message.json`
-- Artifacts: Regression-handling data and output are uploaded as workflow artifacts
+- `explanation.md`: Detailed markdown report in `.auto_triage/output/explanation.md`
+- `slack_message.json`: Formatted Slack message payload in `.auto_triage/output/slack_message.json`
+- Artifacts: Auto-triage data and output are uploaded as workflow artifacts
 
 #### Example: Triggering on Workflow Failure
 
 ```yaml
-name: Regression Handling on Failure
+name: Auto Triage on Failure
 
 on:
   workflow_run:
@@ -214,8 +214,8 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_branch }}
 
-      - name: Run regression-handling
-        uses: tenstorrent/tt-auto-triage/.github/actions/regression-handling@main
+      - name: Run auto-triage
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
         with:
           workflow-name: "ci"
           job-name: ${{ github.event.workflow_run.jobs[0].name }}
@@ -352,7 +352,7 @@ This is intentionally separate from issue grouping and issue maintenance workflo
 ## Requirements
 
 - GitHub Actions runner with Ubuntu Linux
-- GitHub Copilot CLI access (for regression-handling)
+- GitHub Copilot CLI access (for auto-triage)
 - Slack Bot Token with appropriate permissions
 - GitHub Personal Access Token with required scopes
 
@@ -360,8 +360,8 @@ This is intentionally separate from issue grouping and issue maintenance workflo
 
 Both actions produce artifacts that can be downloaded from workflow runs:
 
-- **regression-handling-data**: Contains commit metadata, boundary information, and intermediate analysis data
-- **regression-handling-output**: Contains the final `explanation.md` and `slack_message.json` files
+- **auto-triage-data**: Contains commit metadata, boundary information, and intermediate analysis data
+- **auto-triage-output**: Contains the final `explanation.md` and `slack_message.json` files
 - **error-report**: Contains the error report JSON (slack_output_analysis)
 - **incremental-error-report**: Contains incremental error report comparing against previous run
 
