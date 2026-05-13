@@ -4,9 +4,10 @@ A GitHub Actions-based system for CI triage and signal hygiene: identify likely 
 
 ## Overview
 
-This repository provides four main capabilities:
+This repository provides the following capabilities:
 
 1. **Auto-Triage**: AI-powered analysis of failing GitHub Actions workflows that:
+   - Invoked via `.github/actions/auto-triage/action.yml`
    - Identifies the last successful run and first failing run
    - Downloads commit metadata between those boundaries
    - Uses GitHub Copilot CLI (LLM) to analyze code changes and determine root causes
@@ -15,6 +16,7 @@ This repository provides four main capabilities:
    - Optionally creates auto-fix PRs for simple fixes
    - Sends formatted Slack notifications with triage results
 2. **Deterministic Failure Issue Lifecycle**: Workflow-driven issue management for persistent CI regressions:
+   - Invoked via `.github/workflows/triage-create-issues.yaml` (or orchestrated through `.github/workflows/triage-ci.yaml`)
    - Detects jobs that fail deterministically across consecutive runs
    - Drafts issue content from failing logs
    - Creates new issues (or runs in dry-run mode)
@@ -22,6 +24,7 @@ This repository provides four main capabilities:
    - Produces markdown summaries for review
 
 3. **Slack Output Analysis**: Syncs error messages from Slack channels to GitHub issues:
+   - Invoked via `.github/actions/slack_output_analysis/action.yml`
    - Fetches error messages from Slack channels
    - Extracts errors and generates reports
    - Groups similar errors for analysis/reporting in rebuild mode
@@ -29,6 +32,7 @@ This repository provides four main capabilities:
    - Generates error reports and incremental reports
 
 4. **Bug-Escape Guidance (Separate Workstream)**:
+   - Invoked as guidance in `.github/actions/auto-triage/auto_triage/instructions/instructions_footer_for_llm.txt`
    - Documents when failures indicate missing lower-level coverage
    - Recommends shift-left test additions independently of issue grouping/maintenance logic
 
