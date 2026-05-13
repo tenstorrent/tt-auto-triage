@@ -1,0 +1,150 @@
+name: "(triage) Verify Bug Escape"
+
+# Can be called as a reusable workflow (from triage-ci.yaml via workflow_call)
+# OR dispatched directly via workflow_dispatch / gh workflow run.
+on:
+  workflow_dispatch:
+    inputs:
+      llm-backend:
+        description: "LLM backend for failure classification: 'cursor' (default) or 'copilot'"
+        type: string
+        default: "cursor"
+      fix-commit-sha:
+        description: "The commit SHA believed to have fixed the bug"
+        type: string
+        required: true
+      test-pipeline:
+        description: "Workflow file path (e.g. .github/workflows/galaxy-e2e-tests.yaml)"
+        type: string
+        required: true
+      test-job:
+        description: "Job display name (e.g. BH Galaxy CCL tests)"
+        type: string
+        required: true
+      test-name:
+        description: "Full pytest path (e.g. tests/.../test_foo.py::test_bar)"
+        type: string
+        required: true
+      expected-failure-sig:
+        description: "Expected failure signature from the bug escape (optional, for AI classification)"
+        type: string
+        default: ""
+      poll-interval-seconds:
+        description: "Seconds between run status checks"
+        type: string
+        default: "120"
+      start-wait-minutes:
+        description: "Max minutes to wait for run to start (leave queued)"
+        type: string
+        default: "240"
+      finish-wait-minutes:
+        description: "Max minutes to wait for run to finish once started"
+        type: string
+        default: "120"
+  workflow_call:
+    inputs:
+      llm-backend:
+        description: "LLM backend for failure classification: 'cursor' (default) or 'copilot'"
+        type: string
+        default: "cursor"
+      fix-commit-sha:
+        description: "The commit SHA believed to have fixed the bug"
+        type: string
+        required: true
+      test-pipeline:
+        description: "Workflow file path (e.g. .github/workflows/galaxy-e2e-tests.yaml)"
+        type: string
+        required: true
+      test-job:
+        description: "Job display name (e.g. BH Galaxy CCL tests)"
+        type: string
+        required: true
+      test-name:
+        description: "Full pytest path (e.g. tests/.../test_foo.py::test_bar)"
+        type: string
+        required: true
+      expected-failure-sig:
+        description: "Expected failure signature from the bug escape (optional, for AI classification)"
+        type: string
+        default: ""
+      poll-interval-seconds:
+        description: "Seconds between run status checks"
+        type: string
+        default: "120"
+      start-wait-minutes:
+        description: "Max minutes to wait for run to start (leave queued)"
+        type: string
+        default: "240"
+      finish-wait-minutes:
+        description: "Max minutes to wait for run to finish once started"
+        type: string
+        default: "120"
+    secrets:
+      GITHUB_WRITE_TOKEN:
+        description: "Token with contents:write and actions:write to push branches and dispatch workflows"
+        required: true
+      CURSOR_API_KEY:
+        description: "Cursor AI API key for classifying job failures (required when llm-backend=cursor)"
+        required: false
+      COPILOT_PAT:
+        description: "GitHub PAT with Copilot access (required when llm-backend=copilot)"
+        required: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout tt-auto-triage (verify scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-auto-triage
+          ref: ebanerjee/bug-escapes
+          path: triage
+
+      - name: Checkout tt-metal (for YAML discovery)
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-metal
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_WRITE_TOKEN || github.token }}
+          path: tt-metal
+
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+      - name: Run verification
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_WRITE_TOKEN || github.token }}
+          LLM_BACKEND: ${{ inputs.llm-backend }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
+          FIX_COMMIT_SHA: ${{ inputs.fix-commit-sha }}
+          TEST_PIPELINE: ${{ inputs.test-pipeline }}
+          TEST_JOB: ${{ inputs.test-job }}
+          TEST_NAME: ${{ inputs.test-name }}
+          EXPECTED_FAILURE_SIG: ${{ inputs.expected-failure-sig }}
+          REPO_DIR: ${{ github.workspace }}/tt-metal
+          POLL_INTERVAL: ${{ inputs.poll-interval-seconds }}
+          MAX_WAIT_START_MINUTES: ${{ inputs.start-wait-minutes }}
+          MAX_WAIT_FINISH_MINUTES: ${{ inputs.finish-wait-minutes }}
+          OWNER_REPO: tenstorrent/tt-metal
+        run: |
+          set -euo pipefail
+          chmod +x triage/bug-escapes/verify/verify.sh
+          triage/bug-escapes/verify/verify.sh
+
+      - name: Upload verification result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-result
+          path: triage/bug-escapes/verify/output/
+          retention-days: 30
+          if-no-files-found: warn
+

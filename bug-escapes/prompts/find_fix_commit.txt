@@ -1,0 +1,55 @@
+You are identifying which commit fixed a consistently failing CI test in the tenstorrent/tt-metal repository.
+
+The failing test:
+- Test name: ${TEST_NAME}
+- Failure signature: ${FAILURE_SIGNATURE}
+- Test pipeline: ${WORKFLOW_PATH}
+- Test layer: ${TEST_LAYER}
+
+tt-metal architectural layers (lowest to highest):
+- tt-llk: Hardware interface. Code in tt_metal/tt-llk/, tt_metal/hw/
+- tt-metalium: Compilation/dispatch runtime. Code in tt_metal/impl/, tt_metal/llrt/, tt_metal/jit_build/, tt_metal/detail/, tt_metal/common/, tt_metal/distributed/, tt_metal/fabric/, tt_metal/graph/, tt_metal/api/, tt_stl/
+- ttnn: High-level neural network API. Code in ttnn/
+- models: Model implementations. Code in models/, tt-train/
+
+Here are all ${NUM_COMMITS} commits between the last failing and first passing runs. Each commit block includes the SHA, commit message, changed files, and (when available) the associated PR description and Copilot review overview.
+
+${COMMITS_LIST}
+
+Scan this commit list and identify the SINGLE most likely fix commit. Strategy:
+1. First pass — eliminate obvious non-fixes using the CHANGED FILES:
+   - CI/infra only commits (files only in .github/, scripts/, cmake/, docs/)
+   - Formatting/style-only commits (clang-format, copyright, whitespace)
+   - Unrelated feature additions in a completely different subsystem (files share no layer with the test)
+2. Second pass — identify candidates by relevance, using ALL available context:
+   - Changed files are in the same layer as the test (or a lower layer the test depends on)
+   - PR description mentions the failing test name, its module, or its error keyword
+   - Copilot overview describes a fix for the affected subsystem
+   - Commit message says "fix", "revert", "restore", "resolve", "workaround" for the affected area
+3. Third pass — if multiple candidates remain, prefer:
+   - Commits whose PR description or changed files directly reference the test name or error signature
+   - Reverts (they undo a regression exactly)
+   - Higher-specificity matches over broad refactors
+   - Commits where the Copilot overview corroborates the fix hypothesis
+
+IMPORTANT DISTINCTIONS:
+- A commit that adds `@pytest.mark.skip`, `pytest.importorskip`, `xfail`, disables via config, or removes the test is a SKIP/DISABLE workaround, NOT a real fix. Set is_skip_or_disable=true.
+- A revert of a previous commit IS a real fix (restores a working state). Set is_skip_or_disable=false.
+- If no commit plausibly fixes the specific test/error, return is_likely_fix=false and sha=null.
+
+CONFIDENCE CALIBRATION — be conservative:
+- "high": changed files include the test file itself, OR the PR description explicitly names the failing test or exact error string.
+- "medium": changed files are in the same subsystem/layer AND the commit/PR mentions "fix"/"revert"/"resolve" but does not name the test directly.
+- "low": all other cases — broad refactors, cleanups, or commits where the connection is indirect.
+- When the commit window is large (many commits), lean toward lower confidence.
+- When in doubt between two candidates, pick the more specific one at lower confidence.
+
+Respond with ONLY a JSON object (no markdown, no explanation):
+{
+  "sha": "<full 40-char commit SHA, or null if no plausible fix>",
+  "is_likely_fix": true or false,
+  "is_skip_or_disable": true if the commit skips/disables/xfails/removes the test rather than fixing root cause,
+  "fix_confidence": "high" (changed files or PR description directly names test/error), "medium" (related subsystem with fix intent), or "low" (indirect or uncertain),
+  "fix_layer": "<one of: tt-llk, tt-metalium, ttnn, models, or unknown>",
+  "reasoning": "<2-4 sentences. MUST explicitly name: (1) which layer the fix is in, (2) which layer the failing test is in, (3) the causal chain — what was broken and how this commit resolves the specific error signature. Reference specific file paths or PR details that support your conclusion. If returning is_likely_fix=false, explain why none of the commits are a plausible fix.>"
+}

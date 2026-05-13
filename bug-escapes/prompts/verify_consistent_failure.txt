@@ -1,0 +1,52 @@
+You are analyzing candidate CI failures from a single workflow to identify real, deterministic test failures vs infrastructure noise.
+
+Workflow: ${WORKFLOW_PATH}
+Layer: ${TEST_LAYER}
+
+Each candidate below had ${CONSECUTIVE_RUNS}+ consecutive failing runs. Error lines have been pre-extracted from the log files and are included below — you do NOT need to read any files.
+
+${CANDIDATES_SUMMARY}
+
+Instructions:
+1. For each candidate, examine the pre-extracted error lines provided above.
+2. Determine whether the failure is a real test failure or infrastructure noise based on those lines.
+3. Extract the most specific test identifier and failure signature from the error lines.
+
+REAL TEST FAILURE (is_test_failure=true):
+- The test itself fails: assertion error, TT_FATAL, timeout in test code, wrong output, OOM during test execution
+- Consistently reproducible: same test fails in the same way across all runs
+
+INFRASTRUCTURE NOISE (is_test_failure=false, is_infrastructure_noise=true):
+- Runner disconnected or runner OOM-killed mid-job (no actual test output)
+- Docker pull/setup failure before tests start
+- Network timeout during artifact upload/download
+- "The runner has received a shutdown signal" or "Lost communication with the server"
+- SSH connection dropped
+- The error lines show no test output at all, just infrastructure errors
+- A DIFFERENT test fails each time (no consistent test failure)
+- No error lines were extracted (empty pre-extracted section)
+
+IMPORTANT EDGE CASES:
+- If the lines show a TT_FATAL or assertion error during test teardown/setup, it IS a real test failure
+- If the binary segfaults or crashes during a test, it IS a real test failure
+- If a test times out and the same test times out consistently, it MAY be a real failure
+- If a test is consistently skipped (not failed), set is_test_failure=false
+
+For the test_name, extract the most specific identifier possible:
+- pytest: tests/foo/test_bar.py::TestClass::test_method[param] (include parameters)
+- gtest: SuiteName.TestName or SuiteName/TestName
+- Binary test: ./build/test/test_binary or tests/scripts/run_test.sh
+- Model demo: models/demos/foo/demo/test_demo.py::test_func[device=N150]
+
+Respond with ONLY a JSON array (one object per candidate, same order as listed above):
+[
+  {
+    "job": "<job name exactly as shown above>",
+    "is_test_failure": true or false,
+    "is_infrastructure_noise": true or false,
+    "test_name": "<specific test identifier, or null if not identifiable>",
+    "failure_signature": "<core error message — the key line that identifies what went wrong, or null>",
+    "confidence": "high" (clear, reproducible test failure identified), "medium" (likely test failure but ambiguous), or "low" (uncertain),
+    "reasoning": "<1-2 sentences: what error you found and why it is or is not a real test failure>"
+  }
+]

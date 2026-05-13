@@ -1,0 +1,43 @@
+{
+  "layers_ordered": ["tt-llk", "tt-metalium", "ttnn", "models"],
+  "directory_prefixes": {
+    "tt_metal/tt-llk/": "tt-llk",
+    "tt_metal/hw/": "tt-llk",
+    "tt_metal/impl/": "tt-metalium",
+    "tt_metal/llrt/": "tt-metalium",
+    "tt_metal/jit_build/": "tt-metalium",
+    "tt_metal/detail/": "tt-metalium",
+    "tt_metal/common/": "tt-metalium",
+    "tt_metal/distributed/": "tt-metalium",
+    "tt_metal/fabric/": "tt-metalium",
+    "tt_metal/graph/": "tt-metalium",
+    "tt_metal/api/": "tt-metalium",
+    "tt_metal/core_descriptors/": "tt-metalium",
+    "tt_metal/hostdevcommon/": "tt-metalium",
+    "tt_metal/kernels/": "tt-metalium",
+    "tt_metal/programming_examples/": "tt-metalium",
+    "tt_metal/soc_descriptors/": "tt-metalium",
+    "tt_metal/tools/": "tt-metalium",
+    "tt_metal/tt_metal.cpp": "tt-metalium",
+    "tt_metal/hal.cpp": "tt-metalium",
+    "tt_stl/": "tt-metalium",
+    "tests/tt_metal/": "tt-metalium",
+    "tests/ttnn/": "ttnn",
+    "tests/sweep_tests/": "ttnn",
+    "tests/nightly/": "models",
+    "tests/perf_tests/": "models",
+    "tests/scripts/": "multi-layer",
+    "ttnn/": "ttnn",
+    "tt_eager/": "ttnn",
+    "tt_lib/": "ttnn",
+    "models/": "models",
+    "tt-train/": "models"
+  },
+  "layer_hierarchy": {
+    "tt-llk": 0,
+    "tt-metalium": 1,
+    "ttnn": 2,
+    "models": 3,
+    "multi-layer": 4
+  }
+}

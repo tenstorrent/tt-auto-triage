@@ -1,0 +1,26 @@
+You are analyzing a GitHub Actions workflow YAML from the tenstorrent/tt-metal repository to determine which architectural layer its tests primarily cover.
+
+tt-metal has these layers (lowest to highest):
+- tt-llk: Hardware interface layer. Code in tt_metal/tt-llk/, tt_metal/hw/
+- tt-metalium: Compilation/dispatch runtime layer. Code in tt_metal/impl/, tt_metal/llrt/, tt_metal/jit_build/, tt_metal/detail/, tt_metal/common/, tt_metal/distributed/, tt_metal/fabric/, tt_metal/graph/, tt_metal/api/, tt_stl/
+- ttnn: High-level Python/C++ neural network API. Code in ttnn/
+- models: Model implementations built on ttnn. Code in models/, tt-train/
+
+Here is the workflow YAML for "${WORKFLOW_PATH}":
+
+---
+${WORKFLOW_CONTENT}
+---
+
+Based on the workflow YAML above, determine which architectural layer this workflow's tests primarily cover. Look at:
+1. Test directory paths referenced in the workflow (e.g. tests/ttnn/, models/demos/)
+2. Job names and step names for layer hints
+3. Which pytest markers, test scripts, or test directories are invoked
+4. The workflow name itself
+
+Respond with ONLY a JSON object in this exact format (no markdown, no explanation):
+{
+  "test_layer": "<one of: tt-llk, tt-metalium, ttnn, models, or unknown>",
+  "confidence": "<high, medium, or low>",
+  "reasoning": "<one sentence explaining your classification>"
+}
