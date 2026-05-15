@@ -106,6 +106,7 @@ def walk_person_fields(obj: Any, group_index: Dict, user_index: Dict) -> int:
         if "slack_id" in obj and "name" in obj:
             if resolve_person(obj, group_index, user_index):
                 resolved += 1
+            return resolved  # person fields are scalars, not sub-documents
         for value in obj.values():
             resolved += walk_person_fields(value, group_index, user_index)
     elif isinstance(obj, list):
