@@ -13,23 +13,6 @@ From `bug-escapes-output.json`, each bug escape provides:
 - `test_job` — the specific job name (e.g. `BH Galaxy CCL tests`)
 - `test_name` — the full pytest path including parametrization
 
-**Verify `test_pipeline` before using it.** If the field is absent or stale, look it up
-from Snowflake rather than guessing:
-
-```sql
-SELECT DISTINCT j.NAME, j.GITHUB_JOB_LINK
-FROM TTDATASF.SW_TEST.CICD_TEST t
-JOIN TTDATASF.SW_TEST.CICD_JOB j ON t.CICD_JOB_ID = j.CICD_JOB_ID
-WHERE t.TEST_CASE_ID = <test_case_id>
-  AND j.JOB_START_TS >= DATEADD('day', -30, CURRENT_TIMESTAMP())
-LIMIT 5;
-```
-
-The `j.NAME` field (e.g. `models-unit-tests / Qwen3-32B unit tests (Galaxy) [wh_galaxy_perf]`)
-tells you both the workflow and the SKU. Cross-reference against the GitHub workflows list
-(`GET /repos/tenstorrent/tt-metal/actions/workflows`) by name to get the workflow file and ID.
-**Never guess the workflow from memory.**
-
 ## Steps
 
 ### 1. Identify the parent commit
@@ -62,10 +45,6 @@ the pytest command to the specific parametrized test:
   owner_id: <original owner>
   team: <original team>
 ```
-
-**This step is mandatory — do not skip it.** Dispatching the full workflow wastes
-runner time and may run dozens of unrelated tests on expensive Galaxy hardware.
-Always prune to the single failing test before dispatching.
 
 **IMPORTANT**: Use the full bracket node ID in the pytest path, NOT `-k`.
 The `-k` flag interprets `=` signs and `-` as Python expression operators,
@@ -118,69 +97,6 @@ Expected outcomes for a correct attribution:
 git push origin --delete ebanerjee/verify-before ebanerjee/verify-after
 git branch -D ebanerjee/verify-before ebanerjee/verify-after
 ```
-
-## Finding the Fix Commit When Snowflake Has No Intermediate Data
-
-The pipeline outputs `last_failing_sha` and `first_passing_sha`. The fix commit is somewhere
-between them. Often there are multiple commits in that range with no CI runs in Snowflake.
-
-**Step 1 — Check Snowflake for intermediate runs first (free oracle):**
-
-```sql
-SELECT p.GIT_COMMIT_HASH, p.PIPELINE_START_TS, t.SUCCESS
-FROM TTDATASF.SW_TEST.CICD_TEST t
-JOIN TTDATASF.SW_TEST.CICD_JOB j ON t.CICD_JOB_ID = j.CICD_JOB_ID
-JOIN TTDATASF.SW_TEST.CICD_PIPELINE p ON j.CICD_PIPELINE_ID = p.CICD_PIPELINE_ID
-WHERE t.TEST_CASE_ID = <test_case_id>
-  AND p.PIPELINE_START_TS BETWEEN '<last_fail_ts>' AND '<first_pass_ts>'
-ORDER BY p.PIPELINE_START_TS ASC;
-```
-
-If this returns intermediate runs, they narrow the window without any hardware cost.
-
-**Step 2 — If no intermediate data, binary search with manual dispatches:**
-
-1. `GET /repos/tenstorrent/tt-metal/compare/{last_failing}...{first_passing}` → list of N commits
-2. Pick the commit at position N/2 (middle). Create a branch at that SHA. Push it.
-3. Dispatch the pruned verification workflow on that branch (Step 3-4 above).
-4. If PASS → fix is in the first half. If FAIL → fix is in the second half.
-5. Repeat on the narrowed range. O(log N) dispatches total.
-
-**What NOT to use for finding fix commits:**
-
-The `bisect-dispatch.yaml` workflow finds **breaking** commits — it takes `good` (old, passing)
-and `bad` (new, failing) and binary-searches for the first bad commit. This is the **wrong
-direction** for finding fix commits. Do not use the bisect workflow for fix commit search;
-use the binary search approach above with individual pruned dispatches.
-
----
-
-## Known Pitfalls
-
-### 1. Wrong workflow selection
-
-**Error**: Guessing or remembering the workflow name without verifying.
-
-**Fix**: Always look up the job name from Snowflake (`CICD_JOB.NAME`) for a recent run of the
-test, then find the corresponding workflow file. See the "Verify `test_pipeline`" note in
-the Inputs section.
-
-### 2. Skipping test matrix pruning
-
-**Error**: Dispatching the full workflow instead of pruning to the failing test only.
-
-**Fix**: Step 3 (prune test matrix YAML) is mandatory before every verification dispatch.
-Skipping it wastes compute on unrelated tests and makes results harder to interpret.
-
-### 3. Confusing breaking commit vs. fix commit
-
-**Error**: The bisect workflow finds the commit that *broke* the test. The bug escape campaign
-looks for the commit that *fixed* the test. These are different commits in different directions.
-
-**Fix**: Bisect workflow → breaking commit (good=old, bad=new). Fix commit search → binary
-search on the `last_failing...first_passing` range using pruned verification dispatches.
-
----
 
 ## Future Automation
 
