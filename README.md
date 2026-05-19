@@ -6,8 +6,8 @@ A GitHub Actions-based system for CI triage and signal hygiene: identify likely 
 
 This repository provides the following capabilities:
 
-1. **Regression Handling**: AI-powered analysis of failing GitHub Actions workflows that:
-   - Invoked via `.github/actions/regression-handling/action.yml`
+1. **Regression Analysis**: AI-powered analysis of failing GitHub Actions workflows that:
+   - Invoked via `.github/actions/regression-analysis/action.yml`
    - Identifies the last successful run and first failing run
    - Downloads commit metadata between those boundaries
    - Uses GitHub Copilot CLI (LLM) to analyze code changes and determine root causes
@@ -32,17 +32,17 @@ This repository provides the following capabilities:
    - Generates error reports and incremental reports
 
 4. **Bug-Escape Guidance (Separate Workstream)**:
-   - Invoked as guidance in `.github/actions/regression-handling/regression_handling/instructions/instructions_footer_for_llm.txt`
+   - Invoked as guidance in `.github/actions/regression-analysis/regression_analysis/instructions/instructions_footer_for_llm.txt`
    - Documents when failures indicate missing lower-level coverage
    - Recommends shift-left test additions independently of issue grouping/maintenance logic
 
 ## Documentation
 
-For internal usage guides and runbooks, see the [Regression Handling Confluence page](https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/1794441312/How+to+Use+Regression+Handling).
+For internal usage guides and runbooks, see the [Regression Analysis Confluence page](https://tenstorrent.atlassian.net/wiki/spaces/MI6/pages/1794441312/How+to+Use+Regression+Handling).
 
 ## Quickstart
 
-### Regression Handling (Minimal Setup)
+### Regression Analysis (Minimal Setup)
 
 **Prerequisites:**
 - GitHub Personal Access Token with `copilot` scope → Store as `COPILOT_PAT` secret
@@ -53,7 +53,7 @@ For internal usage guides and runbooks, see the [Regression Handling Confluence 
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: tenstorrent/tt-auto-triage/.github/actions/regression-handling@main
+- uses: tenstorrent/tt-auto-triage/.github/actions/regression-analysis@main
   with:
     workflow-name: "galaxy-quick"
     job-name: "test-job"
@@ -114,7 +114,7 @@ This will sync errors from Slack to GitHub issues using default settings.
 
 ## Failure Case Categories
 
-The regression-handling system categorizes failures into 5 cases:
+The regression-analysis system categorizes failures into 5 cases:
 
 - **Case 1**: Deterministic failure with identified commit - A specific commit clearly explains the failure
 - **Case 2**: Deterministic failure but commit unknown - Failure is deterministic but the exact commit cannot be identified (expired logs, >100 commits, etc.)
@@ -124,9 +124,9 @@ The regression-handling system categorizes failures into 5 cases:
 
 ## Usage
 
-### Regression Handling
+### Regression Analysis
 
-The `regression-handling` action analyzes failing GitHub Actions workflows and produces triage reports.
+The `regression-analysis` action analyzes failing GitHub Actions workflows and produces triage reports.
 
 #### Basic Usage
 
@@ -144,8 +144,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run regression-handling
-        uses: tenstorrent/tt-auto-triage/.github/actions/regression-handling@main
+      - name: Run regression-analysis
+        uses: tenstorrent/tt-auto-triage/.github/actions/regression-analysis@main
         with:
           workflow-name: "your-workflow"
           job-name: "your-job-name"
@@ -186,14 +186,14 @@ The workflow needs the following permissions:
 #### Outputs
 
 The action produces:
-- `explanation.md`: Detailed markdown report in `.regression_handling/output/explanation.md`
-- `slack_message.json`: Formatted Slack message payload in `.regression_handling/output/slack_message.json`
-- Artifacts: Regression handling data and output are uploaded as workflow artifacts
+- `explanation.md`: Detailed markdown report in `.regression_analysis/output/explanation.md`
+- `slack_message.json`: Formatted Slack message payload in `.regression_analysis/output/slack_message.json`
+- Artifacts: Regression analysis data and output are uploaded as workflow artifacts
 
 #### Example: Triggering on Workflow Failure
 
 ```yaml
-name: Regression Handling on Failure
+name: Regression Analysis on Failure
 
 on:
   workflow_run:
@@ -214,8 +214,8 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_branch }}
 
-      - name: Run regression-handling
-        uses: tenstorrent/tt-auto-triage/.github/actions/regression-handling@main
+      - name: Run regression-analysis
+        uses: tenstorrent/tt-auto-triage/.github/actions/regression-analysis@main
         with:
           workflow-name: "ci"
           job-name: ${{ github.event.workflow_run.jobs[0].name }}
@@ -318,7 +318,7 @@ jobs:
 
 ## How It Works
 
-### Regression Handling Pipeline
+### Regression Analysis Pipeline
 
 1. **Find Boundaries**: Identifies the last successful run and first failing run for the specified workflow/job
 2. **Download Slack Directory**: Fetches Slack user/group directory for developer lookups
@@ -347,12 +347,12 @@ jobs:
 
 ### Bug-Escape Guidance (Separate Workstream)
 
-This is intentionally separate from issue grouping and issue maintenance workflows. It focuses on identifying likely bug escapes and proposing shift-left test coverage improvements in regression-handling outputs.
+This is intentionally separate from issue grouping and issue maintenance workflows. It focuses on identifying likely bug escapes and proposing shift-left test coverage improvements in regression-analysis outputs.
 
 ## Requirements
 
 - GitHub Actions runner with Ubuntu Linux
-- GitHub Copilot CLI access (for regression-handling)
+- GitHub Copilot CLI access (for regression-analysis)
 - Slack Bot Token with appropriate permissions
 - GitHub Personal Access Token with required scopes
 
@@ -360,8 +360,8 @@ This is intentionally separate from issue grouping and issue maintenance workflo
 
 Both actions produce artifacts that can be downloaded from workflow runs:
 
-- **regression-handling-data**: Contains commit metadata, boundary information, and intermediate analysis data
-- **regression-handling-output**: Contains the final `explanation.md` and `slack_message.json` files
+- **regression-analysis-data**: Contains commit metadata, boundary information, and intermediate analysis data
+- **regression-analysis-output**: Contains the final `explanation.md` and `slack_message.json` files
 - **error-report**: Contains the error report JSON (slack_output_analysis)
 - **incremental-error-report**: Contains incremental error report comparing against previous run
 
