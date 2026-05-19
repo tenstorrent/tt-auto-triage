@@ -1,0 +1,354 @@
+---
+name: regression-analysis
+description: Run regression_analysis automation with GitHub Copilot CLI and GitHub API access.
+inputs:
+  workflow-name:
+    description: "Workflow name without .yaml/.yml extension (e.g., galaxy-quick). The action tries both extensions automatically."
+    required: true
+  job-name:
+    description: Job/subjob name within the workflow.
+    required: true
+  copilot-pat:
+    description: Personal Access Token for GitHub/Copilot authentication.
+    required: true
+  slack-test-only:
+    description: Skip analysis steps and only send a canned Slack message.
+    required: false
+    default: "false"
+  slack_ts:
+    description: "Slack message timestamp for threading replies"
+    required: false
+    default: ""
+  allow-pings:
+    description: "Whether to allow pinging users/groups in the Slack message."
+    required: false
+    default: "false"
+  send-slack-message:
+    description: "Whether to send a Slack message."
+    required: false
+    default: "true"
+  enable-retry:
+    description: "Whether to automatically retry Case 1/4 failures on supported hardware (N150/N300/P100A/P150/P300) to confirm determinism."
+    required: false
+    default: "true"
+  cutoff-commit:
+    description: "Optional commit SHA to ignore all runs on commits newer than this one. Useful for testing retry logic on older failures when newer runs have already passed."
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Stage regression_analysis scripts
+      shell: bash
+      run: |
+        set -euo pipefail
+        TARGET="${GITHUB_WORKSPACE}/.regression_analysis"
+        rm -rf "$TARGET"
+        mkdir -p "$TARGET"
+        # Copy triage tooling
+        cp -R "${{ github.action_path }}/regression_analysis/." "$TARGET/"
+        find "$TARGET" -name "*.sh" -exec chmod +x {} \;
+        chmod +x "$TARGET/"*.py 2>/dev/null || true
+        # Mirror the checked-out repo into the workspace for the LLM (excluding the workspace itself)
+        rsync -a --delete \
+          --exclude '.regression_analysis/' \
+          --exclude '.git/' \
+          --exclude 'regression_analysis/' \
+          "$GITHUB_WORKSPACE"/ "$TARGET/workspace/"
+        echo "$TARGET" >> "$GITHUB_PATH"
+        mkdir -p "$TARGET/regression_analysis/data/config" "$TARGET/regression_analysis/logs" "$TARGET/regression_analysis/output"
+        # PR #23 organized static data into data/config, data/examples, data/templates.
+        # Scripts expect regression_analysis/data/ as canonical path with data/ as symlink.
+        # Merge the copied data/ contents into regression_analysis/data/ before symlinking.
+        cp -R "$TARGET/data/." "$TARGET/regression_analysis/data/" 2>/dev/null || true
+        rm -rf "$TARGET/data"
+        ln -sfn regression_analysis/data "$TARGET/data"
+        ln -sfn regression_analysis/logs "$TARGET/logs"
+        ln -sfn regression_analysis/output "$TARGET/output"
+        echo '{"should_cancel": false, "message": ""}' > "$TARGET/regression_analysis/data/config/cancel.json"
+
+    - name: Find boundaries
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.regression_analysis"
+        # Check cancel state
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        ./modules/boundaries/find_boundaries.sh \
+          "${{ inputs.workflow-name }}" \
+          "${{ inputs.job-name }}" \
+          "${{ inputs.cutoff-commit }}"
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Download Slack directory
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.regression_analysis"
+        # Check cancel state
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        ./download_slack_directory.py
+
+    - name: Install ripgrep
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.regression_analysis"
+        # Check cancel state
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        sudo apt-get update && sudo apt-get install -y ripgrep
+        rg --version || (echo "ripgrep installation failed" && exit 1)
+
+    - name: Setup Node.js v22+
+      if: inputs.slack-test-only != 'true'
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Install GitHub Copilot CLI
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.regression_analysis"
+        # Check cancel state
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        npm install -g @github/copilot
+        copilot --version || (echo "Copilot CLI installation failed" && exit 1)
+
+    - name: Execute filter_triage.sh
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        cd "${GITHUB_WORKSPACE}/.regression_analysis"
+        # Check cancel state
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        # Verify authentication tokens are set
+        if [ -z "${COPILOT_GITHUB_TOKEN:-}" ] && [ -z "${GH_TOKEN:-}" ] && [ -z "${GITHUB_TOKEN:-}" ]; then
+          echo "Warning: No authentication tokens found in environment"
+        fi
+        # Run filter_triage.sh with error handling - fail gracefully on any error
+        if ! ./filter_triage.sh \
+          "${{ inputs.workflow-name }}" \
+          "${{ inputs.job-name }}" \
+          ci; then
+          echo "filter_triage.sh failed, setting cancellation flag"
+          jq -n '{should_cancel: true, message: "Filter triage step failed unexpectedly. Check logs for details."}' > data/config/cancel.json
+        fi
+      env:
+        # Use TESTING_COPILOT_PAT for Copilot CLI authentication
+        COPILOT_GITHUB_TOKEN: ${{ inputs.copilot-pat }}
+        # Use github.token for gh CLI (used by bash scripts for GitHub API calls)
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Write cancellation explanation
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.regression_analysis"
+        CANCEL_FILE="data/config/cancel.json"
+        # Only write explanation if cancellation was requested
+        if [ ! -f "$CANCEL_FILE" ] || [ "$(jq -r '.should_cancel // false' "$CANCEL_FILE")" != "true" ]; then
+          echo "No cancellation requested, skipping"
+          exit 0
+        fi
+        REPORT_DIR="${GITHUB_WORKSPACE}/.regression_analysis/output"
+        mkdir -p "$REPORT_DIR"
+        RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+        RUN_LABEL="full_report_link #${GITHUB_RUN_NUMBER:-$GITHUB_RUN_ID}"
+        CANCEL_MESSAGE=$(jq -r '.message // ""' "$CANCEL_FILE")
+        {
+          echo "*Regression-analysis cancelled:*"
+          echo "$CANCEL_MESSAGE"
+          echo ""
+          echo "*Workflow:* ${{ inputs.workflow-name }}"
+          echo "*Job:* ${{ inputs.job-name }}"
+          echo "*Run:* <$RUN_URL|$RUN_LABEL>"
+        } > "$REPORT_DIR/explanation.md"
+
+    - name: Verify filter stage outputs
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.regression_analysis"
+        # Check cancel state
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        COMMIT_FILE="regression_analysis/data/commit_info.json"
+        if [ ! -f "$COMMIT_FILE" ]; then
+            echo "Filter stage did not produce $COMMIT_FILE" >&2
+            exit 1
+        fi
+        if [ ! -f "regression_analysis/data/error_message.txt" ]; then
+            touch "regression_analysis/data/error_message.txt"
+        fi
+
+    - name: Execute regression_analysis.sh
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.regression_analysis"
+        # Check cancel state
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        ./regression_analysis.sh \
+          "${{ inputs.workflow-name }}" \
+          "${{ inputs.job-name }}" \
+          ci
+      env:
+        REUSE_DATA: "true"
+        # Use TESTING_COPILOT_PAT for Copilot CLI authentication
+        COPILOT_GITHUB_TOKEN: ${{ inputs.copilot-pat }}
+        # Use github.token for gh CLI (used by bash scripts for GitHub API calls)
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Attempt auto fix PR (optional)
+      if: inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.regression_analysis"
+        # Check cancel state
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        ./run_auto_fix.sh \
+          "${{ inputs.workflow-name }}" \
+          "${{ inputs.job-name }}"
+      env:
+        COPILOT_GITHUB_TOKEN: ${{ inputs.copilot-pat }}
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ github.token }}
+
+    - name: Retry deterministic failures on supported hardware
+      if: inputs.slack-test-only != 'true' && inputs.enable-retry == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${GITHUB_WORKSPACE}/.regression_analysis"
+        # Check cancel state
+        if [ -f data/config/cancel.json ] && [ "$(jq -r '.should_cancel // false' data/config/cancel.json)" = "true" ]; then
+          echo "Skipping: cancellation requested"
+          exit 0
+        fi
+        # Check if slack_message.json exists before attempting retry
+        if [ ! -f "regression_analysis/output/slack_message.json" ]; then
+          echo "No slack_message.json found, skipping retry logic"
+          exit 0
+        fi
+        # Run retry logic for Case 1/4 on N150/N300/P150/P300 hardware
+        # This script will:
+        # 1. Check if scenario is "Deterministic failure with identified commit" or "Deterministic failure with multiple plausible commits"
+        # 2. Check if job name contains N150, N300, P150, or P300 (not galaxy/T3K/p100)
+        # 3. If both conditions met: re-run the job, wait for completion, compare results
+        # 4. Modify slack_message.json and explanation.md based on retry outcome
+        echo "=== Checking if retry should be attempted ==="
+        ./retry_on_deterministic.sh \
+          "${{ inputs.job-name }}" \
+          "${{ inputs.workflow-name }}" \
+          "${{ inputs.slack_ts }}"
+      env:
+        COPILOT_GITHUB_TOKEN: ${{ inputs.copilot-pat }}
+        # Use github.token for gh CLI calls - requires 'permissions: actions: write' in calling workflow
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ github.token }}
+        SLACK_BOT_TOKEN: ${{ env.SLACK_BOT_TOKEN }}
+        SLACK_CHANNEL_ID: ${{ env.SLACK_CHANNEL_ID }}
+
+    - name: Seed Slack test payload
+      if: inputs.slack-test-only == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        TARGET="${GITHUB_WORKSPACE}/.regression_analysis/output"
+        mkdir -p "$TARGET"
+        cp "${{ github.action_path }}/regression_analysis/data/examples/sample_slack_message.json" "$TARGET/slack_message.json"
+
+    - name: Debug Slack send configuration
+      if: always()
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "Regression-analysis Slack send flag (inputs.send-slack-message) = '${{ inputs.send-slack-message }}'"
+        echo "Regression-analysis Slack thread timestamp (inputs.slack_ts) = '${{ inputs.slack_ts }}'"
+        if [ "${{ inputs.send-slack-message }}" = "true" ]; then
+          echo "Regression-analysis: Slack notification step is ENABLED and will run (barring job-level skips)."
+        else
+          echo "Regression-analysis: Slack notification step is DISABLED and will NOT run."
+        fi
+
+    - name: Send Slack notification
+      if: always() && inputs.send-slack-message == 'true'
+      uses: tenstorrent/tt-auto-triage/.github/actions/slack-report-regression-analysis@main
+      with:
+        # slack_webhook_url is no longer used, using env.SLACK_BOT_TOKEN and env.SLACK_CHANNEL_ID instead inside the action
+        channel_id: ${{ env.SLACK_CHANNEL_ID }}
+        slack_message_path: .regression_analysis/output/slack_message.json
+        job_name: ${{ inputs.job-name }}
+        workflow_name: ${{ inputs.workflow-name }}
+        auto_fix_meta_path: .regression_analysis/data/auto_fix_metadata.json
+        slack_ts: ${{ inputs.slack_ts }}
+        allow_pings: ${{ inputs.allow-pings }}
+
+    - name: Publish triage report to summary
+      if: always() && inputs.slack-test-only != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        REPORT="${GITHUB_WORKSPACE}/.regression_analysis/output/explanation.md"
+        if [ -f "$REPORT" ]; then
+            {
+              echo "## Regression Analysis Report"
+              cat "$REPORT"
+            } >> "$GITHUB_STEP_SUMMARY"
+        else
+            echo "No explanation produced." >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+    - name: Upload regression-analysis data
+      if: always() && inputs.slack-test-only != 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: regression-analysis-data
+        path: ${{ github.workspace }}/.regression_analysis/data
+        if-no-files-found: ignore
+        include-hidden-files: true
+
+    - name: Upload regression-analysis output
+      if: always() && inputs.slack-test-only != 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: regression-analysis-output
+        path: ${{ github.workspace }}/.regression_analysis/output
+        if-no-files-found: ignore
+        include-hidden-files: true

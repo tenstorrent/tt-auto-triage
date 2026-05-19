@@ -1,0 +1,118 @@
+Error Comparison Task
+=====================
+
+Purpose
+-------
+Compare two CI failure error messages and determine if they failed for the same reason.
+This is a simple classification task - you must output a JSON file with your analysis.
+
+Inputs Provided
+---------------
+**Pre-extracted error summaries (may be incomplete):**
+- `./regression_analysis/data/original_error.txt` - extracted original failure message
+- `./regression_analysis/data/retry_error.txt` - extracted retry failure message
+
+**Raw logs (search these if the extracted errors are insufficient):**
+- `./regression_analysis/logs/` - contains raw job logs from both runs
+- `./regression_analysis/logs/retry/` - retry job logs specifically
+- Look for files ending in `.txt` containing the actual test output
+
+IMPORTANT: The pre-extracted error files may contain only generic messages like "exit code 1" 
+or be incomplete. If so, you MUST search the raw logs directory to find the actual error.
+Look for patterns like:
+- `FAILED` or `ERROR:` followed by test names
+- Python exceptions (AssertionError, RuntimeError, etc.)
+- Stack traces
+- pytest collection errors
+- Test assertion failures
+
+Task
+----
+1. Read the pre-extracted error files first
+2. If either error is missing, generic (e.g., just "exit code"), or too short (<50 chars), 
+   search the raw logs in `./regression_analysis/logs/` to find the actual error
+3. Compare the error messages to determine if they represent the same underlying failure
+4. Write your output to `./regression_analysis/data/error_comparison.json`
+
+Comparison Guidelines
+---------------------
+Consider the errors to be the **same failure** if:
+- The error type/exception is the same (e.g., both are AssertionError, RuntimeError, etc.)
+- The failure location is the same (same file, same test, same function)
+- The error message content is semantically equivalent (minor differences in values, timestamps, or memory addresses are acceptable)
+- The stack trace points to the same code path
+- Both show the same test failing with the same assertion
+
+Consider the errors to be **different failures** if:
+- Different error types (e.g., one is AssertionError, other is TimeoutError)
+- Different failure locations (different tests, different files)
+- The error messages indicate fundamentally different issues
+- One is an infrastructure/setup error and the other is a test failure
+
+Output Format
+-------------
+Write a JSON file to `./regression_analysis/data/error_comparison.json` with exactly this structure:
+
+```json
+{
+  "original_error_summary": "<1-2 sentence summary of original error>",
+  "retry_error_summary": "<1-2 sentence summary of retry error>",
+  "retry_error_extracted": "<the actual retry error message you found, up to 500 chars - this will be shown to users>",
+  "same_failure": true | false,
+  "reasoning": "<brief explanation of why you concluded they are the same or different>",
+  "searched_logs": true | false
+}
+```
+
+IMPORTANT: The `retry_error_extracted` field should contain the ACTUAL error text you found for the retry 
+(the specific exception, assertion failure, or error message). This is critical because the retry error 
+is often hard to extract programmatically, and your extraction will be used to show users what went wrong.
+
+Important Rules
+---------------
+- The `same_failure` field MUST be a boolean (true or false), not a string
+- If you had to search raw logs because extracted errors were insufficient, set `searched_logs` to true
+- Be conservative: if you cannot find the actual error in the retry, set `same_failure` to `false`
+- Focus on the actual error content, not peripheral logging or timestamps
+- If either error cannot be found even after searching logs, set `same_failure` to `false` with appropriate reasoning
+
+Example Output (same failure)
+-----------------------------
+```json
+{
+  "original_error_summary": "AssertionError in test_reduce_max: max mismatch expected=0.0, actual=0.125",
+  "retry_error_summary": "AssertionError in test_reduce_max: max mismatch expected=0.0, actual=0.125",
+  "retry_error_extracted": "FAILED tests/ttnn/unit_tests/test_ops.py::test_reduce_max - AssertionError: max mismatch expected=0.0, actual=0.125",
+  "same_failure": true,
+  "reasoning": "Both runs failed with identical AssertionError in the same test function with the same assertion message, indicating a deterministic failure.",
+  "searched_logs": false
+}
+```
+
+Example Output (different failure)
+----------------------------------
+```json
+{
+  "original_error_summary": "AssertionError in test_reduce_max: max mismatch expected=0.0, actual=0.125",
+  "retry_error_summary": "TimeoutError: Job exceeded maximum runtime of 3600 seconds",
+  "retry_error_extracted": "TimeoutError: Job exceeded maximum runtime of 3600 seconds. The job was terminated.",
+  "same_failure": false,
+  "reasoning": "The original run failed due to an assertion error in the test logic, while the retry failed due to a timeout. These are different failure modes.",
+  "searched_logs": true
+}
+```
+
+Example Output (could not find retry error)
+-------------------------------------------
+```json
+{
+  "original_error_summary": "AssertionError in test_reduce_max: max mismatch expected=0.0, actual=0.125",
+  "retry_error_summary": "Could not determine - only found generic 'exit code 1' in logs",
+  "retry_error_extracted": "Process exited with code 1 (no detailed error found in logs)",
+  "same_failure": false,
+  "reasoning": "Unable to extract the actual retry error message from logs. Cannot confirm if failures are the same without seeing the actual error.",
+  "searched_logs": true
+}
+```
+
+Do not produce any other output files. Only write to `./regression_analysis/data/error_comparison.json`.

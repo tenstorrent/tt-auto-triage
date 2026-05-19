@@ -1,0 +1,5 @@
+# Concatenated in order for the filter-stage Copilot pass (one path per line, relative to regression_analysis root).
+# Add a new line to append another instruction fragment (e.g. filter_perf_instructions_for_llm.txt).
+
+instructions/filter_instructions_for_llm.txt
+instructions/filter_hang_instructions_for_llm.txt

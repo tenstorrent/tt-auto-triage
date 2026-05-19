@@ -1,0 +1,72 @@
+name: "Regression Analysis Slack Reporter"
+description: "Format slack_message.json and send it to Slack."
+inputs:
+  slack_webhook_url:
+    description: "Webhook URL for the Slack channel to be posted to (deprecated in favor of channel_id + env.SLACK_BOT_TOKEN)."
+    required: false
+  channel_id:
+    description: "Slack Channel ID to post message to."
+    required: false
+  slack_message_path:
+    description: "Path to slack_message.json."
+    required: false
+    default: .regression_analysis/output/slack_message.json
+  job_name:
+    description: "The job/subjob name (from user input)."
+    required: true
+  workflow_name:
+    description: "The workflow name (from user input)."
+    required: true
+  auto_fix_meta_path:
+    description: "Optional metadata JSON containing auto-fix PR info."
+    required: false
+    default: ""
+  slack_ts:
+    description: "Slack message timestamp for threading replies"
+    required: false
+    default: ""
+  allow_pings:
+    description: "Whether to allow pinging users/groups in the message."
+    required: false
+    default: "false"
+runs:
+  using: "composite"
+  steps:
+    - name: Fetch parent message and extract job owner
+      id: fetch_owner
+      if: always()
+      shell: bash
+      env:
+        SLACK_TS: ${{ inputs.slack_ts }}
+        CHANNEL_ID: ${{ inputs.channel_id }}
+        JOB_NAME: ${{ inputs.job_name }}
+      run: |
+        bash "${{ github.action_path }}/scripts/fetch_job_owner.sh" || echo "Warning: Job owner extraction failed (non-fatal), continuing without JOB OWNER field"
+
+    - name: Build Slack payload
+      id: build
+      shell: bash
+      env:
+        MESSAGE_PATH: ${{ inputs.slack_message_path }}
+        AUTO_FIX_META: ${{ inputs.auto_fix_meta_path }}
+        SLACK_TS: ${{ inputs.slack_ts }}
+        ALLOW_PINGS: ${{ inputs.allow_pings }}
+        JOB_NAME: ${{ inputs.job_name }}
+        WORKFLOW_NAME: ${{ inputs.workflow_name }}
+      run: bash "${{ github.action_path }}/scripts/build_slack_payload.sh"
+
+    - name: Report via Slack
+      if: steps.build.outputs.has_payload == 'true'
+      uses: slackapi/slack-github-action@v1.26.0
+      with:
+        # Use payload-file-path to ensure proper JSON encoding of newlines and special chars
+        payload-file-path: ${{ steps.build.outputs.payload_file }}
+        channel-id: ${{ inputs.channel_id }}
+      env:
+        SLACK_BOT_TOKEN: ${{ env.SLACK_BOT_TOKEN }}
+        SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}
+
+    - name: Skip Slack notification
+      if: steps.build.outputs.has_payload != 'true'
+      shell: bash
+      run: echo "ℹ️ No Slack payload produced; notification skipped."
