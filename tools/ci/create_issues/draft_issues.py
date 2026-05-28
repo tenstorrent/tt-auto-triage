@@ -116,6 +116,26 @@ def draft_issue_body(
     else:
         grouped_jobs_section = ""
 
+    # ── Build regression timeline section from boundary data ──────
+    timeline_lines: list[str] = []
+    if job.get("last_passing_sha"):
+        sha = job["last_passing_sha"][:12]
+        date = job.get("last_passing_date", "N/A")
+        url = job.get("last_passing_url", "")
+        timeline_lines.append(f"- Last passing run: commit `{sha}` on {date}" + (f" — {url}" if url else ""))
+    if job.get("first_failing_sha"):
+        sha = job["first_failing_sha"][:12]
+        date = job.get("first_failing_date", "N/A")
+        url = job.get("first_failing_url", "")
+        timeline_lines.append(f"- First failing run: commit `{sha}` on {date}" + (f" — {url}" if url else ""))
+    if job.get("last_failing_sha"):
+        sha = job["last_failing_sha"][:12]
+        date = job.get("last_failing_date", "N/A")
+        url = job.get("last_failing_url", "")
+        timeline_lines.append(f"- Most recent failing run: commit `{sha}` on {date}" + (f" — {url}" if url else ""))
+
+    regression_timeline = "\n".join(timeline_lines) if timeline_lines else "No temporal boundary data available."
+
     prompt = _PROMPT_TEMPLATE.substitute(
         workflow_name=workflow_name,
         job_name=job_name,
@@ -125,6 +145,7 @@ def draft_issue_body(
         log_sections="\n".join(f"- {section}" for section in log_sections),
         marker=MARKER,
         grouped_jobs_section=grouped_jobs_section,
+        regression_timeline=regression_timeline,
     )
     backend = os.environ.get("LLM_BACKEND", _DEFAULT_BACKEND)
     try:

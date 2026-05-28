@@ -21,6 +21,44 @@ def _run_timestamp(run: dict[str, Any]) -> float:
         return 0.0
 
 
+def _run_date_iso(run: dict[str, Any]) -> str:
+    """Return the ISO-8601 date string from a run, or '' if unavailable."""
+    return run.get("created_at") or run.get("run_started_at") or ""
+
+
+def _build_boundary_info(
+    first_failing_run: dict[str, Any] | None,
+    last_passing_run: dict[str, Any] | None,
+    most_recent_failing_runs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build a dict with temporal boundary fields for a failing job.
+
+    Fields produced (all optional — missing when data is unavailable):
+      - first_failing_sha / first_failing_date / first_failing_url
+      - last_failing_sha  / last_failing_date  / last_failing_url
+      - last_passing_sha  / last_passing_date  / last_passing_url
+    """
+    info: dict[str, Any] = {}
+
+    if first_failing_run:
+        info["first_failing_sha"] = first_failing_run.get("head_sha", "")
+        info["first_failing_date"] = _run_date_iso(first_failing_run)
+        info["first_failing_url"] = first_failing_run.get("html_url", "")
+
+    if most_recent_failing_runs:
+        latest = most_recent_failing_runs[0]
+        info["last_failing_sha"] = latest.get("head_sha", "")
+        info["last_failing_date"] = _run_date_iso(latest)
+        info["last_failing_url"] = latest.get("html_url", "")
+
+    if last_passing_run:
+        info["last_passing_sha"] = last_passing_run.get("head_sha", "")
+        info["last_passing_date"] = _run_date_iso(last_passing_run)
+        info["last_passing_url"] = last_passing_run.get("html_url", "")
+
+    return info
+
+
 def find_failing_jobs(
     workflow_data: list[list[Any]],
     target_repo: str,
@@ -101,6 +139,32 @@ def find_failing_jobs(
         for run_id in run_ids[1:]:
             common_jobs &= set(run_failed_jobs[run_id])
 
+        # ── Temporal boundary: first failing & last passing run ────────
+        # sorted_runs covers the N most-recent (all failures).  Walk the
+        # full history (newest→oldest) to locate the earliest failure and
+        # the most-recent success before it.
+        all_sorted = sorted(runs, key=_run_timestamp, reverse=True)
+        first_failing_run: dict[str, Any] | None = None
+        last_passing_run: dict[str, Any] | None = None
+        for run in all_sorted:
+            conclusion = run.get("conclusion")
+            if conclusion == "failure":
+                first_failing_run = run  # keep overwriting → oldest failure
+            elif conclusion == "success":
+                # First success we encounter while scanning newest→oldest:
+                # if we already recorded at least one failure, this success
+                # is the boundary.
+                if first_failing_run is not None:
+                    last_passing_run = run
+                    break
+                # If no failure seen yet this means the most-recent run is a
+                # success — shouldn't happen (we already validated N
+                # consecutive failures) but guard anyway.
+
+        boundary_info = _build_boundary_info(
+            first_failing_run, last_passing_run, sorted_runs,
+        )
+
         for job_name in sorted(common_jobs):
             if tracked_pairs and (workflow_name, job_name) in tracked_pairs:
                 log(f"  Skipping already-tracked job: {workflow_name} / {job_name}")
@@ -112,6 +176,7 @@ def find_failing_jobs(
                     "consecutive": consecutive,
                     "job_urls": [run_failed_jobs[run_id].get(job_name, "") for run_id in run_ids],
                     "run_urls": [run.get("html_url", "") for run in sorted_runs],
+                    **boundary_info,
                 }
             )
 

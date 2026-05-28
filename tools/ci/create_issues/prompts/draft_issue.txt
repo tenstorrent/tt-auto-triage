@@ -9,6 +9,9 @@ $run_url_list
 Failing job URLs:
 $job_url_list
 
+Regression timeline (last passing / first failing boundaries):
+$regression_timeline
+
 Log files for each of the $consecutive failing runs are saved locally.
 You MUST read each log file and determine the terminal failure.
 
@@ -24,6 +27,12 @@ INSTRUCTIONS:
      ## CI Failure Report
      **Workflow:** ...
      **Job:** ...
+     ### Regression timeline
+     Include the regression timeline data provided above. Show:
+     - Last passing commit (SHA + date + run URL) — or "N/A" if unknown
+     - First failing commit (SHA + date + run URL)
+     - Most recent failing commit (SHA + date + run URL)
+     This helps readers immediately gauge when the regression started and how long it has persisted.
      ### Failing job URLs (last $consecutive runs)
      - (list each job URL)
      ### Affected jobs
