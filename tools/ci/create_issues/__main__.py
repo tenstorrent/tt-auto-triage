@@ -21,7 +21,7 @@ from .issue_state import AUTO_TRIAGE_LABEL, append_base_markers, tracked_pairs_f
 from .render_summary import load_all_open_issues, render
 
 TARGET_REPO = os.environ.get("TARGET_REPO", "tenstorrent/tt-metal")
-ISSUE_REPO = os.environ.get("ISSUE_REPO", "ebanerjeeTT/issue_dump")
+ISSUE_REPO = os.environ.get("ISSUE_REPO", "tenstorrent/tt-metal")
 CREATE_ISSUES = os.environ.get("CREATE_ISSUES", "false").lower() == "true"
 # Adaptive consecutive-failure threshold: workflows with more than
 # HIGH_VOLUME_RUNS_PER_DAY runs on main in the last 24h require
