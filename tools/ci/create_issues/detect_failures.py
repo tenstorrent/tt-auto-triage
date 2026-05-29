@@ -123,8 +123,8 @@ def find_failing_jobs(
                     "jobs",
                     token,
                 )
-            except RuntimeError as exc:
-                log(f"  Warning: failed to fetch jobs for run {run_id}: {exc} — skipping run")
+            except Exception as exc:
+                log(f"  Warning: skipping run {run_id} for '{workflow_name}' due to API error ({type(exc).__name__}): {exc}")
                 continue
             run_failed_jobs[run_id] = {
                 job["name"]: job.get("html_url", "") for job in all_jobs if job.get("conclusion") == "failure"
