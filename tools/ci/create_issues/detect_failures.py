@@ -277,9 +277,10 @@ _ERROR_PATTERNS: tuple[re.Pattern, ...] = tuple(
 _GENERIC_SIGNATURE_PATTERNS: tuple[re.Pattern, ...] = tuple(
     re.compile(p, re.IGNORECASE)
     for p in (
-        r"\bprocess completed with exit code \d+\b",
-        r"\bexit code \d+\b",
-        r"\bthe operation was canceled\b",
+        r"error:\s*process completed with exit code \d+\.?",
+        r"process completed with exit code \d+\.?",
+        r"error:\s*the operation was canceled\.?",
+        r"the operation was canceled\.?",
     )
 )
 
@@ -295,7 +296,8 @@ def _normalize_error_signature(raw: str) -> str:
 
 
 def _is_generic_error_signature(sig: str) -> bool:
-    return any(p.search(sig) for p in _GENERIC_SIGNATURE_PATTERNS)
+    normalized = sig.strip().lower()
+    return any(p.fullmatch(normalized) for p in _GENERIC_SIGNATURE_PATTERNS)
 
 
 def _regex_extract_error(log_text: str) -> str:

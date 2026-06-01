@@ -20,8 +20,12 @@ $log_sections
 INSTRUCTIONS:
 1. Read ALL $consecutive log files using your file reading tools.
 2. Identify the terminal failure or error in each log.
-3. Determine if all $consecutive runs fail with semantically identical errors.
-4. If yes: draft a GitHub issue title and body in this exact format:
+3. Determine if all $consecutive runs fail with semantically identical terminal errors.
+4. Be strict. Set deterministic=false unless ALL of the following are true:
+   - every run shows the same terminal failure class (same root error, allowing minor numeric/timestamp differences),
+   - your error_excerpt quotes those terminal lines directly from the provided logs (no paraphrased or inferred error text),
+   - regression boundary is clear: last passing commit and first failing commit are both present and different SHAs.
+5. If deterministic=true: draft a GitHub issue title and body in this exact format:
    - Title: a concise description of the failure (NOT just "deterministic failure")
    - Body: a markdown CI Failure Report with these sections:
      ## CI Failure Report
@@ -43,8 +47,10 @@ INSTRUCTIONS:
      (how to reproduce locally based on the job command)
      ### Notes
      (any additional context, e.g. timeout vs assertion failure)
-5. If the errors are NOT semantically identical across all $consecutive runs, set deterministic to false.
+6. If deterministic=false, keep issue_title and issue_body empty strings and provide a short reason.
+
+DO NOT invent or infer evidence that is not present in the logs.
 
 Output the marker below on its own line, followed by compact JSON only:
 $marker
-{"deterministic": true/false, "confidence": "low|medium|high", "error_excerpt": "key error text", "issue_title": "[CI] ...", "issue_body": "full markdown body"}
+{"deterministic": true/false, "confidence": "low|medium|high", "reason": "why deterministic is false (or empty)", "error_excerpt": "exact key terminal error text from logs", "issue_title": "[CI] ...", "issue_body": "full markdown body"}

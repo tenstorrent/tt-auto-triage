@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -36,10 +37,47 @@ MAX_ISSUES = int(os.environ.get("MAX_ISSUES", "0"))
 WORKFLOW_FILTER = os.environ.get("WORKFLOW_FILTER", "")
 
 DEDUP_THRESHOLD = 0.85
+AGENT_EXCERPT_MATCH_THRESHOLD = 0.60
 
 
 def _entry(job: dict[str, Any], action: str, **kwargs: Any) -> dict[str, Any]:
     return {"workflow_name": job["workflow_name"], "job": job["job_name"], "action": action, **kwargs}
+
+
+def _normalize_for_compare(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _has_clear_regression_boundary(job: dict[str, Any]) -> bool:
+    last_passing_raw = job.get("last_passing_sha")
+    first_failing_raw = job.get("first_failing_sha")
+    if not last_passing_raw or not first_failing_raw:
+        return False
+    last_passing_sha = str(last_passing_raw).strip()
+    first_failing_sha = str(first_failing_raw).strip()
+    if not last_passing_sha or not first_failing_sha:
+        return False
+    return last_passing_sha != first_failing_sha
+
+
+def _agent_excerpt_matches_signature(signature: str, error_excerpt: str) -> bool:
+    sig = _normalize_for_compare(signature)
+    excerpt = _normalize_for_compare(error_excerpt)
+    if not sig:
+        return True
+    if not excerpt:
+        return False
+    if sig in excerpt or excerpt in sig:
+        return True
+    if _error_similarity(sig, excerpt) >= AGENT_EXCERPT_MATCH_THRESHOLD:
+        return True
+    for line in error_excerpt.splitlines():
+        normalized_line = _normalize_for_compare(line)
+        if not normalized_line:
+            continue
+        if _error_similarity(sig, normalized_line) >= AGENT_EXCERPT_MATCH_THRESHOLD:
+            return True
+    return False
 
 
 def create_issue(
@@ -160,8 +198,26 @@ def main() -> int:
             summary.append(_entry(job, "agent_skipped", reason=agent_result.get("reason", "not deterministic")))
             continue
 
-        if not agent_result or not agent_result.get("issue_body"):
+        if not agent_result:
+            summary.append(_entry(job, "agent_skipped", reason="no result from agent"))
+            continue
+
+        if not agent_result.get("issue_body"):
             summary.append(_entry(job, "agent_skipped", reason="no issue body from agent"))
+            continue
+
+        if not _has_clear_regression_boundary(consistent_job):
+            summary.append(_entry(job, "agent_skipped", reason="unclear regression boundary"))
+            continue
+
+        confidence = str(agent_result.get("confidence", "")).strip().lower()
+        if confidence not in {"medium", "high"}:
+            summary.append(_entry(job, "agent_skipped", reason=f"low confidence: {confidence or 'unknown'}"))
+            continue
+
+        error_excerpt = agent_result.get("error_excerpt") or ""
+        if not _agent_excerpt_matches_signature(sig, str(error_excerpt)):
+            summary.append(_entry(job, "agent_skipped", reason="error excerpt mismatch vs extracted signature"))
             continue
 
         # ── Step 5: Dry-run gate ────────────────────────────────────

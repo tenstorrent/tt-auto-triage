@@ -77,6 +77,16 @@ class RegexExtractErrorTests(unittest.TestCase):
         sig = _regex_extract_error(log)
         self.assertIn("exit code 137", sig.lower())
 
+    def test_does_not_treat_specific_error_with_exit_code_text_as_generic(self) -> None:
+        log = "\n".join(
+            [
+                "FAILED UnitTest.TerminalCase",
+                "AssertionError: expected 1 == 2 (then process completed with exit code 1)",
+            ]
+        )
+        sig = _regex_extract_error(log)
+        self.assertIn("AssertionError", sig)
+
 
 if __name__ == "__main__":
     unittest.main()
