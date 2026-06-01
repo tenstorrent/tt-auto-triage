@@ -71,10 +71,10 @@ def main() -> int:
     if not os.environ.get("COPILOT_PAT"):
         log("COPILOT_PAT is required.")
         return 1
-    if CONSECUTIVE_HIGH_VOLUME > CONSECUTIVE_LOW_VOLUME:
+    if CONSECUTIVE_HIGH_VOLUME < CONSECUTIVE_LOW_VOLUME:
         log(
             f"CONSECUTIVE_FAILURES_HIGH_VOLUME ({CONSECUTIVE_HIGH_VOLUME}) must be "
-            f"<= CONSECUTIVE_FAILURES_LOW_VOLUME ({CONSECUTIVE_LOW_VOLUME})"
+            f">= CONSECUTIVE_FAILURES_LOW_VOLUME ({CONSECUTIVE_LOW_VOLUME})"
         )
         return 1
     workflow_data = download_workflow_data(TARGET_REPO)
