@@ -52,16 +52,28 @@ def _normalize_for_compare(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
 
-def _has_clear_regression_boundary(job: dict[str, Any]) -> bool:
-    last_passing_raw = job.get("last_passing_sha")
+def _regression_boundary_rejection_reason(job: dict[str, Any]) -> str | None:
+    """Return a rejection reason when boundary data is contradictory or missing.
+
+    We allow "always-failing since introduction" cases where no last passing
+    run is known, as long as first failing SHA exists.
+    """
     first_failing_raw = job.get("first_failing_sha")
-    if not last_passing_raw or not first_failing_raw:
-        return False
-    last_passing_sha = str(last_passing_raw).strip()
+    if not first_failing_raw:
+        return "missing first failing boundary"
     first_failing_sha = str(first_failing_raw).strip()
-    if not last_passing_sha or not first_failing_sha:
-        return False
-    return last_passing_sha != first_failing_sha
+    if not first_failing_sha:
+        return "missing first failing boundary"
+
+    last_passing_raw = job.get("last_passing_sha")
+    if not last_passing_raw:
+        return None
+    last_passing_sha = str(last_passing_raw).strip()
+    if not last_passing_sha:
+        return None
+    if last_passing_sha == first_failing_sha:
+        return "invalid regression boundary: last passing SHA equals first failing SHA"
+    return None
 
 
 def _agent_excerpt_matches_signature(signature: str, error_excerpt: str) -> bool:
@@ -219,8 +231,9 @@ def main() -> int:
             summary.append(_entry(job, "agent_skipped", reason=reason))
             continue
 
-        if not _has_clear_regression_boundary(consistent_job):
-            reason = "unclear regression boundary"
+        boundary_reason = _regression_boundary_rejection_reason(consistent_job)
+        if boundary_reason:
+            reason = boundary_reason
             _log_rejection(job, "post-agent/gates", reason)
             summary.append(_entry(job, "agent_skipped", reason=reason))
             continue

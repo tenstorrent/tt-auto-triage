@@ -24,7 +24,8 @@ INSTRUCTIONS:
 4. Be strict. Set deterministic=false unless ALL of the following are true:
    - every run shows the same terminal failure class (same root error, allowing minor numeric/timestamp differences),
    - your error_excerpt quotes those terminal lines directly from the provided logs (no paraphrased or inferred error text),
-   - regression boundary is clear: last passing commit and first failing commit are both present and different SHAs.
+   - first failing commit is identified from the run data,
+   - if a last passing commit exists, it must be a different SHA from first failing.
 5. If deterministic=true: draft a GitHub issue title and body in this exact format:
    - Title: a concise description of the failure (NOT just "deterministic failure")
    - Body: a markdown CI Failure Report with these sections:
