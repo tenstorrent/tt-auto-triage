@@ -20,9 +20,9 @@ on:
         type: string
         default: ""
       llm-backend:
-        description: "LLM backend for issue drafting: 'cursor' (default) or 'copilot'"
+        description: "LLM backend for issue drafting (only 'copilot' is supported)"
         type: string
-        default: "cursor"
+        default: "copilot"
       consecutive-failures-high-volume:
         description: "Consecutive failures required to file an issue for workflows with more than 'high-volume-runs-per-day' main runs in the last 24h."
         type: number
@@ -42,12 +42,9 @@ on:
       ISSUE_WRITE_TOKEN:
         description: "Token with write access to the issue repository"
         required: true
-      CURSOR_API_KEY:
-        description: "Cursor API key for issue drafting (required when llm-backend=cursor)"
-        required: false
       COPILOT_PAT:
-        description: "GitHub PAT for Copilot CLI auth (required when llm-backend=copilot)"
-        required: false
+        description: "GitHub PAT for Copilot CLI auth"
+        required: true
 
 permissions:
   contents: read
@@ -65,27 +62,12 @@ jobs:
           ref: ebanerjee/create-issues-copilot
           persist-credentials: false
 
-      - name: Install Cursor CLI
-        if: inputs.llm-backend == 'cursor'
-        run: |
-          set -euo pipefail
-          install_script="$(mktemp)"
-          curl --fail --show-error --silent --location \
-            --proto '=https' --tlsv1.2 \
-            https://cursor.com/install \
-            -o "$install_script"
-          bash "$install_script"
-          rm -f "$install_script"
-          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
-
       - name: Set up Node.js 24 (required for Copilot CLI)
-        if: inputs.llm-backend == 'copilot'
         uses: actions/setup-node@v4
         with:
           node-version: '24'
 
       - name: Install GitHub Copilot CLI
-        if: inputs.llm-backend == 'copilot'
         run: |
           set -euo pipefail
           npm install -g @github/copilot
@@ -94,24 +76,16 @@ jobs:
       - name: Validate secrets
         env:
           AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
-          LLM_BACKEND: ${{ inputs.llm-backend }}
         run: |
           [ -n "$AGGREGATE_READ_TOKEN" ] || { echo "::error::AGGREGATE_READ_TOKEN is required"; exit 1; }
-          if [ "$LLM_BACKEND" = "copilot" ]; then
-            [ -n "$COPILOT_PAT" ] || { echo "::error::COPILOT_PAT is required when llm-backend=copilot"; exit 1; }
-          else
-            [ -n "$CURSOR_API_KEY" ] || { echo "::error::CURSOR_API_KEY is required when llm-backend=cursor"; exit 1; }
-          fi
+          [ -n "$COPILOT_PAT" ] || { echo "::error::COPILOT_PAT is required"; exit 1; }
 
       - name: Run issue creation stage
         env:
           GITHUB_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
           ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
-          LLM_BACKEND: ${{ inputs.llm-backend }}
+          COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
           CREATE_ISSUES: "true"
           ISSUE_REPO: ${{ inputs.issue-repo }}
           TARGET_REPO: ${{ inputs.target-repo }}

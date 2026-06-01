@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import difflib as _difflib
 import os
 import re
 import time
@@ -140,26 +141,23 @@ def find_failing_jobs(
             common_jobs &= set(run_failed_jobs[run_id])
 
         # ── Temporal boundary: first failing & last passing run ────────
-        # sorted_runs covers the N most-recent (all failures).  Walk the
-        # full history (newest→oldest) to locate the earliest failure and
-        # the most-recent success before it.
+        # Walk full history (newest→oldest) to find the current contiguous
+        # failure streak and the most-recent success before it.
         all_sorted = sorted(runs, key=_run_timestamp, reverse=True)
         first_failing_run: dict[str, Any] | None = None
         last_passing_run: dict[str, Any] | None = None
         for run in all_sorted:
             conclusion = run.get("conclusion")
             if conclusion == "failure":
-                first_failing_run = run  # keep overwriting → oldest failure
+                first_failing_run = run  # move boundary back into the streak
             elif conclusion == "success":
-                # First success we encounter while scanning newest→oldest:
-                # if we already recorded at least one failure, this success
-                # is the boundary.
                 if first_failing_run is not None:
+                    # First success after the failure streak — this is the
+                    # boundary between the current streak and older history.
                     last_passing_run = run
                     break
-                # If no failure seen yet this means the most-recent run is a
-                # success — shouldn't happen (we already validated N
-                # consecutive failures) but guard anyway.
+                # Most-recent run is a success — no current failure streak.
+                break
 
         boundary_info = _build_boundary_info(
             first_failing_run, last_passing_run, sorted_runs,
@@ -252,9 +250,8 @@ def download_job_logs(
 
 
 # ---------------------------------------------------------------------------
-# Deduplication: group jobs with similar errors
+# Error signature extraction and similarity
 # ---------------------------------------------------------------------------
-import difflib as _difflib
 
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 _TIMESTAMP_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z\s*", re.MULTILINE)
@@ -276,51 +273,6 @@ _ERROR_PATTERNS: tuple[re.Pattern, ...] = tuple(
         r"Error:[^\n]{0,200}",
     )
 )
-
-_EXTRACT_ERROR_PROMPT = """\
-You are analyzing a CI job failure log. Your task is to extract the specific root-cause error.
-
-Rules:
-- Return ONLY the error message text — no explanation, no context, no formatting.
-- Ignore infrastructure noise: package installation failures, network timeouts, hugepages errors, \
-OOM killer messages, disk full, device unavailable, environment setup failures.
-- Focus on the actual test/assertion failure (e.g. Python exception, TT_FATAL, SIGABRT, \
-pytest FAILED, assertion error, shape mismatch, wrong output value).
-- If multiple errors exist, return only the primary root cause.
-- If no meaningful test failure is found (only infrastructure errors), return exactly: NO_TEST_FAILURE
-
-Log tail (last ~5000 characters):
-{log_tail}
-"""
-
-
-def _extract_error_with_llm(
-    log_text: str,
-    model: str,
-    backend: str,
-) -> str:
-    """Call the LLM to extract the specific root-cause error from a log.
-
-    Returns the extracted error string, or empty string on failure.
-    Falls back to empty string so the caller can use regex extraction instead.
-    """
-    # Lazy import to avoid circular dependency at module load time
-    from .draft_issues import _run_llm_agent  # noqa: PLC0415
-
-    tail = log_text[-5_000:]
-    prompt = _EXTRACT_ERROR_PROMPT.format(log_tail=tail)
-    try:
-        result = _run_llm_agent(prompt, model=model, backend=backend)
-        # Strip markdown fences if the agent wrapped the result
-        result = result.strip()
-        if result.startswith("```"):
-            result = result.split("\n", 1)[-1].rstrip("`").strip()
-        if result == "NO_TEST_FAILURE" or not result:
-            return ""
-        return result[:500]  # cap length to prevent pathological inputs
-    except Exception as exc:
-        log(f"    LLM error extraction failed ({type(exc).__name__}): {exc}")
-        return ""
 
 
 def _regex_extract_error(log_text: str) -> str:
@@ -344,89 +296,6 @@ def _error_similarity(a: str, b: str) -> float:
     if not a or not b:
         return 0.0
     return _difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
-
-
-def group_similar_jobs(
-    jobs: list[dict[str, Any]],
-    threshold: float = 0.90,
-    model: str = "claude-4-sonnet",
-    backend: str = "cursor",
-) -> list[list[dict[str, Any]]]:
-    """Group jobs with similar error signatures to avoid filing duplicate issues.
-
-    Extracts the root-cause error via LLM for accurate comparison, falling back
-    to regex extraction if the LLM call fails.  Uses a high similarity threshold
-    (default 0.90) to avoid false-positive grouping of unrelated failures.
-
-    Returns a list of groups; each group is a non-empty list of job dicts.
-    The first entry in each group is the *primary* job (drives issue creation).
-    """
-    signatures: list[str] = []
-    sig_source: list[str] = []  # "llm" or "regex" per job, for logging
-
-    for job in jobs:
-        log_text = ""
-        for log_path in job.get("log_paths", []):
-            try:
-                text = Path(log_path).read_text(errors="replace")
-                # Prefer the most recent run (first log path) and read from tail
-                log_text = text[-100_000:]
-                break
-            except Exception:
-                pass
-
-        sig = ""
-        source = "none"
-        if log_text:
-            sig = _extract_error_with_llm(log_text, model=model, backend=backend)
-            if sig:
-                source = "llm"
-            else:
-                # LLM failed or returned no test failure — fall back to regex
-                sig = _regex_extract_error(log_text)
-                if sig:
-                    source = "regex"
-
-        signatures.append(sig)
-        sig_source.append(source)
-        short = sig[:80] if sig else "(no signature)"
-        log(f"    Sig [{source}] [{job['job_name']!r:.40}]: {short}")
-
-    visited: set[int] = set()
-    groups: list[list[dict[str, Any]]] = []
-    for i in range(len(jobs)):
-        if i in visited:
-            continue
-        group = [i]
-        visited.add(i)
-        # Only group if both jobs have signatures from the same source class
-        # (don't mix LLM-extracted with regex-extracted — quality mismatch)
-        if signatures[i] and sig_source[i] == "llm":
-            effective_threshold = threshold  # high threshold for LLM extractions
-        elif signatures[i]:
-            effective_threshold = 0.65  # original threshold for regex fallback
-        else:
-            effective_threshold = 1.1  # impossible threshold → no grouping
-
-        for j in range(i + 1, len(jobs)):
-            if j in visited:
-                continue
-            # Only group LLM-with-LLM or regex-with-regex, not mixed
-            if sig_source[j] != sig_source[i]:
-                continue
-            if _error_similarity(signatures[i], signatures[j]) >= effective_threshold:
-                group.append(j)
-                visited.add(j)
-        groups.append([jobs[k] for k in group])
-
-    merged_count = sum(1 for g in groups if len(g) > 1)
-    saved_count = sum(len(g) - 1 for g in groups if len(g) > 1)
-    if saved_count:
-        log(
-            f"  Similarity grouping: {merged_count} multi-job group(s), "
-            f"{saved_count} duplicate issue(s) suppressed"
-        )
-    return groups
 
 
 

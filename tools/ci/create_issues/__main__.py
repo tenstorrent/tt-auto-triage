@@ -31,11 +31,9 @@ CONSECUTIVE_HIGH_VOLUME = int(os.environ.get("CONSECUTIVE_FAILURES_HIGH_VOLUME",
 CONSECUTIVE_LOW_VOLUME = int(os.environ.get("CONSECUTIVE_FAILURES_LOW_VOLUME", "2"))
 HIGH_VOLUME_RUNS_PER_DAY = int(os.environ.get("HIGH_VOLUME_RUNS_PER_DAY", "5"))
 ISSUE_WRITE_TOKEN = os.environ.get("ISSUE_WRITE_TOKEN", "")
-CURSOR_MODEL = os.environ.get("CURSOR_MODEL", "claude-4-sonnet")
 SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
 MAX_ISSUES = int(os.environ.get("MAX_ISSUES", "0"))
 WORKFLOW_FILTER = os.environ.get("WORKFLOW_FILTER", "")
-LLM_BACKEND = os.environ.get("LLM_BACKEND", "cursor")
 
 DEDUP_THRESHOLD = 0.85
 
@@ -47,7 +45,6 @@ def _entry(job: dict[str, Any], action: str, **kwargs: Any) -> dict[str, Any]:
 def create_issue(
     job: dict[str, Any],
     agent_result: dict[str, Any],
-    extra_jobs: list[tuple[str, str]] | None = None,
 ) -> tuple[str, str, str]:
     title = sanitize_text(
         agent_result.get("issue_title", f"[CI] {job['workflow_name']} / {job['job_name']}")
@@ -56,7 +53,6 @@ def create_issue(
         sanitize_text(agent_result["issue_body"]),
         workflow_name=job["workflow_name"],
         job_name=job["job_name"],
-        extra_jobs=extra_jobs,
     )
     issue_url = gh(
         "issue", "create",
@@ -72,14 +68,14 @@ def create_issue(
 
 def main() -> int:
     log("=== Create Issues ===")
-    if LLM_BACKEND not in ("cursor", "copilot"):
-        log(f"LLM_BACKEND must be 'cursor' or 'copilot', got: {LLM_BACKEND!r}")
+    if not os.environ.get("COPILOT_PAT"):
+        log("COPILOT_PAT is required.")
         return 1
-    if LLM_BACKEND == "copilot" and not os.environ.get("COPILOT_GITHUB_TOKEN"):
-        log("COPILOT_GITHUB_TOKEN is required when LLM_BACKEND=copilot.")
-        return 1
-    if LLM_BACKEND == "cursor" and not os.environ.get("CURSOR_API_KEY"):
-        log("CURSOR_API_KEY is required when LLM_BACKEND=cursor.")
+    if CONSECUTIVE_HIGH_VOLUME > CONSECUTIVE_LOW_VOLUME:
+        log(
+            f"CONSECUTIVE_FAILURES_HIGH_VOLUME ({CONSECUTIVE_HIGH_VOLUME}) must be "
+            f"<= CONSECUTIVE_FAILURES_LOW_VOLUME ({CONSECUTIVE_LOW_VOLUME})"
+        )
         return 1
     workflow_data = download_workflow_data(TARGET_REPO)
     filters = [f.strip().lower() for f in WORKFLOW_FILTER.split(",") if f.strip()]
@@ -128,6 +124,13 @@ def main() -> int:
         enriched_job = enriched[0]
 
         # ── Step 2: Consistency gate ────────────────────────────────
+        # NOTE: filter_consistent_failures receives a single-element list
+        # (one job), but that job carries log_paths from ALL N consecutive
+        # failing runs (downloaded in Step 1).  The gate compares error
+        # signatures across those per-run logs — it is NOT single-sample.
+        # TODO: If we ever want cross-job consistency (comparing different
+        # jobs in the same workflow), we'd need to restructure the outer
+        # loop to batch jobs before calling the gate.
         consistent = filter_consistent_failures([enriched_job])
         if not consistent:
             summary.append(_entry(job, "inconsistent_error"))
@@ -149,9 +152,9 @@ def main() -> int:
 
         # ── Step 4: Draft issue body via LLM ────────────────────────
         log_paths = consistent_job.get("log_paths", [])
-        log(f"  Drafting issue via {LLM_BACKEND} agent...")
+        log("  Drafting issue via Copilot agent...")
         per_workflow_consecutive = consistent_job.get("consecutive", CONSECUTIVE_LOW_VOLUME)
-        agent_result = draft_issue_body(consistent_job, log_paths, CURSOR_MODEL, per_workflow_consecutive)
+        agent_result = draft_issue_body(consistent_job, log_paths, consecutive=per_workflow_consecutive)
 
         if agent_result and agent_result.get("deterministic") is False:
             summary.append(_entry(job, "agent_skipped", reason=agent_result.get("reason", "not deterministic")))
@@ -171,7 +174,7 @@ def main() -> int:
 
         # ── Step 6: Create the issue ────────────────────────────────
         issue_url, issue_title, issue_body = create_issue(
-            consistent_job, agent_result, extra_jobs=None,
+            consistent_job, agent_result,
         )
         created_so_far += 1
         if sig:
