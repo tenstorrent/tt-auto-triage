@@ -48,6 +48,10 @@ def _log_rejection(job: dict[str, Any], stage: str, reason: str) -> None:
     log(f"  Rejected ({stage}): {job['workflow_name']} / {job['job_name']} — {reason}")
 
 
+def _log_warning(job: dict[str, Any], stage: str, reason: str) -> None:
+    log(f"  Warning ({stage}): {job['workflow_name']} / {job['job_name']} — {reason}")
+
+
 def _normalize_for_compare(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
@@ -212,6 +216,7 @@ def main() -> int:
         log("  Drafting issue via Copilot agent...")
         per_workflow_consecutive = consistent_job.get("consecutive", CONSECUTIVE_LOW_VOLUME)
         agent_result = draft_issue_body(consistent_job, log_paths, consecutive=per_workflow_consecutive)
+        excerpt_mismatch_warning: str | None = None
 
         if agent_result and agent_result.get("deterministic") is False:
             reason = str(agent_result.get("reason", "not deterministic"))
@@ -247,15 +252,16 @@ def main() -> int:
 
         error_excerpt = agent_result.get("error_excerpt") or ""
         if not _agent_excerpt_matches_signature(sig, str(error_excerpt)):
-            reason = "error excerpt mismatch vs extracted signature"
-            _log_rejection(job, "post-agent/gates", reason)
-            summary.append(_entry(job, "agent_skipped", reason=reason))
-            continue
+            excerpt_mismatch_warning = "error excerpt mismatch vs extracted signature"
+            _log_warning(job, "post-agent/gates", excerpt_mismatch_warning)
 
         # ── Step 5: Dry-run gate ────────────────────────────────────
         if not CREATE_ISSUES:
             log(f"  Eligible but CREATE_ISSUES=false (dry run): {job['workflow_name']} / {job['job_name']}")
-            summary.append(_entry(job, "dry_run"))
+            entry_kwargs: dict[str, Any] = {}
+            if excerpt_mismatch_warning:
+                entry_kwargs["warning"] = excerpt_mismatch_warning
+            summary.append(_entry(job, "dry_run", **entry_kwargs))
             # Still record the signature so future iterations dedup against it
             if sig:
                 processed_signatures.append(sig)
@@ -274,7 +280,10 @@ def main() -> int:
             "body": issue_body,
             "url": issue_url,
         })
-        summary.append(_entry(job, "created", issue=issue_url))
+        entry_kwargs = {"issue": issue_url}
+        if excerpt_mismatch_warning:
+            entry_kwargs["warning"] = excerpt_mismatch_warning
+        summary.append(_entry(job, "created", **entry_kwargs))
 
     if processed_candidates == 0:
         log("No new deterministic failures found. Done.")
