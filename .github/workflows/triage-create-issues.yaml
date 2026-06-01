@@ -49,6 +49,7 @@ on:
 permissions:
   contents: read
   actions: read
+  issues: write
 
 jobs:
   create-issues:
