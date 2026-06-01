@@ -270,26 +270,48 @@ _ERROR_PATTERNS: tuple[re.Pattern, ...] = tuple(
         r"(?:^|\s)FAILED\s+(?!\])[^\n]{5,200}",
         r"(?:TypeError|ValueError|KeyError|AttributeError|ImportError|OSError|IOError):[^\n]{0,200}",
         r"(?:performance|regression|exceeded|threshold|inference.?time)[^\n]{0,200}",
-        r"Error:[^\n]{0,200}",
+        r"(?<![a-zA-Z])Error:[^\n]{0,200}",
     )
 )
 
 
+def _normalize_error_signature(raw: str) -> str:
+    sig = raw
+    sig = re.sub(r"\S+\.(cpp|h|py|cc|cxx|hpp|c):\d+", "", sig)
+    sig = re.sub(r" @ \S+", "", sig)
+    sig = re.sub(r" in \w+:", "", sig)
+    sig = re.sub(r"\S+::\S+\[[^\]]*\]", "", sig)
+    sig = re.sub(r"\s+", " ", sig).strip()
+    return sig
+
+
 def _regex_extract_error(log_text: str) -> str:
-    """Fallback: extract error signature using regex patterns."""
+    """Fallback: extract error signature using regex patterns.
+
+    Uses the latest (terminal) match in the log, not the first hit.
+    When multiple patterns match at the same position, earlier patterns win.
+    """
     clean = _ANSI_ESCAPE.sub("", log_text)
     clean = _TIMESTAMP_PREFIX.sub("", clean)
-    for pat in _ERROR_PATTERNS:
-        m = pat.search(clean)
-        if m:
-            sig = m.group(0)
-            sig = re.sub(r"\S+\.(cpp|h|py|cc|cxx|hpp|c):\d+", "", sig)
-            sig = re.sub(r" @ \S+", "", sig)
-            sig = re.sub(r" in \w+:", "", sig)
-            sig = re.sub(r"\S+::\S+\[[^\]]*\]", "", sig)
-            sig = re.sub(r"\s+", " ", sig).strip()
-            return sig
-    return ""
+
+    best: re.Match[str] | None = None
+    best_priority = len(_ERROR_PATTERNS)
+
+    for priority, pat in enumerate(_ERROR_PATTERNS):
+        last_m: re.Match[str] | None = None
+        for m in pat.finditer(clean):
+            last_m = m
+        if last_m is None:
+            continue
+        if best is None or last_m.start() > best.start() or (
+            last_m.start() == best.start() and priority < best_priority
+        ):
+            best = last_m
+            best_priority = priority
+
+    if best is None:
+        return ""
+    return _normalize_error_signature(best.group(0))
 
 
 def _error_similarity(a: str, b: str) -> float:
