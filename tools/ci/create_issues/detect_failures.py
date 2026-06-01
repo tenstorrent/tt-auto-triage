@@ -274,6 +274,15 @@ _ERROR_PATTERNS: tuple[re.Pattern, ...] = tuple(
     )
 )
 
+_GENERIC_SIGNATURE_PATTERNS: tuple[re.Pattern, ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"\bprocess completed with exit code \d+\b",
+        r"\bexit code \d+\b",
+        r"\bthe operation was canceled\b",
+    )
+)
+
 
 def _normalize_error_signature(raw: str) -> str:
     sig = raw
@@ -285,6 +294,10 @@ def _normalize_error_signature(raw: str) -> str:
     return sig
 
 
+def _is_generic_error_signature(sig: str) -> bool:
+    return any(p.search(sig) for p in _GENERIC_SIGNATURE_PATTERNS)
+
+
 def _regex_extract_error(log_text: str) -> str:
     """Fallback: extract error signature using regex patterns.
 
@@ -294,8 +307,12 @@ def _regex_extract_error(log_text: str) -> str:
     clean = _ANSI_ESCAPE.sub("", log_text)
     clean = _TIMESTAMP_PREFIX.sub("", clean)
 
-    best: re.Match[str] | None = None
-    best_priority = len(_ERROR_PATTERNS)
+    best_any_sig = ""
+    best_any_start = -1
+    best_any_priority = len(_ERROR_PATTERNS)
+    best_non_generic_sig = ""
+    best_non_generic_start = -1
+    best_non_generic_priority = len(_ERROR_PATTERNS)
 
     for priority, pat in enumerate(_ERROR_PATTERNS):
         last_m: re.Match[str] | None = None
@@ -303,15 +320,25 @@ def _regex_extract_error(log_text: str) -> str:
             last_m = m
         if last_m is None:
             continue
-        if best is None or last_m.start() > best.start() or (
-            last_m.start() == best.start() and priority < best_priority
-        ):
-            best = last_m
-            best_priority = priority
+        normalized = _normalize_error_signature(last_m.group(0))
+        start = last_m.start()
+        if start > best_any_start or (start == best_any_start and priority < best_any_priority):
+            best_any_sig = normalized
+            best_any_start = start
+            best_any_priority = priority
 
-    if best is None:
-        return ""
-    return _normalize_error_signature(best.group(0))
+        if _is_generic_error_signature(normalized):
+            continue
+        if start > best_non_generic_start or (
+            start == best_non_generic_start and priority < best_non_generic_priority
+        ):
+            best_non_generic_sig = normalized
+            best_non_generic_start = start
+            best_non_generic_priority = priority
+
+    if best_non_generic_sig:
+        return best_non_generic_sig
+    return best_any_sig
 
 
 def _error_similarity(a: str, b: str) -> float:

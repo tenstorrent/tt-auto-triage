@@ -33,6 +33,50 @@ class RegexExtractErrorTests(unittest.TestCase):
     def test_returns_empty_when_no_patterns_match(self) -> None:
         self.assertEqual(_regex_extract_error("all good\nexit code 0"), "")
 
+    def test_ignores_generic_terminal_exit_code_when_specific_error_exists(self) -> None:
+        log = "\n".join(
+            [
+                "FAILED UnitTest.RealFailure",
+                "some cleanup output",
+                "Error: Process completed with exit code 1.",
+            ]
+        )
+        sig = _regex_extract_error(log)
+        self.assertIn("RealFailure", sig)
+        self.assertNotIn("exit code 1", sig.lower())
+
+    def test_falls_back_to_generic_exit_code_when_no_specific_error(self) -> None:
+        log = "\n".join(
+            [
+                "step output line",
+                "Error: Process completed with exit code 1.",
+            ]
+        )
+        sig = _regex_extract_error(log)
+        self.assertIn("exit code 1", sig.lower())
+
+    def test_specific_error_wins_even_when_generic_appears_earlier(self) -> None:
+        log = "\n".join(
+            [
+                "Error: Process completed with exit code 1.",
+                "later output",
+                "AssertionError: tensor mismatch",
+            ]
+        )
+        sig = _regex_extract_error(log)
+        self.assertIn("AssertionError", sig)
+
+    def test_returns_latest_generic_when_only_generic_signatures_exist(self) -> None:
+        log = "\n".join(
+            [
+                "Error: Process completed with exit code 1.",
+                "more output",
+                "Error: Process completed with exit code 137.",
+            ]
+        )
+        sig = _regex_extract_error(log)
+        self.assertIn("exit code 137", sig.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
