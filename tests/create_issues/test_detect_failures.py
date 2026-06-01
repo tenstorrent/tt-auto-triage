@@ -77,6 +77,16 @@ class RegexExtractErrorTests(unittest.TestCase):
         sig = _regex_extract_error(log)
         self.assertIn("exit code 137", sig.lower())
 
+    def test_treats_plain_error_exit_code_as_generic(self) -> None:
+        log = "\n".join(
+            [
+                "setup output",
+                "Error: exit code 1",
+            ]
+        )
+        sig = _regex_extract_error(log)
+        self.assertEqual(sig.lower(), "error: exit code 1")
+
     def test_does_not_treat_specific_error_with_exit_code_text_as_generic(self) -> None:
         log = "\n".join(
             [

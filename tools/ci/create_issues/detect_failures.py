@@ -6,7 +6,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .helpers import gh, log, paginate_api, sanitize_text
 
@@ -60,14 +60,14 @@ def _build_boundary_info(
     return info
 
 
-def find_failing_jobs(
+def iter_failing_jobs(
     workflow_data: list[list[Any]],
     target_repo: str,
     consecutive_high_volume: int = 4,
     consecutive_low_volume: int = 2,
     high_volume_runs_per_day: int = 5,
     tracked_pairs: set[tuple[str, str]] | None = None,
-) -> list[dict[str, Any]]:
+) -> Iterator[dict[str, Any]]:
     """Find jobs that have failed in the last N consecutive runs of their workflow.
 
     The threshold N is adaptive per workflow:
@@ -83,7 +83,6 @@ def find_failing_jobs(
     """
     token = os.environ.get("GITHUB_TOKEN")
     owner, repo = target_repo.split("/")
-    results: list[dict[str, Any]] = []
     now = time.time()
     one_day_ago = now - 86_400
 
@@ -108,8 +107,13 @@ def find_failing_jobs(
 
         sorted_runs = sorted(runs, key=_run_timestamp, reverse=True)[:consecutive]
         if len(sorted_runs) < consecutive:
+            log(
+                f"  '{workflow_name}': skipped before candidate creation "
+                f"(only {len(sorted_runs)} run(s), need {consecutive})"
+            )
             continue
         if not all(run.get("conclusion") == "failure" for run in sorted_runs):
+            log(f"  '{workflow_name}': skipped before candidate creation (latest {consecutive} runs are not all failures)")
             continue
 
         log(f"  '{workflow_name}': {consecutive} consecutive failures, fetching jobs...")
@@ -133,12 +137,19 @@ def find_failing_jobs(
             time.sleep(0.3)
 
         if len(run_failed_jobs) < consecutive:
+            log(
+                f"  '{workflow_name}': skipped before candidate creation "
+                f"({len(run_failed_jobs)}/{consecutive} runs had job data)"
+            )
             continue
 
         run_ids = list(run_failed_jobs.keys())
         common_jobs = set(run_failed_jobs[run_ids[0]])
         for run_id in run_ids[1:]:
             common_jobs &= set(run_failed_jobs[run_id])
+        if not common_jobs:
+            log(f"  '{workflow_name}': skipped before candidate creation (no common failing jobs across runs)")
+            continue
 
         # ── Temporal boundary: first failing & last passing run ────────
         # Walk full history (newest→oldest) to find the current contiguous
@@ -167,19 +178,39 @@ def find_failing_jobs(
             if tracked_pairs and (workflow_name, job_name) in tracked_pairs:
                 log(f"  Skipping already-tracked job: {workflow_name} / {job_name}")
                 continue
-            results.append(
-                {
-                    "workflow_name": workflow_name,
-                    "job_name": job_name,
-                    "consecutive": consecutive,
-                    "job_urls": [run_failed_jobs[run_id].get(job_name, "") for run_id in run_ids],
-                    "run_urls": [run.get("html_url", "") for run in sorted_runs],
-                    **boundary_info,
-                }
-            )
+            yield {
+                "workflow_name": workflow_name,
+                "job_name": job_name,
+                "consecutive": consecutive,
+                "job_urls": [run_failed_jobs[run_id].get(job_name, "") for run_id in run_ids],
+                "run_urls": [run.get("html_url", "") for run in sorted_runs],
+                **boundary_info,
+            }
 
-    log(f"  Found {len(results)} deterministically-failing jobs")
-    return results
+    # Generator may be consumed lazily; caller may stop early.
+
+
+def find_failing_jobs(
+    workflow_data: list[list[Any]],
+    target_repo: str,
+    consecutive_high_volume: int = 4,
+    consecutive_low_volume: int = 2,
+    high_volume_runs_per_day: int = 5,
+    tracked_pairs: set[tuple[str, str]] | None = None,
+) -> list[dict[str, Any]]:
+    """Compatibility wrapper returning a materialized list."""
+    jobs = list(
+        iter_failing_jobs(
+            workflow_data,
+            target_repo,
+            consecutive_high_volume=consecutive_high_volume,
+            consecutive_low_volume=consecutive_low_volume,
+            high_volume_runs_per_day=high_volume_runs_per_day,
+            tracked_pairs=tracked_pairs,
+        )
+    )
+    log(f"  Found {len(jobs)} deterministically-failing jobs")
+    return jobs
 
 
 def _parse_job_url(url: str) -> tuple[int, int]:
@@ -279,6 +310,8 @@ _GENERIC_SIGNATURE_PATTERNS: tuple[re.Pattern, ...] = tuple(
     for p in (
         r"error:\s*process completed with exit code \d+\.?",
         r"process completed with exit code \d+\.?",
+        r"error:\s*exit code \d+\.?",
+        r"exit code \d+\.?",
         r"error:\s*the operation was canceled\.?",
         r"the operation was canceled\.?",
     )
