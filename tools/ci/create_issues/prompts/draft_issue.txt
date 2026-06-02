@@ -21,12 +21,17 @@ INSTRUCTIONS:
 1. Read ALL $consecutive log files using your file reading tools.
 2. Identify the terminal failure or error in each log.
 3. Determine if all $consecutive runs fail with semantically identical terminal errors.
-4. Be strict. Set deterministic=false unless ALL of the following are true:
+4. Be conservative. Prefer false negatives over false positives.
+5. Set deterministic=false unless ALL of the following are true:
    - every run shows the same terminal failure class (same root error, allowing minor numeric/timestamp differences),
+   - there are no contradictory terminal errors across runs (for example: timeout in one run, assertion in another),
    - your error_excerpt quotes those terminal lines directly from the provided logs (no paraphrased or inferred error text),
-   - first failing commit is identified from the run data,
-   - if a last passing commit exists, it must be a different SHA from first failing.
-5. If deterministic=true: draft a GitHub issue title and body in this exact format:
+   - you can explicitly point to at least one terminal error line from each run supporting the same root cause.
+6. Additional strictness rules:
+   - If a run has multiple plausible terminal failures and you cannot confidently identify one shared root cause across all runs, set deterministic=false.
+   - If failures look related but not clearly identical (same subsystem but different terminal exception class), set deterministic=false.
+   - If evidence is incomplete in any run, set deterministic=false.
+7. If deterministic=true: draft a GitHub issue title and body in this exact format:
    - Title: a concise description of the failure (NOT just "deterministic failure")
    - Body: a markdown CI Failure Report with these sections:
      ## CI Failure Report
@@ -48,7 +53,8 @@ INSTRUCTIONS:
      (how to reproduce locally based on the job command)
      ### Notes
      (any additional context, e.g. timeout vs assertion failure)
-6. If deterministic=false, keep issue_title and issue_body empty strings and provide a short reason.
+8. In the Notes section, add a short "Determinism check" bullet list summarizing each run's terminal error line used for comparison.
+9. If deterministic=false, keep issue_title and issue_body empty strings and provide a short reason. The reason must name what differed across runs (or what evidence was missing).
 
 DO NOT invent or infer evidence that is not present in the logs.
 

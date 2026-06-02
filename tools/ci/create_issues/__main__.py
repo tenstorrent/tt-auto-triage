@@ -4,15 +4,12 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any
 
 from .detect_failures import (
-    _error_similarity,
     download_job_logs,
-    filter_consistent_failures,
     iter_failing_jobs,
 )
 from .download_data import download_workflow_data
@@ -36,68 +33,12 @@ SUMMARY_OUTPUT = os.environ.get("SUMMARY_OUTPUT", "")
 MAX_ISSUES = int(os.environ.get("MAX_ISSUES", "0"))
 WORKFLOW_FILTER = os.environ.get("WORKFLOW_FILTER", "")
 
-DEDUP_THRESHOLD = 0.85
-AGENT_EXCERPT_MATCH_THRESHOLD = 0.60
-
-
 def _entry(job: dict[str, Any], action: str, **kwargs: Any) -> dict[str, Any]:
     return {"workflow_name": job["workflow_name"], "job": job["job_name"], "action": action, **kwargs}
 
 
 def _log_rejection(job: dict[str, Any], stage: str, reason: str) -> None:
     log(f"  Rejected ({stage}): {job['workflow_name']} / {job['job_name']} — {reason}")
-
-
-def _log_warning(job: dict[str, Any], stage: str, reason: str) -> None:
-    log(f"  Warning ({stage}): {job['workflow_name']} / {job['job_name']} — {reason}")
-
-
-def _normalize_for_compare(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip().lower()
-
-
-def _regression_boundary_rejection_reason(job: dict[str, Any]) -> str | None:
-    """Return a rejection reason when boundary data is contradictory or missing.
-
-    We allow "always-failing since introduction" cases where no last passing
-    run is known, as long as first failing SHA exists.
-    """
-    first_failing_raw = job.get("first_failing_sha")
-    if not first_failing_raw:
-        return "missing first failing boundary"
-    first_failing_sha = str(first_failing_raw).strip()
-    if not first_failing_sha:
-        return "missing first failing boundary"
-
-    last_passing_raw = job.get("last_passing_sha")
-    if not last_passing_raw:
-        return None
-    last_passing_sha = str(last_passing_raw).strip()
-    if not last_passing_sha:
-        return None
-    if last_passing_sha == first_failing_sha:
-        return "invalid regression boundary: last passing SHA equals first failing SHA"
-    return None
-
-
-def _agent_excerpt_matches_signature(signature: str, error_excerpt: str) -> bool:
-    sig = _normalize_for_compare(signature)
-    excerpt = _normalize_for_compare(error_excerpt)
-    if not sig:
-        return True
-    if not excerpt:
-        return False
-    if sig in excerpt or excerpt in sig:
-        return True
-    if _error_similarity(sig, excerpt) >= AGENT_EXCERPT_MATCH_THRESHOLD:
-        return True
-    for line in error_excerpt.splitlines():
-        normalized_line = _normalize_for_compare(line)
-        if not normalized_line:
-            continue
-        if _error_similarity(sig, normalized_line) >= AGENT_EXCERPT_MATCH_THRESHOLD:
-            return True
-    return False
 
 
 def create_issue(
@@ -148,7 +89,6 @@ def main() -> int:
 
     summary: list[dict[str, Any]] = []
     created_so_far = 0
-    processed_signatures: list[str] = []
     processed_candidates = 0
 
     for job in iter_failing_jobs(
@@ -177,46 +117,15 @@ def main() -> int:
         if not enriched:
             reason = "log download returned nothing"
             _log_rejection(job, "pre-agent/log-download", reason)
-            summary.append(_entry(job, "inconsistent_error", reason=reason))
+            summary.append(_entry(job, "agent_skipped", reason=reason))
             continue
         enriched_job = enriched[0]
 
-        # ── Step 2: Consistency gate ────────────────────────────────
-        # NOTE: filter_consistent_failures receives a single-element list
-        # (one job), but that job carries log_paths from ALL N consecutive
-        # failing runs (downloaded in Step 1).  The gate compares error
-        # signatures across those per-run logs — it is NOT single-sample.
-        # TODO: If we ever want cross-job consistency (comparing different
-        # jobs in the same workflow), we'd need to restructure the outer
-        # loop to batch jobs before calling the gate.
-        consistent = filter_consistent_failures([enriched_job])
-        if not consistent:
-            reason = "consistency gate failed"
-            _log_rejection(job, "pre-agent/consistency-gate", reason)
-            summary.append(_entry(job, "inconsistent_error", reason=reason))
-            continue
-        consistent_job = consistent[0]
-
-        # ── Step 3: Cross-job dedup against already-processed sigs ──
-        sig = consistent_job.get("error_signature", "")
-        is_duplicate = False
-        if sig:
-            for prev_sig in processed_signatures:
-                if _error_similarity(sig, prev_sig) >= DEDUP_THRESHOLD:
-                    reason = "error signature similar to an already-processed candidate"
-                    _log_rejection(job, "pre-agent/dedup", reason)
-                    summary.append(_entry(job, "duplicate_suppressed", reason=reason))
-                    is_duplicate = True
-                    break
-        if is_duplicate:
-            continue
-
-        # ── Step 4: Draft issue body via LLM ────────────────────────
-        log_paths = consistent_job.get("log_paths", [])
+        # ── Step 2: Draft issue body via LLM ────────────────────────
+        log_paths = enriched_job.get("log_paths", [])
         log("  Drafting issue via Copilot agent...")
-        per_workflow_consecutive = consistent_job.get("consecutive", CONSECUTIVE_LOW_VOLUME)
-        agent_result = draft_issue_body(consistent_job, log_paths, consecutive=per_workflow_consecutive)
-        excerpt_mismatch_warning: str | None = None
+        per_workflow_consecutive = enriched_job.get("consecutive", CONSECUTIVE_LOW_VOLUME)
+        agent_result = draft_issue_body(enriched_job, log_paths, consecutive=per_workflow_consecutive)
 
         if agent_result and agent_result.get("deterministic") is False:
             reason = str(agent_result.get("reason", "not deterministic"))
@@ -236,13 +145,6 @@ def main() -> int:
             summary.append(_entry(job, "agent_skipped", reason=reason))
             continue
 
-        boundary_reason = _regression_boundary_rejection_reason(consistent_job)
-        if boundary_reason:
-            reason = boundary_reason
-            _log_rejection(job, "post-agent/gates", reason)
-            summary.append(_entry(job, "agent_skipped", reason=reason))
-            continue
-
         confidence = str(agent_result.get("confidence", "")).strip().lower()
         if confidence not in {"medium", "high"}:
             reason = f"low confidence: {confidence or 'unknown'}"
@@ -250,40 +152,24 @@ def main() -> int:
             summary.append(_entry(job, "agent_skipped", reason=reason))
             continue
 
-        error_excerpt = agent_result.get("error_excerpt") or ""
-        if not _agent_excerpt_matches_signature(sig, str(error_excerpt)):
-            excerpt_mismatch_warning = "error excerpt mismatch vs extracted signature"
-            _log_warning(job, "post-agent/gates", excerpt_mismatch_warning)
-
-        # ── Step 5: Dry-run gate ────────────────────────────────────
+        # ── Step 3: Dry-run gate ────────────────────────────────────
         if not CREATE_ISSUES:
             log(f"  Eligible but CREATE_ISSUES=false (dry run): {job['workflow_name']} / {job['job_name']}")
-            entry_kwargs: dict[str, Any] = {}
-            if excerpt_mismatch_warning:
-                entry_kwargs["warning"] = excerpt_mismatch_warning
-            summary.append(_entry(job, "dry_run", **entry_kwargs))
-            # Still record the signature so future iterations dedup against it
-            if sig:
-                processed_signatures.append(sig)
+            summary.append(_entry(job, "dry_run"))
             continue
 
-        # ── Step 6: Create the issue ────────────────────────────────
+        # ── Step 4: Create the issue ────────────────────────────────
         issue_url, issue_title, issue_body = create_issue(
-            consistent_job, agent_result,
+            enriched_job, agent_result,
         )
         created_so_far += 1
-        if sig:
-            processed_signatures.append(sig)
         open_issues.append({
             "number": issue_url.rsplit("/", 1)[-1],
             "title": issue_title,
             "body": issue_body,
             "url": issue_url,
         })
-        entry_kwargs = {"issue": issue_url}
-        if excerpt_mismatch_warning:
-            entry_kwargs["warning"] = excerpt_mismatch_warning
-        summary.append(_entry(job, "created", **entry_kwargs))
+        summary.append(_entry(job, "created", issue=issue_url))
 
     if processed_candidates == 0:
         log("No new deterministic failures found. Done.")
