@@ -69,8 +69,23 @@ def draft_issue_body(
     job_urls = job.get("job_urls", [])
     run_urls = job.get("run_urls", [])
     log_sections: list[str] = []
-    for index, (url, path) in enumerate(zip(job_urls, log_paths), start=1):
-        log_sections.append(f"Run {index} job URL: {url}\nRun {index} local log path: {path}")
+    run_log_entries = job.get("run_log_entries", [])
+    if run_log_entries:
+        for entry in run_log_entries:
+            url = str(entry.get("job_url", "")).strip()
+            path = str(entry.get("log_path", "")).strip()
+            run_index = entry.get("run_index")
+            if not url or not path:
+                continue
+            if isinstance(run_index, int) and run_index > 0:
+                index = run_index
+            else:
+                index = len(log_sections) + 1
+            log_sections.append(f"Run {index} job URL: {url}\nRun {index} local log path: {path}")
+    else:
+        non_empty_job_urls = [url for url in job_urls if url]
+        for index, (url, path) in enumerate(zip(non_empty_job_urls, log_paths), start=1):
+            log_sections.append(f"Run {index} job URL: {url}\nRun {index} local log path: {path}")
 
     # ── Build regression timeline section from boundary data ──────
     timeline_lines: list[str] = []

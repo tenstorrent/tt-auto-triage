@@ -237,6 +237,7 @@ def download_job_logs(
         workflow_name = _sanitize(job["workflow_name"])
         job_name = _sanitize(job["job_name"])
         log_paths: list[str] = []
+        run_log_entries: list[dict[str, Any]] = []
 
         for index, job_url in enumerate(job.get("job_urls", []), start=1):
             if not job_url:
@@ -269,12 +270,26 @@ def download_job_logs(
                     )
                 out_path.write_text(sanitize_text(text), encoding="utf-8")
                 log_paths.append(str(out_path))
+                run_log_entries.append(
+                    {
+                        "run_index": index,
+                        "job_url": job_url,
+                        "log_path": str(out_path),
+                    }
+                )
             except Exception as exc:
                 log(f"  Warning: failed to download log for {job_url}: {exc}")
                 out_path.write_text(f"(log download failed: {exc})", encoding="utf-8")
                 log_paths.append(str(out_path))
+                run_log_entries.append(
+                    {
+                        "run_index": index,
+                        "job_url": job_url,
+                        "log_path": str(out_path),
+                    }
+                )
 
-        enriched.append({**job, "log_paths": log_paths})
+        enriched.append({**job, "log_paths": log_paths, "run_log_entries": run_log_entries})
         log(f"  Downloaded {len(log_paths)} logs for {job['job_name']}")
 
     return enriched
