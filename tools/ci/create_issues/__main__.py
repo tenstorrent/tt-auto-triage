@@ -287,7 +287,12 @@ def main() -> int:
 
     if processed_candidates == 0:
         log("No new deterministic failures found. Done.")
-        print(json.dumps({"created": 0, "skipped": len(tracked_pairs), "failures": []}))
+        print(json.dumps({
+            "created": 0,
+            "skipped": 0,
+            "tracked_pairs_open": len(tracked_pairs),
+            "failures": [],
+        }))
         return 0
     log(f"Processed {processed_candidates} candidate job(s)")
 
@@ -297,8 +302,17 @@ def main() -> int:
     else:
         print(markdown)
 
+    skipped_count = sum(1 for item in summary if item.get("action") != "created")
     print(
-        json.dumps({"created": created_so_far, "skipped": len(tracked_pairs), "failures": summary}, indent=2),
+        json.dumps(
+            {
+                "created": created_so_far,
+                "skipped": skipped_count,
+                "tracked_pairs_open": len(tracked_pairs),
+                "failures": summary,
+            },
+            indent=2,
+        ),
         file=sys.stderr,
     )
     return 0

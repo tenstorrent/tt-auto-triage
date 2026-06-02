@@ -35,13 +35,15 @@ def render(summary: list[dict[str, Any]], open_issues: list[dict[str, Any]]) -> 
     if created:
         lines.append(f"## Created ({len(created)})\n")
         for item in created:
-            lines.append(f"- [{item['workflow_name']} / {item['job']}]({item['issue']})")
+            warning_suffix = f" _(warning: {item.get('warning')})_" if item.get("warning") else ""
+            lines.append(f"- [{item['workflow_name']} / {item['job']}]({item['issue']}){warning_suffix}")
         lines.append("")
 
     if dry_run:
         lines.append(f"## Dry Run ({len(dry_run)})\n")
         for item in dry_run:
-            lines.append(f"- {item['workflow_name']} / {item['job']}")
+            warning_suffix = f" (warning: {item.get('warning')})" if item.get("warning") else ""
+            lines.append(f"- {item['workflow_name']} / {item['job']}{warning_suffix}")
         lines.append("")
 
     if skipped:
