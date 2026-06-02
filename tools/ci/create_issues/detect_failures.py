@@ -430,6 +430,7 @@ def filter_consistent_failures(
 
         sigs: list[str] = []
         for log_path in log_paths:
+            try:
                 text = Path(log_path).read_text(encoding="utf-8", errors="replace")
                 sig = _regex_extract_error(text[-100_000:])
                 sigs.append(sig)
