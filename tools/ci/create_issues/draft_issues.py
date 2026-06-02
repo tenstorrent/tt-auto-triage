@@ -24,10 +24,18 @@ def _run_copilot_agent(prompt: str) -> str:
         for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL")
         if key in os.environ
     }
-    # The Copilot CLI expects COPILOT_GITHUB_TOKEN; map from our env var.
-    copilot_pat = os.environ.get("COPILOT_PAT", "")
-    if copilot_pat:
-        safe_env["COPILOT_GITHUB_TOKEN"] = copilot_pat
+    # Provide auth using multiple env names because different Copilot CLI
+    # versions/runtime paths may read different variables.
+    copilot_token = (
+        os.environ.get("COPILOT_PAT", "")
+        or os.environ.get("COPILOT_GITHUB_TOKEN", "")
+        or os.environ.get("GH_TOKEN", "")
+        or os.environ.get("GITHUB_TOKEN", "")
+    )
+    if copilot_token:
+        safe_env["COPILOT_GITHUB_TOKEN"] = copilot_token
+        safe_env["GH_TOKEN"] = copilot_token
+        safe_env["GITHUB_TOKEN"] = copilot_token
     proc = subprocess.run(
         ["copilot", "-p", prompt, "--allow-all-tools"],
         capture_output=True,
