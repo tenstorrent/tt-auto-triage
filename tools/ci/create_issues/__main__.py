@@ -89,19 +89,21 @@ def main() -> int:
 
     summary: list[dict[str, Any]] = []
     created_so_far = 0
-    processed_candidates = 0
+    candidates = list(
+        iter_failing_jobs(
+            workflow_data,
+            TARGET_REPO,
+            consecutive_high_volume=CONSECUTIVE_HIGH_VOLUME,
+            consecutive_low_volume=CONSECUTIVE_LOW_VOLUME,
+            high_volume_runs_per_day=HIGH_VOLUME_RUNS_PER_DAY,
+            tracked_pairs=tracked_pairs,
+        )
+    )
+    total_candidates = len(candidates)
 
-    for job in iter_failing_jobs(
-        workflow_data,
-        TARGET_REPO,
-        consecutive_high_volume=CONSECUTIVE_HIGH_VOLUME,
-        consecutive_low_volume=CONSECUTIVE_LOW_VOLUME,
-        high_volume_runs_per_day=HIGH_VOLUME_RUNS_PER_DAY,
-        tracked_pairs=tracked_pairs,
-    ):
-        processed_candidates += 1
+    for processed_candidates, job in enumerate(candidates, start=1):
         log(
-            f"Processing candidate {processed_candidates}: "
+            f"Processing candidate {processed_candidates}/{total_candidates}: "
             f"{job['workflow_name']} / {job['job_name']}"
         )
 
@@ -171,7 +173,7 @@ def main() -> int:
         })
         summary.append(_entry(job, "created", issue=issue_url))
 
-    if processed_candidates == 0:
+    if total_candidates == 0:
         log("No new deterministic failures found. Done.")
         print(json.dumps({
             "created": 0,
@@ -180,7 +182,7 @@ def main() -> int:
             "failures": [],
         }))
         return 0
-    log(f"Processed {processed_candidates} candidate job(s)")
+    log(f"Processed {processed_candidates}/{total_candidates} candidate job(s)")
 
     markdown = render(summary, open_issues)
     if SUMMARY_OUTPUT:
