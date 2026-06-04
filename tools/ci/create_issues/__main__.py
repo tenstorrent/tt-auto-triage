@@ -37,6 +37,16 @@ def _entry(job: dict[str, Any], action: str, **kwargs: Any) -> dict[str, Any]:
     return {"workflow_name": job["workflow_name"], "job": job["job_name"], "action": action, **kwargs}
 
 
+def _write_issues_json(open_issues: list[dict[str, Any]], pre_existing_count: int) -> None:
+    existing = open_issues[:pre_existing_count]
+    new = open_issues[pre_existing_count:]
+    artifact = {
+        "new_issues": [{"url": i.get("url", "")} for i in new],
+        "existing_issues": [{"url": i.get("url", "")} for i in existing],
+    }
+    Path("issues.json").write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+
+
 def _log_rejection(job: dict[str, Any], stage: str, reason: str) -> None:
     log(f"  Rejected ({stage}): {job['workflow_name']} / {job['job_name']} — {reason}")
 
@@ -84,6 +94,7 @@ def main() -> int:
                          if any(f in str(name).lower() for f in filters)]
         log(f"  Workflow filter {filters}: {len(workflow_data)}/{orig_count} workflows matched")
     open_issues = load_all_open_issues(ISSUE_REPO, ISSUE_WRITE_TOKEN)
+    pre_existing_count = len(open_issues)
     tracked_pairs = tracked_pairs_from_issues(open_issues)
     logs_dir = Path("build_ci/create_issues/logs")
 
@@ -175,6 +186,7 @@ def main() -> int:
 
     if total_candidates == 0:
         log("No new deterministic failures found. Done.")
+        _write_issues_json(open_issues, pre_existing_count)
         print(json.dumps({
             "created": 0,
             "skipped": 0,
@@ -189,6 +201,8 @@ def main() -> int:
         Path(SUMMARY_OUTPUT).write_text(markdown, encoding="utf-8")
     else:
         print(markdown)
+
+    _write_issues_json(open_issues, pre_existing_count)
 
     skipped_count = sum(1 for item in summary if item.get("action") != "created")
     print(

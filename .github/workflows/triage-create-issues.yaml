@@ -107,3 +107,11 @@ jobs:
           else
             echo "No summary produced." >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Upload issues artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issues
+          path: issues.json
+          if-no-files-found: warn
