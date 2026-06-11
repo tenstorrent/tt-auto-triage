@@ -19,6 +19,7 @@ def load_all_open_issues(issue_repo: str, token: str) -> list[dict[str, Any]]:
         issues += [
             {"number": i.get("number", ""), "title": i.get("title", ""), "body": i.get("body", ""), "url": i.get("html_url", "")}
             for i in data if "pull_request" not in i
+            and not any(lb.get("name") == "dormant due to disable" for lb in i.get("labels", []))
         ]
         if len(data) < 100:
             break
