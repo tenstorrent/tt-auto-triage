@@ -41,8 +41,9 @@ INSTRUCTIONS:
      ### Regression timeline
      Include the regression timeline data provided above. Show:
      - Last passing commit (SHA + date + run URL) — or "N/A" if unknown
-     - First failing commit (SHA + date + run URL)
-     - Most recent failing commit (SHA + date + run URL)
+     - First failing commit (SHA + date + job URL) — the oldest analyzed run confirmed failing with this error
+     - Most recent failing commit (SHA + date + job URL)
+     The first/most-recent failing links point to the specific failing job, not the run.
      This helps readers immediately gauge when the regression started and how long it has persisted.
      ### Failing job URLs (last $consecutive runs)
      - (list each job URL)

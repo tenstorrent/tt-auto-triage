@@ -27,29 +27,36 @@ def _run_date_iso(run: dict[str, Any]) -> str:
 
 
 def _build_boundary_info(
-    first_failing_run: dict[str, Any] | None,
+    oldest_failing_run: dict[str, Any] | None,
+    newest_failing_run: dict[str, Any] | None,
     last_passing_run: dict[str, Any] | None,
-    most_recent_failing_runs: list[dict[str, Any]],
+    oldest_failing_job_url: str = "",
+    newest_failing_job_url: str = "",
 ) -> dict[str, Any]:
     """Build a dict with temporal boundary fields for a failing job.
 
+    The first/last failing boundaries reference the oldest and newest runs we
+    actually analyzed and confirmed failing with the same error (i.e. the runs
+    quoted in the issue) — NOT a streak start inferred from full history, which
+    may have failed for a different reason. Their URLs point to the specific
+    failing JOB, not the run.
+
     Fields produced (all optional — missing when data is unavailable):
-      - first_failing_sha / first_failing_date / first_failing_url
-      - last_failing_sha  / last_failing_date  / last_failing_url
-      - last_passing_sha  / last_passing_date  / last_passing_url
+      - first_failing_sha / first_failing_date / first_failing_url (job URL)
+      - last_failing_sha  / last_failing_date  / last_failing_url  (job URL)
+      - last_passing_sha  / last_passing_date  / last_passing_url   (run URL)
     """
     info: dict[str, Any] = {}
 
-    if first_failing_run:
-        info["first_failing_sha"] = first_failing_run.get("head_sha", "")
-        info["first_failing_date"] = _run_date_iso(first_failing_run)
-        info["first_failing_url"] = first_failing_run.get("html_url", "")
+    if oldest_failing_run:
+        info["first_failing_sha"] = oldest_failing_run.get("head_sha", "")
+        info["first_failing_date"] = _run_date_iso(oldest_failing_run)
+        info["first_failing_url"] = oldest_failing_job_url
 
-    if most_recent_failing_runs:
-        latest = most_recent_failing_runs[0]
-        info["last_failing_sha"] = latest.get("head_sha", "")
-        info["last_failing_date"] = _run_date_iso(latest)
-        info["last_failing_url"] = latest.get("html_url", "")
+    if newest_failing_run:
+        info["last_failing_sha"] = newest_failing_run.get("head_sha", "")
+        info["last_failing_date"] = _run_date_iso(newest_failing_run)
+        info["last_failing_url"] = newest_failing_job_url
 
     if last_passing_run:
         info["last_passing_sha"] = last_passing_run.get("head_sha", "")
@@ -150,38 +157,48 @@ def iter_failing_jobs(
             log(f"  '{workflow_name}': skipped before candidate creation (no common failing jobs across runs)")
             continue
 
-        # ── Temporal boundary: first failing & last passing run ────────
-        # Walk full history (newest→oldest) to find the current contiguous
-        # failure streak and the most-recent success before it.
+        # ── Temporal boundary: most-recent passing run ────────────────
+        # Walk full history (newest→oldest) to find the most-recent success
+        # before the current contiguous failure streak. The first/last failing
+        # boundaries are taken from the analyzed runs below, not from the
+        # streak start (which may have failed for a different reason).
         all_sorted = sorted(runs, key=_run_timestamp, reverse=True)
-        first_failing_run: dict[str, Any] | None = None
+        in_streak = False
         last_passing_run: dict[str, Any] | None = None
         for run in all_sorted:
             conclusion = run.get("conclusion")
             if conclusion == "failure":
-                first_failing_run = run  # move boundary back into the streak
+                in_streak = True  # we are inside the current failure streak
             elif conclusion == "success":
-                if first_failing_run is not None:
-                    # First success after the failure streak — this is the
-                    # boundary between the current streak and older history.
+                if in_streak:
+                    # First success after the failure streak — the boundary
+                    # between the current streak and older history.
                     last_passing_run = run
-                    break
-                # Most-recent run is a success — no current failure streak.
+                # Most-recent run is a success (or boundary found) — stop.
                 break
 
-        boundary_info = _build_boundary_info(
-            first_failing_run, last_passing_run, sorted_runs,
-        )
+        # run_ids preserves sorted_runs order (newest→oldest), so index 0 is
+        # the newest analyzed failing run and index -1 the oldest.
+        oldest_failing_run = sorted_runs[-1]
+        newest_failing_run = sorted_runs[0]
 
         for job_name in sorted(common_jobs):
             if tracked_pairs and (workflow_name, job_name) in tracked_pairs:
                 log(f"  Skipping already-tracked job: {workflow_name} / {job_name}")
                 continue
+            job_urls = [run_failed_jobs[run_id].get(job_name, "") for run_id in run_ids]
+            boundary_info = _build_boundary_info(
+                oldest_failing_run,
+                newest_failing_run,
+                last_passing_run,
+                oldest_failing_job_url=job_urls[-1] if job_urls else "",
+                newest_failing_job_url=job_urls[0] if job_urls else "",
+            )
             yield {
                 "workflow_name": workflow_name,
                 "job_name": job_name,
                 "consecutive": consecutive,
-                "job_urls": [run_failed_jobs[run_id].get(job_name, "") for run_id in run_ids],
+                "job_urls": job_urls,
                 "run_urls": [run.get("html_url", "") for run in sorted_runs],
                 **boundary_info,
             }
