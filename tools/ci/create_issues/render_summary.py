@@ -32,6 +32,7 @@ def render(summary: list[dict[str, Any]], open_issues: list[dict[str, Any]]) -> 
     created = [item for item in summary if item.get("action") == "created"]
     dry_run = [item for item in summary if item.get("action") == "dry_run"]
     skipped = [item for item in summary if item.get("action") == "agent_skipped"]
+    stale = [item for item in summary if item.get("action") == "stale_recovered"]
 
     if created:
         lines.append(f"## Created ({len(created)})\n")
@@ -50,6 +51,12 @@ def render(summary: list[dict[str, Any]], open_issues: list[dict[str, Any]]) -> 
     if skipped:
         lines.append(f"## Agent Skipped ({len(skipped)})\n")
         for item in skipped:
+            lines.append(f"- {item['workflow_name']} / {item['job']}: {item.get('reason', '')}")
+        lines.append("")
+
+    if stale:
+        lines.append(f"## Stale / Recovered ({len(stale)})\n")
+        for item in stale:
             lines.append(f"- {item['workflow_name']} / {item['job']}: {item.get('reason', '')}")
         lines.append("")
 

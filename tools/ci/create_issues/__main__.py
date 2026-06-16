@@ -11,6 +11,7 @@ from typing import Any
 from .detect_failures import (
     download_job_logs,
     iter_failing_jobs,
+    streak_still_failing,
 )
 from .download_data import download_workflow_data
 from .draft_issues import draft_issue_body
@@ -125,7 +126,17 @@ def main() -> int:
             summary.append(_entry(job, "limit_reached", reason=reason))
             break
 
-        # ── Step 1: Download logs for THIS job only ─────────────────
+        # ── Step 1: Live freshness re-check (snapshot may be stale) ──
+        # The detector reads a periodic snapshot artifact that can be hours
+        # old. Confirm the job still fails in the newest completed run on main
+        # before spending the agent/log-download cost on a recovered streak.
+        still_failing, freshness_reason = streak_still_failing(job, TARGET_REPO)
+        if not still_failing:
+            _log_rejection(job, "freshness", freshness_reason)
+            summary.append(_entry(job, "stale_recovered", reason=freshness_reason))
+            continue
+
+        # ── Step 2: Download logs for THIS job only ─────────────────
         enriched = download_job_logs([job], TARGET_REPO, logs_dir)
         if not enriched:
             reason = "log download returned nothing"
@@ -134,7 +145,7 @@ def main() -> int:
             continue
         enriched_job = enriched[0]
 
-        # ── Step 2: Draft issue body via LLM ────────────────────────
+        # ── Step 3: Draft issue body via LLM ────────────────────────
         log_paths = enriched_job.get("log_paths", [])
         log("  Drafting issue via Copilot agent...")
         per_workflow_consecutive = enriched_job.get("consecutive", CONSECUTIVE_LOW_VOLUME)
@@ -165,13 +176,13 @@ def main() -> int:
             summary.append(_entry(job, "agent_skipped", reason=reason))
             continue
 
-        # ── Step 3: Dry-run gate ────────────────────────────────────
+        # ── Step 4: Dry-run gate ────────────────────────────────────
         if not CREATE_ISSUES:
             log(f"  Eligible but CREATE_ISSUES=false (dry run): {job['workflow_name']} / {job['job_name']}")
             summary.append(_entry(job, "dry_run"))
             continue
 
-        # ── Step 4: Create the issue ────────────────────────────────
+        # ── Step 5: Create the issue ────────────────────────────────
         issue_url, issue_title, issue_body = create_issue(
             enriched_job, agent_result,
         )

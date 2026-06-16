@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any, Iterator
 
-from .helpers import gh, log, paginate_api, sanitize_text
+from .helpers import api_get, gh, log, paginate_api, sanitize_text
 
 SKIP_KEYWORDS: tuple[str, ...] = ("Nightly tt-metal L2 tests",)
 
@@ -234,6 +234,101 @@ def _parse_job_url(url: str) -> tuple[int, int]:
     if not match:
         raise ValueError(f"Cannot parse job URL: {url}")
     return int(match.group(1)), int(match.group(2))
+
+
+def _newest_completed_main_run(
+    owner: str,
+    repo: str,
+    workflow_id: int,
+    token: str | None,
+) -> dict[str, Any] | None:
+    """Return the newest completed, non-manual run on main for a workflow.
+
+    Mirrors the upstream aggregator's filtering (main + non-manual + completed)
+    so the live re-check compares like-for-like with the snapshot.
+    """
+    data = api_get(
+        f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/"
+        f"{workflow_id}/runs?branch=main&status=completed&per_page=30",
+        token,
+    )
+    # The API returns runs newest-first; take the newest non-manual one.
+    for run in data.get("workflow_runs", []):
+        if run.get("event") == "workflow_dispatch":
+            continue
+        return run
+    return None
+
+
+def streak_still_failing(
+    job: dict[str, Any],
+    target_repo: str,
+    token: str | None = None,
+) -> tuple[bool, str]:
+    """Live re-check that the candidate's job still fails right now.
+
+    The detector works off a periodic snapshot artifact that can be a couple of
+    hours stale. A newer run may have already passed (breaking the failure
+    streak) by the time we file. This confirms the streak is still intact
+    against live GitHub data before creating an issue.
+
+    Returns ``(still_failing, reason)``. ``reason`` explains why the streak
+    looks broken when ``still_failing`` is False. On any API error it fails
+    OPEN (returns ``True``) so a transient hiccup never blocks an otherwise
+    valid issue — the snapshot-based detection already passed.
+    """
+    if token is None:
+        token = os.environ.get("GITHUB_TOKEN")
+    owner, repo = target_repo.split("/")
+    job_name = job.get("job_name", "")
+    newest_job_url = next((u for u in job.get("job_urls", []) if u), "")
+    if not newest_job_url:
+        return True, ""  # nothing to verify against; don't block
+
+    try:
+        newest_analyzed_run_id, _ = _parse_job_url(newest_job_url)
+        run_detail = api_get(
+            f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{newest_analyzed_run_id}",
+            token,
+        )
+        workflow_id = run_detail.get("workflow_id")
+        if not workflow_id:
+            return True, ""
+
+        newest_live = _newest_completed_main_run(owner, repo, workflow_id, token)
+        if not newest_live:
+            return True, ""
+
+        live_run_id = newest_live.get("id")
+        # No newer completed run than the one we analyzed → streak unchanged.
+        if live_run_id == newest_analyzed_run_id:
+            return True, ""
+
+        # A newer completed run exists. Is the job still failing in it?
+        jobs = paginate_api(
+            f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{live_run_id}/jobs?per_page=100",
+            "jobs",
+            token,
+        )
+        if any(j.get("name") == job_name and j.get("conclusion") == "failure" for j in jobs):
+            return True, ""
+
+        live_url = newest_live.get("html_url", str(live_run_id))
+        if any(j.get("name") == job_name for j in jobs):
+            return False, (
+                f"streak broken: job passed in newer run {live_url} "
+                f"(snapshot's newest failing run was stale)"
+            )
+        return False, (
+            f"streak broken: job absent from newer run {live_url} "
+            f"(snapshot was stale)"
+        )
+    except Exception as exc:
+        log(
+            f"  Warning: freshness re-check failed "
+            f"({type(exc).__name__}): {exc}; proceeding"
+        )
+        return True, ""
 
 
 def _sanitize(name: str) -> str:

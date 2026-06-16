@@ -1,7 +1,11 @@
 import unittest
 from unittest.mock import patch
 
-from tools.ci.create_issues.detect_failures import _parse_job_url, iter_failing_jobs
+from tools.ci.create_issues.detect_failures import (
+    _parse_job_url,
+    iter_failing_jobs,
+    streak_still_failing,
+)
 
 
 def _run(run_id, ts, conclusion, sha):
@@ -72,6 +76,81 @@ class BoundaryLinkTests(unittest.TestCase):
         # Neither failing boundary points at a bare run URL.
         self.assertIn("/job/", job["first_failing_url"])
         self.assertIn("/job/", job["last_failing_url"])
+
+
+class StreakStillFailingTests(unittest.TestCase):
+    """The live re-check guards against stale snapshots: a newer passing run
+    means the failure streak has already recovered and we must not file."""
+
+    JOB = {
+        "job_name": "ttsim-tests / sdpa group",
+        "job_urls": [
+            "https://github.com/o/r/actions/runs/100/job/1009",  # newest analyzed
+            "https://github.com/o/r/actions/runs/90/job/909",
+        ],
+    }
+
+    def _api_get(self, newest_live_run, run_jobs):
+        """Build an api_get fake driven by the URL being requested."""
+
+        def fake(url, token=None):
+            if "/actions/runs/100" in url and "/jobs" not in url:
+                return {"workflow_id": 555}
+            if "/workflows/555/runs" in url:
+                return {"workflow_runs": [newest_live_run]}
+            raise AssertionError(f"unexpected api_get url: {url}")
+
+        return fake
+
+    def _paginate(self, run_jobs):
+        def fake(url, key, token=None):
+            return run_jobs
+        return fake
+
+    def test_proceeds_when_no_newer_run(self) -> None:
+        # Newest live run is the same one we analyzed → streak intact.
+        live = {"id": 100, "event": "push", "html_url": "u"}
+        with patch("tools.ci.create_issues.detect_failures.api_get", side_effect=self._api_get(live, [])):
+            still, reason = streak_still_failing(self.JOB, "o/r", token="t")
+        self.assertTrue(still)
+        self.assertEqual(reason, "")
+
+    def test_proceeds_when_job_still_fails_in_newer_run(self) -> None:
+        live = {"id": 200, "event": "push", "html_url": "https://github.com/o/r/actions/runs/200"}
+        jobs = [{"name": "ttsim-tests / sdpa group", "conclusion": "failure"}]
+        with patch("tools.ci.create_issues.detect_failures.api_get", side_effect=self._api_get(live, jobs)), \
+             patch("tools.ci.create_issues.detect_failures.paginate_api", side_effect=self._paginate(jobs)):
+            still, reason = streak_still_failing(self.JOB, "o/r", token="t")
+        self.assertTrue(still)
+        self.assertEqual(reason, "")
+
+    def test_skips_when_job_passed_in_newer_run(self) -> None:
+        live = {"id": 200, "event": "push", "html_url": "https://github.com/o/r/actions/runs/200"}
+        jobs = [{"name": "ttsim-tests / sdpa group", "conclusion": "success"}]
+        with patch("tools.ci.create_issues.detect_failures.api_get", side_effect=self._api_get(live, jobs)), \
+             patch("tools.ci.create_issues.detect_failures.paginate_api", side_effect=self._paginate(jobs)):
+            still, reason = streak_still_failing(self.JOB, "o/r", token="t")
+        self.assertFalse(still)
+        self.assertIn("streak broken", reason)
+        self.assertIn("passed", reason)
+
+    def test_skips_when_job_absent_from_newer_run(self) -> None:
+        live = {"id": 200, "event": "push", "html_url": "https://github.com/o/r/actions/runs/200"}
+        jobs = [{"name": "some other job", "conclusion": "success"}]
+        with patch("tools.ci.create_issues.detect_failures.api_get", side_effect=self._api_get(live, jobs)), \
+             patch("tools.ci.create_issues.detect_failures.paginate_api", side_effect=self._paginate(jobs)):
+            still, reason = streak_still_failing(self.JOB, "o/r", token="t")
+        self.assertFalse(still)
+        self.assertIn("absent", reason)
+
+    def test_fails_open_on_api_error(self) -> None:
+        def boom(url, token=None):
+            raise RuntimeError("network down")
+
+        with patch("tools.ci.create_issues.detect_failures.api_get", side_effect=boom):
+            still, reason = streak_still_failing(self.JOB, "o/r", token="t")
+        self.assertTrue(still)
+        self.assertEqual(reason, "")
 
 
 class ParseJobUrlTests(unittest.TestCase):
