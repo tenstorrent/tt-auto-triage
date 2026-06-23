@@ -133,7 +133,7 @@ def commits_section(arr):
      # Prepend "\n" so JOB OWNER is visually separated from the previous section,
      # matching the leading-newline convention used by AUTO-FIX above. The trailing
      # gsub("\n{3,}"; "\n\n") collapses any extra newlines that may stack up.
-     then "\n" + section_job_owners("JOB OWNER"; $job_owner; true)
+     then "\n" + section_job_owners("JOB OWNER"; $job_owner; false)
      else ""
      end)
   + "\n---\n_DISCLAIMER: This analysis has been done by AI. Do not take the results as absolute truth since it has been inaccurate in the past._"

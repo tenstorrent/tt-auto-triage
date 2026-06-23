@@ -168,7 +168,7 @@ bash "$BUILD_SCRIPT"
 cd - >/dev/null
 assert "has_payload=false when MESSAGE_PATH empty" grep -q "has_payload=false" "$tmpdir/github_output"
 
-# -- JOB_OWNER_FILE with mixed U/S IDs: user pinged, group stays plain text ----
+# -- JOB_OWNER_FILE with mixed U/S IDs: never pinged, both render as plain text --
 rm -rf "$tmpdir/.regression_analysis"
 mkdir -p "$tmpdir/.regression_analysis/output" "$tmpdir/.regression_analysis/data"
 cp "$SAMPLE_CASE4_MSG" "$tmpdir/.regression_analysis/output/slack_message.json"
@@ -192,7 +192,8 @@ cd - >/dev/null
 payload_owner=$(cat "$tmpdir/.regression_analysis/slack_payload.json")
 text_owner=$(echo "$payload_owner" | jq -r '.text // empty')
 assert "JOB OWNER section present" [ -n "$(echo "$text_owner" | grep -F 'JOB OWNER' || true)" ]
-assert "JOB OWNER U-prefixed user is pinged" [ -n "$(echo "$text_owner" | grep -F '<@U99USEREX>' || true)" ]
+assert "JOB OWNER U-prefixed user renders as plain text (no ping)" [ -z "$(echo "$text_owner" | grep -F '<@U99USEREX>' || true)" ]
+assert "JOB OWNER U-prefixed user shows display name" [ -n "$(echo "$text_owner" | grep -F 'Alice Dev' || true)" ]
 assert "JOB OWNER S-prefixed group is not pinged as subteam" [ -z "$(echo "$text_owner" | grep -F '<!subteam^S88GROUPEX' || true)" ]
 assert "JOB OWNER S-prefixed group renders as plain text name" [ -n "$(echo "$text_owner" | grep -F 'Core Team' || true)" ]
 
@@ -242,7 +243,7 @@ assert "2-commits: shows first hash" [ -n "$(echo "$text_two" | grep -F 'aaaa111
 assert "2-commits: does not show second hash" [ -z "$(echo "$text_two" | grep -F 'bbbb2222' || true)" ]
 assert "2-commits: truncation note says 1 more" [ -n "$(echo "$text_two" | grep -F '1 more commit(s)' || true)" ]
 
-# -- JOB_OWNER representative suffix is preserved with pings --------------------
+# -- JOB_OWNER representative suffix is preserved (no ping) --------------------
 rm -rf "$tmpdir/.regression_analysis"
 mkdir -p "$tmpdir/.regression_analysis/output" "$tmpdir/.regression_analysis/data"
 cp "$SAMPLE_CASE4_MSG" "$tmpdir/.regression_analysis/output/slack_message.json"
@@ -263,8 +264,8 @@ cd - >/dev/null
 
 payload_owner_rep=$(cat "$tmpdir/.regression_analysis/slack_payload.json")
 text_owner_rep=$(echo "$payload_owner_rep" | jq -r '.text // empty')
-assert "JOB OWNER representative owner is pinged" [ -n "$(echo "$text_owner_rep" | grep -F '<@U08DEGUJY3H>' || true)" ]
-assert "JOB OWNER representative suffix is preserved" [ -n "$(echo "$text_owner_rep" | grep -F '(representing Metal Infra Team)' || true)" ]
+assert "JOB OWNER representative owner is not pinged" [ -z "$(echo "$text_owner_rep" | grep -F '<@U08DEGUJY3H>' || true)" ]
+assert "JOB OWNER representative renders as display name" [ -n "$(echo "$text_owner_rep" | grep -F 'Rose Li (representing Metal Infra Team)' || true)" ]
 
 # JOB OWNER must be visually separated from the previous section by a blank line.
 # Inspect the line directly above "*JOB OWNER:*" -- it must be empty. We use awk
@@ -297,8 +298,10 @@ cd - >/dev/null
 text_id_only=$(jq -r '.text // empty' "$tmpdir/.regression_analysis/slack_payload.json")
 assert "ID-only JOB OWNER entry is preserved (not dropped)" \
   [ -n "$(echo "$text_id_only" | grep -F '*JOB OWNER:*' || true)" ]
-assert "ID-only JOB OWNER entry renders as ping" \
-  [ -n "$(echo "$text_id_only" | grep -F '<@U999IDONLY>' || true)" ]
+assert "ID-only JOB OWNER entry renders as plain text ID (no ping)" \
+  [ -n "$(echo "$text_id_only" | grep -F 'U999IDONLY' || true)" ]
+assert "ID-only JOB OWNER entry is not a Slack ping" \
+  [ -z "$(echo "$text_id_only" | grep -F '<@U999IDONLY>' || true)" ]
 
 # -- JOB_OWNER default-owner disclaimer for metalinfra fallback ---------------
 rm -rf "$tmpdir/.regression_analysis"
@@ -321,10 +324,14 @@ bash "$BUILD_SCRIPT"
 cd - >/dev/null
 
 text_default_owner=$(jq -r '.text // empty' "$tmpdir/.regression_analysis/slack_payload.json")
-assert "Default-owner metalinfra rep 1 is pinged" \
-  [ -n "$(echo "$text_default_owner" | grep -F '<@U08DEGUJY3H>' || true)" ]
-assert "Default-owner metalinfra rep 2 is pinged" \
-  [ -n "$(echo "$text_default_owner" | grep -F '<@U08TVGQGGAE>' || true)" ]
+assert "Default-owner metalinfra rep 1 is not pinged" \
+  [ -z "$(echo "$text_default_owner" | grep -F '<@U08DEGUJY3H>' || true)" ]
+assert "Default-owner metalinfra rep 1 renders as name" \
+  [ -n "$(echo "$text_default_owner" | grep -F 'Rose Li' || true)" ]
+assert "Default-owner metalinfra rep 2 is not pinged" \
+  [ -z "$(echo "$text_default_owner" | grep -F '<@U08TVGQGGAE>' || true)" ]
+assert "Default-owner metalinfra rep 2 renders as name" \
+  [ -n "$(echo "$text_default_owner" | grep -F 'Neil Sexton' || true)" ]
 assert "Default-owner disclaimer is appended" \
   [ -n "$(echo "$text_default_owner" | grep -F 'Metalinfra was chosen as the default owner' || true)" ]
 assert "Default-owner disclaimer says one of two representatives" \
@@ -353,8 +360,10 @@ bash "$BUILD_SCRIPT"
 cd - >/dev/null
 
 text_explicit_owner=$(jq -r '.text // empty' "$tmpdir/.regression_analysis/slack_payload.json")
-assert "Explicit metalinfra owner is pinged" \
-  [ -n "$(echo "$text_explicit_owner" | grep -F '<@U08DEGUJY3H>' || true)" ]
+assert "Explicit metalinfra owner is not pinged" \
+  [ -z "$(echo "$text_explicit_owner" | grep -F '<@U08DEGUJY3H>' || true)" ]
+assert "Explicit metalinfra owner renders as name" \
+  [ -n "$(echo "$text_explicit_owner" | grep -F 'Rose Li' || true)" ]
 assert "Explicit metalinfra has no default-owner disclaimer" \
   [ -z "$(echo "$text_explicit_owner" | grep -F 'Metalinfra was chosen as the default owner' || true)" ]
 
