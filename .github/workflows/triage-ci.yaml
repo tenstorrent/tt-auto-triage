@@ -7,24 +7,85 @@ on:
         description: "Create GitHub issues for deterministic failures"
         type: boolean
         default: false
+      assign-owners:
+        description: "Resolve assignees for already-created CI triage issues"
+        type: boolean
+        default: false
+      slack-notify:
+        description: "Post testing-channel Slack messages for issues with assignee metadata"
+        type: boolean
+        default: false
       issue-repo:
-        description: "Repository to create issues in"
+        description: "Repository containing the CI triage issues"
         type: string
         default: "ebanerjeeTT/issue_dump"
       target-repo:
-        description: "Repository to analyze workflow data from"
+        description: "Repository to read ownership metadata from"
         type: string
         default: "tenstorrent/tt-metal"
       max-issues:
         description: "Maximum number of issues to create (0 = unlimited)"
         type: number
         default: 0
+      slack-channel-id:
+        description: "Slack channel ID for triage notifications"
+        type: string
+        default: "C0APK6215B5"
+      issue-numbers:
+        description: >-
+          OPTIONAL. Restrict assign-owners to a specific set of issues. Accepts
+          bare numbers, `#123`, or full issue URLs, separated by commas or
+          whitespace. Leave empty to process every open CI-triage issue.
+        type: string
+        default: ""
+      skip-assigning-for-issues-that-already-have-owners:
+        description: >-
+          When true (default), skip any issue that already has a recommended-
+          owner comment before running the resolver. If every targeted issue is
+          already assigned, the workflow exits in seconds. Set to false to
+          re-resolve unconditionally.
+        type: boolean
+        default: true
+      reassign-to-someone-else:
+        description: >-
+          Re-resolve and EXCLUDE every prior recommendation for the targeted
+          issues, forcing a different pick. Updates comment in growing-history
+          format. Requires `skip-assigning-for-issues-that-already-have-owners=false`.
+        type: boolean
+        default: false
+      refresh-owner-recommendation:
+        description: >-
+          Re-resolve targeted issues without excluding prior owners (use after a
+          `pipeline_reorg` edit). Always rewrites the comment in growing-history
+          format. Requires `skip-assigning-for-issues-that-already-have-owners=false`.
+        type: boolean
+        default: false
+      extra-context-for-agent:
+        description: >-
+          OPTIONAL free-form text appended to the resolver-agent prompt. When
+          set, the deterministic `pipeline_reorg` fast path is bypassed.
+          Requires `skip-assigning-for-issues-that-already-have-owners=false`.
+        type: string
+        default: ""
+      llm-backend:
+        description: "LLM backend for the resolver agent fallback: 'cursor' (default) or 'copilot'"
+        type: string
+        default: "cursor"
     secrets:
       AGGREGATE_READ_TOKEN:
+        description: "Token with read access to target-repo"
         required: false
       ISSUE_WRITE_TOKEN:
+        description: "Token with write access to issue-repo"
         required: true
       CURSOR_API_KEY:
+        description: "Cursor API key (required when llm-backend=cursor)"
+        required: false
+      COPILOT_PAT:
+        description: "GitHub PAT with Copilot access (required when llm-backend=copilot)"
+        required: false
+      SLACK_BOT_TOKEN:
+        description: "Optional Slack bot token for Slack-deleted employment check"
         required: false
 
 jobs:
@@ -39,3 +100,22 @@ jobs:
       AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+
+  assign-owners:
+    if: ${{ inputs.assign-owners }}
+    uses: ./.github/workflows/triage-assign-owners.yaml
+    with:
+      issue-repo: ${{ inputs.issue-repo }}
+      target-repo: ${{ inputs.target-repo }}
+      issue-numbers: ${{ inputs.issue-numbers }}
+      skip-assigning-for-issues-that-already-have-owners: ${{ inputs.skip-assigning-for-issues-that-already-have-owners }}
+      reassign-to-someone-else: ${{ inputs.reassign-to-someone-else }}
+      refresh-owner-recommendation: ${{ inputs.refresh-owner-recommendation }}
+      extra-context-for-agent: ${{ inputs.extra-context-for-agent }}
+      llm-backend: ${{ inputs.llm-backend }}
+    secrets:
+      AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+      ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}

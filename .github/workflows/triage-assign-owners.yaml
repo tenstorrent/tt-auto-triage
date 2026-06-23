@@ -1,0 +1,202 @@
+name: "(triage) Assign Owners"
+
+on:
+  workflow_call:
+    inputs:
+      issue-repo:
+        description: "Repository that stores CI triage issues"
+        type: string
+        default: "ebanerjeeTT/issue_dump"
+      target-repo:
+        description: "Repository to read ownership metadata from"
+        type: string
+        default: "tenstorrent/tt-metal"
+      issue-numbers:
+        description: >-
+          OPTIONAL. Restrict this run to a specific set of issues instead of
+          every open "CI auto triage" issue in `issue-repo`. Accepts any mix
+          of bare numbers, `#123`, or full issue URLs separated by commas or
+          whitespace (e.g. "888, https://github.com/ebanerjeeTT/issue_dump/issues/885").
+          Leave empty to process every open CI-triage issue as usual.
+        required: false
+        type: string
+        default: ""
+      ex-employees:
+        description: >-
+          OPTIONAL escape hatch. Comma/whitespace-separated list of Slack IDs and/or
+          GitHub logins. Only use this for emergencies where Slack's `deleted` flag
+          hasn't been set yet (e.g., offboarding is still in flight). Leave empty in
+          steady state — the Slack `deleted` signal is authoritative on its own.
+        type: string
+        default: ""
+      skip-assigning-for-issues-that-already-have-owners:
+        description: >-
+          When true (default), any issue that already has a recommended-owner
+          comment is skipped BEFORE any pipeline_reorg load, Slack download,
+          identity-index build, or LLM agent call. Applies to both the
+          all-open-issues path and a scoped `issue-numbers` run — if you ask
+          for #888 and #888 already has an owner, the workflow does nothing
+          and exits in seconds. Set to false to re-resolve every issue
+          unconditionally (useful when you want to overwrite stale picks).
+        type: boolean
+        default: true
+      reassign-to-someone-else:
+        description: >-
+          Re-resolve every targeted issue and EXCLUDE every prior recommendation
+          (current + history) from the candidate pool, forcing a different pick.
+          Updates the recommendation comment in growing-history format. Requires
+          `skip-assigning-for-issues-that-already-have-owners=false`. Mutually
+          exclusive with `refresh-owner-recommendation`.
+        type: boolean
+        default: false
+      refresh-owner-recommendation:
+        description: >-
+          Re-resolve every targeted issue WITHOUT excluding prior recommendations
+          (use when something upstream — e.g. a `pipeline_reorg` edit — probably
+          changes the answer). Always rewrites the comment in growing-history
+          format, even if the new pick equals the old one. Requires
+          `skip-assigning-for-issues-that-already-have-owners=false`. Mutually
+          exclusive with `reassign-to-someone-else`.
+        type: boolean
+        default: false
+      extra-context-for-agent:
+        description: >-
+          OPTIONAL free-form text appended to the resolver-agent prompt under an
+          `EXTRA INPUT FROM DEVS` header. Use this to paste a Slack discussion
+          like "someone from ttnncore should take this; not sure who". When set,
+          the deterministic `pipeline_reorg` fast path is automatically bypassed
+          for every targeted issue so the hint can actually influence the pick.
+          Requires `skip-assigning-for-issues-that-already-have-owners=false`.
+        type: string
+        default: ""
+      llm-backend:
+        description: "LLM backend for the resolver agent fallback: 'cursor' (default) or 'copilot' (uses COPILOT_PAT, no Cursor quota)"
+        type: string
+        default: "cursor"
+    secrets:
+      AGGREGATE_READ_TOKEN:
+        description: "Token with read access to target-repo and tenstorrent org"
+        required: true
+      ISSUE_WRITE_TOKEN:
+        description: "Token with write access to issue-repo"
+        required: true
+      CURSOR_API_KEY:
+        description: "Cursor API key for the agent fallback owner resolver (required when llm-backend=cursor)"
+        required: false
+      COPILOT_PAT:
+        description: "GitHub PAT with Copilot access (required when llm-backend=copilot)"
+        required: false
+      SLACK_BOT_TOKEN:
+        description: "Slack bot token; used to check Slack 'deleted' for employment check"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  assign-owners:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Validate required secrets
+        env:
+          AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+          ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
+          LLM_BACKEND: ${{ inputs.llm-backend }}
+        run: |
+          [ -n "$ISSUE_WRITE_TOKEN" ] || { echo "::error::ISSUE_WRITE_TOKEN is required"; exit 1; }
+          [ -n "$AGGREGATE_READ_TOKEN" ] || { echo "::error::AGGREGATE_READ_TOKEN is required"; exit 1; }
+          case "$LLM_BACKEND" in
+            cursor)
+              [ -n "$CURSOR_API_KEY" ] || { echo "::error::CURSOR_API_KEY is required when llm-backend=cursor"; exit 1; }
+              ;;
+            copilot)
+              [ -n "$COPILOT_PAT" ] || { echo "::error::COPILOT_PAT is required when llm-backend=copilot"; exit 1; }
+              ;;
+            *)
+              echo "::error::llm-backend must be 'cursor' or 'copilot', got: '$LLM_BACKEND'"
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout tt-auto-triage
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-auto-triage
+          ref: ebanerjee/triage-assign-owners
+          persist-credentials: false
+
+      - name: Install Cursor CLI
+        if: inputs.llm-backend == 'cursor'
+        run: |
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Node.js 24 (required for Copilot CLI)
+        if: inputs.llm-backend == 'copilot'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install GitHub Copilot CLI
+        if: inputs.llm-backend == 'copilot'
+        run: |
+          set -euo pipefail
+          npm install -g @github/copilot
+          copilot --version || { echo "::error::Copilot CLI installation failed"; exit 1; }
+
+      - name: Checkout target repo ownership data
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target-repo }}
+          path: tt-metal
+          fetch-depth: 0
+          persist-credentials: false
+          sparse-checkout: |
+            .github/actions/analyze-workflow-data/owners.json
+            .github/CODEOWNERS
+            .github/workflows
+            tests/pipeline_reorg
+          token: ${{ secrets.AGGREGATE_READ_TOKEN }}
+
+      - name: Run assignee resolution stage
+        env:
+          GITHUB_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+          AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+          ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_PAT }}
+          LLM_BACKEND: ${{ inputs.llm-backend }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          ISSUE_REPO: ${{ inputs.issue-repo }}
+          TARGET_REPO: ${{ inputs.target-repo }}
+          EX_EMPLOYEES: ${{ inputs.ex-employees }}
+          ISSUE_NUMBERS: ${{ inputs.issue-numbers }}
+          SKIP_ALREADY_ASSIGNED: ${{ inputs.skip-assigning-for-issues-that-already-have-owners }}
+          REASSIGN_TO_SOMEONE_ELSE: ${{ inputs.reassign-to-someone-else }}
+          REFRESH_OWNER_RECOMMENDATION: ${{ inputs.refresh-owner-recommendation }}
+          EXTRA_CONTEXT_FOR_AGENT: ${{ inputs.extra-context-for-agent }}
+          PIPELINE_REORG_DIR: tt-metal/tests/pipeline_reorg
+          TARGET_REPO_ROOT: tt-metal
+          SLACK_DUMP_PATH: slack_users.json
+          SUMMARY_OUTPUT: summary.md
+          PYTHONPATH: .
+        run: python3 -m tools.ci.assign_owners
+
+      - name: Publish summary to run output
+        if: always()
+        run: |
+          if [ -f summary.md ]; then
+            cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No summary produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
