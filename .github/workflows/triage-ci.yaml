@@ -7,6 +7,14 @@ on:
         description: "Create GitHub issues for deterministic failures"
         type: boolean
         default: false
+      assign-owners:
+        description: "Resolve assignees for already-created CI triage issues"
+        type: boolean
+        default: false
+      slack-notify:
+        description: "Post testing-channel Slack messages for issues with assignee metadata"
+        type: boolean
+        default: false
       issue-repo:
         description: "Repository to create issues in"
         type: string
@@ -17,13 +25,19 @@ on:
         default: "tenstorrent/tt-metal"
       max-issues:
         description: "Maximum number of issues to create (0 = unlimited)"
-        type: number
-        default: 0
+        type: string
+        default: "0"
+      slack-channel-id:
+        description: "Slack channel ID for triage notifications"
+        type: string
+        default: "C0APK6215B5"
     secrets:
       AGGREGATE_READ_TOKEN:
         required: false
       ISSUE_WRITE_TOKEN:
         required: true
+      SLACK_BOT_TOKEN:
+        required: false
       CURSOR_API_KEY:
         required: false
 
@@ -39,3 +53,28 @@ jobs:
       AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
       CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+
+  validate-slack-notify:
+    if: ${{ inputs.slack-notify }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate slack-notify secrets
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "::error::SLACK_BOT_TOKEN is required when slack-notify is enabled"
+            exit 1
+          fi
+
+  slack-notify:
+    if: ${{ inputs.slack-notify && needs.validate-slack-notify.result == 'success' }}
+    needs:
+      - validate-slack-notify
+    uses: ./.github/workflows/triage-slack-notify.yaml
+    with:
+      issue-repo: ${{ inputs.issue-repo }}
+      slack-channel-id: ${{ inputs.slack-channel-id }}
+    secrets:
+      ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
