@@ -19,6 +19,7 @@ def load_all_open_issues(issue_repo: str, token: str) -> list[dict[str, Any]]:
         issues += [
             {"number": i.get("number", ""), "title": i.get("title", ""), "body": i.get("body", ""), "url": i.get("html_url", "")}
             for i in data if "pull_request" not in i
+            and not any(lb.get("name") == "dormant due to disable" for lb in i.get("labels", []))
         ]
         if len(data) < 100:
             break
@@ -31,22 +32,31 @@ def render(summary: list[dict[str, Any]], open_issues: list[dict[str, Any]]) -> 
     created = [item for item in summary if item.get("action") == "created"]
     dry_run = [item for item in summary if item.get("action") == "dry_run"]
     skipped = [item for item in summary if item.get("action") == "agent_skipped"]
+    stale = [item for item in summary if item.get("action") == "stale_recovered"]
 
     if created:
         lines.append(f"## Created ({len(created)})\n")
         for item in created:
-            lines.append(f"- [{item['workflow_name']} / {item['job']}]({item['issue']})")
+            warning_suffix = f" _(warning: {item.get('warning')})_" if item.get("warning") else ""
+            lines.append(f"- [{item['workflow_name']} / {item['job']}]({item['issue']}){warning_suffix}")
         lines.append("")
 
     if dry_run:
         lines.append(f"## Dry Run ({len(dry_run)})\n")
         for item in dry_run:
-            lines.append(f"- {item['workflow_name']} / {item['job']}")
+            warning_suffix = f" (warning: {item.get('warning')})" if item.get("warning") else ""
+            lines.append(f"- {item['workflow_name']} / {item['job']}{warning_suffix}")
         lines.append("")
 
     if skipped:
         lines.append(f"## Agent Skipped ({len(skipped)})\n")
         for item in skipped:
+            lines.append(f"- {item['workflow_name']} / {item['job']}: {item.get('reason', '')}")
+        lines.append("")
+
+    if stale:
+        lines.append(f"## Stale / Recovered ({len(stale)})\n")
+        for item in stale:
             lines.append(f"- {item['workflow_name']} / {item['job']}: {item.get('reason', '')}")
         lines.append("")
 

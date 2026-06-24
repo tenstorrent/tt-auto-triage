@@ -58,7 +58,7 @@ def api_get(url: str, token: str | None = None, retries: int = 3) -> Any:
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.loads(resp.read())
-        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as exc:
+        except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             if attempt < retries - 1:
                 time.sleep(2 ** (attempt + 1))
                 continue

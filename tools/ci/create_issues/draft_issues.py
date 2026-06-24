@@ -14,21 +14,21 @@ _PROMPT_TEMPLATE = string.Template(
 )
 
 MARKER = "===FINAL_REVIEW==="
-_DEFAULT_MODEL = "claude-4-sonnet"
 _AGENT_TIMEOUT = 300
 
 
-def _run_cursor_agent(prompt: str, model: str = _DEFAULT_MODEL) -> str:
-    cmd = ["agent", "--trust", "-p", prompt]
-    if model != "auto":
-        cmd[1:1] = ["--model", model]
+def _run_copilot_agent(prompt: str) -> str:
+    """Run the Copilot CLI agent and return its stdout."""
     safe_env = {
         key: os.environ[key]
-        for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "CURSOR_API_KEY")
+        for key in ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL")
         if key in os.environ
     }
+    copilot_pat = os.environ.get("COPILOT_PAT", "")
+    if copilot_pat:
+        safe_env["COPILOT_GITHUB_TOKEN"] = copilot_pat
     proc = subprocess.run(
-        cmd,
+        ["copilot", "-p", prompt, "--allow-all-tools"],
         capture_output=True,
         text=True,
         timeout=_AGENT_TIMEOUT,
@@ -36,9 +36,14 @@ def _run_cursor_agent(prompt: str, model: str = _DEFAULT_MODEL) -> str:
     )
     if proc.returncode != 0:
         raise RuntimeError(
-            f"Cursor agent exited with code {proc.returncode}: {proc.stderr[:200]}"
+            f"Copilot agent exited with code {proc.returncode}: {proc.stderr[:200]}"
         )
     return proc.stdout or ""
+
+
+def _run_llm_agent(prompt: str) -> str:
+    """Run the LLM agent (Copilot) and return its stdout."""
+    return _run_copilot_agent(prompt)
 
 
 def _parse_agent_json(text: str) -> dict[str, Any]:
@@ -56,17 +61,50 @@ def _parse_agent_json(text: str) -> dict[str, Any]:
 def draft_issue_body(
     job: dict[str, Any],
     log_paths: list[str],
-    model: str = _DEFAULT_MODEL,
     consecutive: int = 3,
 ) -> dict[str, Any] | None:
     workflow_name = job["workflow_name"]
     job_name = job["job_name"]
     job_urls = job.get("job_urls", [])
     run_urls = job.get("run_urls", [])
-
     log_sections: list[str] = []
-    for index, (url, path) in enumerate(zip(job_urls, log_paths), start=1):
-        log_sections.append(f"Run {index} job URL: {url}\nRun {index} local log path: {path}")
+    run_log_entries = job.get("run_log_entries", [])
+    if run_log_entries:
+        for entry in run_log_entries:
+            url = str(entry.get("job_url", "")).strip()
+            path = str(entry.get("log_path", "")).strip()
+            run_index = entry.get("run_index")
+            if not url or not path:
+                continue
+            if isinstance(run_index, int) and run_index > 0:
+                index = run_index
+            else:
+                index = len(log_sections) + 1
+            log_sections.append(f"Run {index} job URL: {url}\nRun {index} local log path: {path}")
+    else:
+        non_empty_job_urls = [url for url in job_urls if url]
+        for index, (url, path) in enumerate(zip(non_empty_job_urls, log_paths), start=1):
+            log_sections.append(f"Run {index} job URL: {url}\nRun {index} local log path: {path}")
+
+    # ── Build regression timeline section from boundary data ──────
+    timeline_lines: list[str] = []
+    if job.get("last_passing_sha"):
+        sha = job["last_passing_sha"][:12]
+        date = job.get("last_passing_date", "N/A")
+        url = job.get("last_passing_url", "")
+        timeline_lines.append(f"- Last passing run: commit `{sha}` on {date}" + (f" — {url}" if url else ""))
+    if job.get("first_failing_sha"):
+        sha = job["first_failing_sha"][:12]
+        date = job.get("first_failing_date", "N/A")
+        url = job.get("first_failing_url", "")
+        timeline_lines.append(f"- First failing run: commit `{sha}` on {date}" + (f" — {url}" if url else ""))
+    if job.get("last_failing_sha"):
+        sha = job["last_failing_sha"][:12]
+        date = job.get("last_failing_date", "N/A")
+        url = job.get("last_failing_url", "")
+        timeline_lines.append(f"- Most recent failing run: commit `{sha}` on {date}" + (f" — {url}" if url else ""))
+
+    regression_timeline = "\n".join(timeline_lines) if timeline_lines else "No temporal boundary data available."
 
     prompt = _PROMPT_TEMPLATE.substitute(
         workflow_name=workflow_name,
@@ -76,16 +114,17 @@ def draft_issue_body(
         consecutive=consecutive,
         log_sections="\n".join(f"- {section}" for section in log_sections),
         marker=MARKER,
+        regression_timeline=regression_timeline,
     )
     try:
-        output = _run_cursor_agent(prompt, model)
+        output = _run_llm_agent(prompt)
         result = _parse_agent_json(output)
         if not isinstance(result, dict):
             log("  Agent returned non-dict JSON, skipping")
             return None
         return result
     except subprocess.TimeoutExpired:
-        log(f"  Cursor agent timed out after {_AGENT_TIMEOUT}s")
+        log(f"  LLM agent timed out after {_AGENT_TIMEOUT}s")
         return None
     except Exception as exc:
         log(f"  Agent drafting failed ({type(exc).__name__}): {exc}")

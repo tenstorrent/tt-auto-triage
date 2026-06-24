@@ -27,20 +27,37 @@ def _remove_metadata_block(body: str) -> str:
     return cleaned.strip()
 
 
-def append_base_markers(body: str, *, workflow_name: str, job_name: str) -> str:
+def append_base_markers(
+    body: str,
+    *,
+    workflow_name: str,
+    job_name: str,
+    extra_jobs: list[tuple[str, str]] | None = None,
+) -> str:
+    """Embed auto-triage metadata covering one or more (workflow, job) pairs.
+
+    ``extra_jobs`` lists additional (workflow_name, job_name) pairs that are
+    grouped into this single issue so they are not filed again separately.
+    """
     cleaned = _remove_metadata_block(body)
     lines = [METADATA_START]
     lines += [f"`Auto-triage-workflow: {workflow_name}`", f"`Auto-triage-job-name: {job_name}`"]
+    for wf, jn in (extra_jobs or []):
+        lines += [f"`Auto-triage-workflow: {wf}`", f"`Auto-triage-job-name: {jn}`"]
     lines.append(METADATA_END)
     return "\n\n".join(part for part in (cleaned, "\n".join(lines)) if part).strip()
 
 
 def tracked_pairs_from_issues(issues: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    """Extract all (workflow_name, job_name) pairs tracked across all open issues.
+
+    Supports issues that cover multiple grouped jobs (multiple pairs per metadata block).
+    """
     tracked: set[tuple[str, str]] = set()
     for issue in issues:
         metadata = _extract_metadata_block(issue.get("body") or "")
-        workflow_match = re.search(r"Auto-triage-workflow:\s*`?([^`\n]+)`?", metadata)
-        job_match = re.search(r"Auto-triage-job-name:\s*`?([^`\n]+)`?", metadata)
-        if workflow_match and job_match:
-            tracked.add((workflow_match.group(1).strip(), job_match.group(1).strip()))
+        workflows = re.findall(r"Auto-triage-workflow:\s*`?([^`\n]+)`?", metadata)
+        jobs = re.findall(r"Auto-triage-job-name:\s*`?([^`\n]+)`?", metadata)
+        for wf, jn in zip(workflows, jobs):
+            tracked.add((wf.strip(), jn.strip()))
     return tracked

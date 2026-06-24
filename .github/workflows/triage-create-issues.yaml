@@ -6,7 +6,7 @@ on:
       issue-repo:
         description: "Repository to create issues in"
         type: string
-        default: "ebanerjeeTT/issue_dump"
+        default: "tenstorrent/tt-metal"
       target-repo:
         description: "Repository to analyze workflow data from"
         type: string
@@ -15,6 +15,26 @@ on:
         description: "Maximum number of issues to create (0 = unlimited)"
         type: number
         default: 0
+      workflow-filter:
+        description: "Comma-separated substrings to filter workflow names (e.g. 'ops-unit-tests,Blackhole'). Empty = all."
+        type: string
+        default: ""
+      llm-backend:
+        description: "LLM backend for issue drafting (only 'copilot' is supported)"
+        type: string
+        default: "copilot"
+      consecutive-failures-high-volume:
+        description: "Consecutive failures required to file an issue for workflows with more than 'high-volume-runs-per-day' main runs in the last 24h."
+        type: number
+        default: 4
+      consecutive-failures-low-volume:
+        description: "Consecutive failures required to file an issue for workflows running at or below 'high-volume-runs-per-day' main runs per day."
+        type: number
+        default: 2
+      high-volume-runs-per-day:
+        description: "Strict cutoff (>) for classifying a workflow as high-volume based on main runs in the last 24h."
+        type: number
+        default: 5
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to workflow runs and artifacts"
@@ -22,13 +42,14 @@ on:
       ISSUE_WRITE_TOKEN:
         description: "Token with write access to the issue repository"
         required: true
-      CURSOR_API_KEY:
-        description: "Cursor API key for issue drafting"
+      COPILOT_PAT:
+        description: "GitHub PAT for Copilot CLI auth"
         required: true
 
 permissions:
   contents: read
   actions: read
+  issues: write
 
 jobs:
   create-issues:
@@ -39,38 +60,41 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/tt-auto-triage
-          ref: ebanerjee/triage-create-issues
+          ref: main
           persist-credentials: false
 
-      - name: Install Cursor CLI
+      - name: Set up Node.js 24 (required for Copilot CLI)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install GitHub Copilot CLI
         run: |
           set -euo pipefail
-          install_script="$(mktemp)"
-          curl --fail --show-error --silent --location \
-            --proto '=https' --tlsv1.2 \
-            https://cursor.com/install \
-            -o "$install_script"
-          bash "$install_script"
-          rm -f "$install_script"
-          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+          npm install -g @github/copilot@1.0.64
+          copilot --version || { echo "::error::Copilot CLI installation failed"; exit 1; }
 
       - name: Validate secrets
         env:
           AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
         run: |
           [ -n "$AGGREGATE_READ_TOKEN" ] || { echo "::error::AGGREGATE_READ_TOKEN is required"; exit 1; }
-          [ -n "$CURSOR_API_KEY" ] || { echo "::error::CURSOR_API_KEY is required"; exit 1; }
+          [ -n "$COPILOT_PAT" ] || { echo "::error::COPILOT_PAT is required"; exit 1; }
 
       - name: Run issue creation stage
         env:
           GITHUB_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
           ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
-          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
           CREATE_ISSUES: "true"
           ISSUE_REPO: ${{ inputs.issue-repo }}
           TARGET_REPO: ${{ inputs.target-repo }}
           MAX_ISSUES: ${{ inputs.max-issues }}
+          WORKFLOW_FILTER: ${{ inputs.workflow-filter }}
+          CONSECUTIVE_FAILURES_HIGH_VOLUME: ${{ inputs.consecutive-failures-high-volume }}
+          CONSECUTIVE_FAILURES_LOW_VOLUME: ${{ inputs.consecutive-failures-low-volume }}
+          HIGH_VOLUME_RUNS_PER_DAY: ${{ inputs.high-volume-runs-per-day }}
           SUMMARY_OUTPUT: summary.md
           PYTHONPATH: .
         run: python3 -m tools.ci.create_issues
@@ -83,3 +107,11 @@ jobs:
           else
             echo "No summary produced." >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Upload issues artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issues
+          path: issues.json
+          if-no-files-found: warn

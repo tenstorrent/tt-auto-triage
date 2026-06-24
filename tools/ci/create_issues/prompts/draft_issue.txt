@@ -9,6 +9,9 @@ $run_url_list
 Failing job URLs:
 $job_url_list
 
+Regression timeline (last passing / first failing boundaries):
+$regression_timeline
+
 Log files for each of the $consecutive failing runs are saved locally.
 You MUST read each log file and determine the terminal failure.
 
@@ -17,13 +20,31 @@ $log_sections
 INSTRUCTIONS:
 1. Read ALL $consecutive log files using your file reading tools.
 2. Identify the terminal failure or error in each log.
-3. Determine if all $consecutive runs fail with semantically identical errors.
-4. If yes: draft a GitHub issue title and body in this exact format:
+3. Determine if all $consecutive runs fail with semantically identical terminal errors.
+4. Be conservative. Prefer false negatives over false positives.
+5. Set deterministic=false unless ALL of the following are true:
+   - every run shows the same terminal failure class (same root error, allowing minor numeric/timestamp differences),
+   - there are no contradictory terminal errors across runs (for example: timeout in one run, assertion in another),
+   - your error_excerpt quotes those terminal lines directly from the provided logs (no paraphrased or inferred error text),
+   - you can explicitly point to at least one terminal error line from each run supporting the same root cause,
+   - if both last passing and first failing boundaries are present, they must refer to different commits/runs (same SHA or same run URL means deterministic=false — do not file an issue and do not compensate with a warning in the issue body).
+6. Additional strictness rules:
+   - If a run has multiple plausible terminal failures and you cannot confidently identify one shared root cause across all runs, set deterministic=false.
+   - If failures look related but not clearly identical (same subsystem but different terminal exception class), set deterministic=false.
+   - If evidence is incomplete in any run, set deterministic=false.
+7. If deterministic=true: draft a GitHub issue title and body in this exact format:
    - Title: a concise description of the failure (NOT just "deterministic failure")
    - Body: a markdown CI Failure Report with these sections:
      ## CI Failure Report
      **Workflow:** ...
      **Job:** ...
+     ### Regression timeline
+     Include the regression timeline data provided above. Show:
+     - Last passing commit (SHA + date + run URL) — or "N/A" if unknown
+     - First failing commit (SHA + date + job URL) — the oldest analyzed run confirmed failing with this error
+     - Most recent failing commit (SHA + date + job URL)
+     The first/most-recent failing links point to the specific failing job, not the run.
+     This helps readers immediately gauge when the regression started and how long it has persisted.
      ### Failing job URLs (last $consecutive runs)
      - (list each job URL)
      ### Failing test path(s)
@@ -34,8 +55,11 @@ INSTRUCTIONS:
      (how to reproduce locally based on the job command)
      ### Notes
      (any additional context, e.g. timeout vs assertion failure)
-5. If the errors are NOT semantically identical across all $consecutive runs, set deterministic to false.
+8. In the Notes section, add a short "Determinism check" bullet list summarizing each run's terminal error line used for comparison.
+9. If deterministic=false, keep issue_title and issue_body empty strings and provide a short reason. The reason must name what differed across runs (or what evidence was missing).
+
+DO NOT invent or infer evidence that is not present in the logs.
 
 Output the marker below on its own line, followed by compact JSON only:
 $marker
-{"deterministic": true/false, "confidence": "low|medium|high", "error_excerpt": "key error text", "issue_title": "[CI] ...", "issue_body": "full markdown body"}
+{"deterministic": true/false, "confidence": "low|medium|high", "reason": "why deterministic is false (or empty)", "error_excerpt": "exact key terminal error text from logs", "issue_title": "[CI] ...", "issue_body": "full markdown body"}
