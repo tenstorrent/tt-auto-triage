@@ -230,7 +230,7 @@ jobs:
 - `target-repo`: Repository to read workflow run data from (default: `tenstorrent/tt-metal`)
 - `max-issues`: Maximum number of issues to create in one run, `0` = unlimited (default: `0`)
 - `workflow-filter`: Comma-separated substrings to restrict which workflow names are considered; empty means all workflows (default: `""`)
-- `llm-backend`: LLM backend used to draft issue content — only `"copilot"` is currently supported (default: `"copilot"`)
+- `llm-backend`: reserved for selecting the drafting backend — accepted by the workflow but currently a no-op; it isn't passed through to the job env or read by `tools.ci.create_issues`, so Copilot is used regardless of this value (default: `"copilot"`)
 - `consecutive-failures-high-volume`: Consecutive failures required before filing an issue for a **high-volume** workflow (default: `4`)
 - `consecutive-failures-low-volume`: Consecutive failures required before filing an issue for a **low-volume** workflow (default: `2`)
 - `high-volume-runs-per-day`: Strict cutoff (`>`) on main-branch runs in the last 24h used to classify a workflow as high-volume vs. low-volume (default: `5`)
@@ -251,7 +251,9 @@ For each job whose recent-run streak meets the consecutive-failure threshold abo
 2. Downloads logs for that job and drafts an issue title/body with the Copilot CLI agent
 3. Skips the job if the agent determines the failure isn't deterministic, or returns low confidence — only `medium`/`high` confidence drafts result in an issue
 4. Skips the job if an issue is already open for that workflow/job pair (tracked via metadata markers embedded in the issue body)
-5. Creates the issue (or, with `CREATE_ISSUES=false`, just records what *would* have been created — this is the workflow's dry-run mode), and stops there
+5. Creates the issue, and stops there
+
+The underlying script (`tools.ci.create_issues`) supports a dry-run mode — set `CREATE_ISSUES=false` and it only records what *would* have been created — but the reusable workflow (`triage-create-issues.yaml`) always hard-codes `CREATE_ISSUES: "true"` in its step env with no input to override it, so dry-run isn't reachable by calling the workflow. To dry-run, invoke `python3 -m tools.ci.create_issues` directly with `CREATE_ISSUES` unset.
 
 Set `max-issues` to cap how many issues a single run can create, and `workflow-filter` to scope the scan to specific workflows (e.g. `"Blackhole,ops-unit-tests"`). There is no update or close step in this repo — once filed, the issue is picked up and lifecycled by a separate n8n workflow outside this repo.
 
@@ -372,7 +374,7 @@ The LLM instructions used in the Analysis Stage (`instructions_footer_for_llm.tx
 3. **Deduplicate Against Open Issues**: Skips workflow/job pairs that are already tracked
 4. **Confirm Freshness**: Re-checks each remaining candidate against the latest run before spending log-download/LLM cost on it, in case it already recovered
 5. **Draft Issue Content**: Uses the GitHub Copilot CLI agent plus run logs to generate issue title/body, and gate on medium/high confidence
-6. **Create Issues**: Opens GitHub issues when `CREATE_ISSUES=true` (or records dry-run results)
+6. **Create Issues**: Opens GitHub issues when `CREATE_ISSUES=true` — the reusable workflow always sets this, so calling it via `triage-create-issues.yaml` always creates for real; `CREATE_ISSUES=false` (dry-run, recording what would have been created) is only reachable by running `python3 -m tools.ci.create_issues` directly
 7. **Summarize Results**: Produces markdown summary output for auditing
 
 This pipeline never updates or closes an issue it created — that's out of scope for this repo. Once filed, a separate n8n workflow outside this repo takes over updating and lifecycling it.
