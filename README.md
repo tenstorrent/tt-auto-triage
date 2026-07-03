@@ -6,15 +6,13 @@ A GitHub Actions-based system for CI triage and signal hygiene: identify likely 
 
 ## Summary
 
-Three independent pieces, each usable on its own, plus a documentation-only workstream:
+Three independent pieces, each usable on its own:
 
-1. **Regression Analysis** (`.github/actions/regression-analysis`) — a composite action attached to a failing CI job. Finds the last successful run and the first failing run, downloads the commits in between, and uses the GitHub Copilot CLI to identify the likely culprit commit and classify the failure into one of [5 cases](#failure-case-categories). Can optionally re-run the job on real hardware to confirm determinism, draft an auto-fix PR for simple cases, and posts results to Slack.
+1. **Regression Analysis** (`.github/actions/regression-analysis`) — a composite action attached to a failing CI job. Finds the last successful run and the first failing run, downloads the commits in between, and uses the GitHub Copilot CLI to identify the likely culprit commit and classify the failure into one of [5 cases](#failure-case-categories). Can optionally re-run the job on real hardware to confirm determinism, draft an auto-fix PR for simple cases, and posts results to Slack. Its LLM instructions also include bug-escape guidance — prompt text that flags when a failure indicates missing lower-level test coverage and recommends shift-left additions in the triage output. This is just guidance surfaced in regression-analysis's own output, not a bug-escape detection system — the actual bug-escape finding logic runs as a separate workflow outside this repo.
 
 2. **Deterministic Failure Issue Lifecycle** (`.github/workflows/triage-create-issues.yaml`) — a reusable workflow, typically run on a schedule, that scans recent runs across a target repo and files a tt-metal issue for jobs that are **failing consistently**. "Consistently" is threshold-based and adapts to how often a workflow runs: a job needs a longer consecutive-failure streak to qualify if its workflow runs frequently on main, and a shorter streak if it's low-volume — so a noisy, frequently-run pipeline isn't flagged over a couple of flaky runs. Before drafting anything it re-checks that the job hasn't since recovered, then uses the Copilot CLI to draft an issue from the logs and only files it if the draft comes back medium/high confidence and no issue is already tracked for that workflow/job pair. See [Deterministic Failure Issue Lifecycle](#deterministic-failure-issue-lifecycle) below for the exact thresholds.
 
 3. **Slack Output Analysis** (`.github/actions/slack_output_analysis`) — syncs recurring error messages posted to a Slack channel into GitHub issues, grouping similar errors via text-similarity matching so repeat instances of the same error land on one issue instead of many.
-
-4. **Bug-Escape Guidance** (separate workstream) — guidance embedded in the regression-analysis LLM instructions that flags when a failure indicates missing lower-level test coverage and recommends shift-left additions. Independent of the issue grouping/maintenance logic above.
 
 Everything below this point is detailed reference material — full setup, all inputs/outputs, and pipeline internals for each piece.
 
@@ -365,6 +363,8 @@ jobs:
 6. **Retry Logic (Optional)**: Re-runs deterministic failures on supported hardware to confirm determinism
 7. **Slack Notification**: Formats and sends triage results to Slack
 
+The LLM instructions used in the Analysis Stage (`instructions_footer_for_llm.txt`) also carry bug-escape guidance: prompt text that flags when a failure indicates missing lower-level test coverage and recommends shift-left additions in the triage output. This only shapes what regression-analysis writes about a given failure — the actual bug-escape detection/finding logic is a separate workflow that lives outside this repo.
+
 ### Deterministic Failure Issue Lifecycle Pipeline
 
 1. **Download Workflow Data**: Reads recent workflow runs and artifacts for the target repository
@@ -382,10 +382,6 @@ jobs:
 3. **Group Similar Errors (Rebuild Mode)**: Uses ML-based similarity matching for grouped analysis/reporting
 4. **Issue Sync**: Creates/updates issues in update mode, recreates issues in rebuild mode, and applies close/cleanup logic during sync
 5. **Generate Reports**: Creates error reports and incremental reports comparing against previous runs
-
-### Bug-Escape Guidance (Separate Workstream)
-
-This is intentionally separate from issue grouping and issue maintenance workflows. It focuses on identifying likely bug escapes and proposing shift-left test coverage improvements in regression-analysis outputs.
 
 ## Requirements
 
