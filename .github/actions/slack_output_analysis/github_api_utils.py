@@ -179,6 +179,33 @@ def check_github_rate_limit(github_token: str) -> Optional[Dict[str, int]]:
         return None
 
 
+def github_token_is_valid(github_token: str) -> bool:
+    """Check whether the token is accepted by the GitHub API.
+
+    /rate_limit answers for any valid credential, so a 401 here means the token
+    itself is expired or revoked rather than lacking a particular scope. Worth
+    distinguishing, because every commit hash lookup will fail for the rest of
+    the run and the errors that depend on them will be dropped.
+    """
+    if not github_token:
+        return False
+
+    try:
+        response = requests.get(
+            "https://api.github.com/rate_limit",
+            headers={
+                "Authorization": f"token {github_token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            timeout=30,
+        )
+    except requests.RequestException:
+        # Network trouble is not evidence that the token is bad.
+        return True
+
+    return response.status_code != 401
+
+
 def log_rate_limit_status(github_token: str, stage: str = "") -> None:
     """Log GitHub API rate limit status.
     

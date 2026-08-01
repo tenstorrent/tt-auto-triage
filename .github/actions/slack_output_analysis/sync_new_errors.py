@@ -314,12 +314,24 @@ def main():
 
     github_token = load_secrets()["GITHUB_TOKEN"]
     if github_token:
-        from github_api_utils import load_commit_hash_cache
+        from github_api_utils import github_token_is_valid, load_commit_hash_cache
+
+        # Every error needs a commit hash, and every commit hash comes from the
+        # API. Continuing with a rejected token would drop the entire batch and
+        # still exit zero, so the failure has to surface here.
+        if not github_token_is_valid(github_token):
+            print("ERROR: the GitHub token was rejected by the API (401).")
+            print("  Commit hashes cannot be fetched, so every error would be dropped.")
+            print("  Refusing to run rather than reporting success having stored nothing.")
+            print("  Check whether ERROR_GROUPING_TOKEN has expired or been revoked.")
+            sys.exit(1)
 
         load_commit_hash_cache()
         log_rate_limit_status(github_token, "start")
     else:
-        print("⚠ Warning: no GitHub token available, commit hashes cannot be fetched")
+        print("ERROR: no GitHub token available, so no commit hashes can be fetched")
+        print("  and every error would be dropped. Refusing to run.")
+        sys.exit(1)
 
     print(f"\nLoading errors from {ALL_ERRORS_FILE}...")
     try:
@@ -401,6 +413,16 @@ def main():
                     appended += 1
     else:
         print(f"\nNo new errors to process.")
+
+    # Losing every single new error means something systemic is wrong rather
+    # than a few entries being malformed, and the state we would write is one
+    # where none of this batch was ever seen. Nothing is saved, so the next run
+    # gets another attempt at the same errors.
+    if new_errors and new_clusters == 0 and appended == 0:
+        print(f"\nERROR: all {len(new_errors)} new error(s) were dropped, none were stored.")
+        print("  Leaving the cluster state untouched so the next run can retry them.")
+        print("  The skip reasons above say which metadata could not be resolved.")
+        sys.exit(1)
 
     print(f"\n{'=' * 80}")
     print("Saving cluster state...")

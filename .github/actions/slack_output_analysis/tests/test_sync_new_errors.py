@@ -4,6 +4,8 @@ Similarity is stubbed throughout: what matters here is what happens to the
 state once a match has or has not been found, not how the match was scored.
 """
 
+import json
+import time
 from datetime import datetime
 
 import pytest
@@ -270,3 +272,90 @@ class TestRunMetadata:
             "timestamp": "",
             "unix_timestamp": None,
         }
+
+
+class TestRefusalToRunBlind:
+    """Guards against reporting success while silently storing nothing.
+
+    A rejected token makes every commit hash lookup fail, so every error is
+    dropped for missing metadata. Before these guards the run stored an empty
+    state and exited zero, which looked identical to a quiet day.
+    """
+
+    @pytest.fixture
+    def otherwise_healthy_run(self, monkeypatch, tmp_path, no_match):
+        """Everything downstream works, so only the token guard can stop the run.
+
+        Without this the run would exit on a missing all_errors.json and the
+        tests would pass whether or not the guard exists.
+        """
+        import github_api_utils
+
+        errors_file = tmp_path / "all_errors.json"
+        errors_file.write_text(
+            json.dumps([error_entry(url="https://x/job/1", unix=time.time() - 3600)]),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(sync_new_errors, "ALL_ERRORS_FILE", str(errors_file))
+        monkeypatch.setattr(sync_new_errors, "get_commit_hash_from_github", lambda url, token: "abc1234")
+        monkeypatch.setattr(sync_new_errors, "load_cluster_state", lambda *a, **k: [])
+        monkeypatch.setattr(sync_new_errors, "save_cluster_state", lambda *a, **k: None)
+        monkeypatch.setattr(sync_new_errors, "log_rate_limit_status", lambda *a, **k: None)
+        monkeypatch.setattr(github_api_utils, "load_commit_hash_cache", lambda *a, **k: None)
+        monkeypatch.setattr(github_api_utils, "save_commit_hash_cache", lambda *a, **k: None)
+        monkeypatch.setattr(github_api_utils, "get_commit_hash_cache_stats",
+                            lambda: {"total_entries": 0, "found": 0, "not_found": 0})
+
+    def test_the_guard_does_not_fire_on_a_healthy_run(self, monkeypatch, otherwise_healthy_run):
+        """Establishes that the two tests below are actually testing the guard."""
+        import github_api_utils
+
+        monkeypatch.setattr(sync_new_errors, "load_secrets", lambda: {"GITHUB_TOKEN": "valid"})
+        monkeypatch.setattr(github_api_utils, "github_token_is_valid", lambda token: True)
+
+        sync_new_errors.main()
+
+    def test_a_rejected_token_stops_the_run(self, monkeypatch, otherwise_healthy_run):
+        import github_api_utils
+
+        monkeypatch.setattr(sync_new_errors, "load_secrets", lambda: {"GITHUB_TOKEN": "expired"})
+        monkeypatch.setattr(github_api_utils, "github_token_is_valid", lambda token: False)
+
+        with pytest.raises(SystemExit) as exit_info:
+            sync_new_errors.main()
+
+        assert exit_info.value.code == 1
+
+    def test_a_missing_token_stops_the_run(self, monkeypatch, otherwise_healthy_run):
+        monkeypatch.setattr(sync_new_errors, "load_secrets", lambda: {"GITHUB_TOKEN": ""})
+
+        with pytest.raises(SystemExit) as exit_info:
+            sync_new_errors.main()
+
+        assert exit_info.value.code == 1
+
+    def test_dropping_every_new_error_stops_the_run(self, monkeypatch, tmp_path, no_match):
+        """Reached when the token is accepted but the lookups still fail."""
+        import github_api_utils
+
+        recent = time.time() - 3600
+        errors_file = tmp_path / "all_errors.json"
+        errors_file.write_text(json.dumps([error_entry(url="https://x/job/1", unix=recent),
+                                           error_entry(url="https://x/job/2", unix=recent)]), encoding="utf-8")
+        state_file = tmp_path / "cluster_state.json"
+
+        monkeypatch.setattr(sync_new_errors, "load_secrets", lambda: {"GITHUB_TOKEN": "valid"})
+        monkeypatch.setattr(github_api_utils, "github_token_is_valid", lambda token: True)
+        monkeypatch.setattr(github_api_utils, "load_commit_hash_cache", lambda *a, **k: None)
+        monkeypatch.setattr(sync_new_errors, "log_rate_limit_status", lambda *a, **k: None)
+        monkeypatch.setattr(sync_new_errors, "ALL_ERRORS_FILE", str(errors_file))
+        monkeypatch.setattr(sync_new_errors, "get_commit_hash_from_github", lambda url, token: None)
+        monkeypatch.setattr(sync_new_errors, "load_cluster_state", lambda *a, **k: [])
+        monkeypatch.setattr(sync_new_errors, "save_cluster_state",
+                            lambda *a, **k: state_file.write_text("saved", encoding="utf-8"))
+
+        with pytest.raises(SystemExit) as exit_info:
+            sync_new_errors.main()
+
+        assert exit_info.value.code == 1
+        assert not state_file.exists(), "the empty state must not overwrite what is already stored"
