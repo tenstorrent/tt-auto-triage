@@ -11,10 +11,10 @@ from typing import Dict, Optional
 
 import requests
 
-# Get the directory where this script is located
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-COMMIT_HASH_CACHE_FILE = os.path.join(SCRIPT_DIR, "commit_hash_cache.json")
-JOB_NAME_CACHE_FILE = os.path.join(SCRIPT_DIR, "job_name_cache.json")
+# Caches live in the state directory so they are carried between runs by the
+# state artifact. Writing them next to this file would lose them, since the
+# action is checked out fresh every run.
+from state_paths import COMMIT_HASH_CACHE_FILE, JOB_NAME_CACHE_FILE, ensure_state_dir
 
 # Module-level cache for commit hashes to avoid redundant API calls
 # Maps run_id -> commit_hash (or None if not found)
@@ -62,6 +62,7 @@ def save_commit_hash_cache() -> None:
         return
 
     try:
+        ensure_state_dir()
         with open(COMMIT_HASH_CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump(_commit_hash_cache, f, indent=2, ensure_ascii=False)
     except Exception as e:
@@ -100,6 +101,7 @@ def save_job_name_cache() -> None:
         return
 
     try:
+        ensure_state_dir()
         with open(JOB_NAME_CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump(_job_name_cache, f, indent=2, ensure_ascii=False)
     except Exception as e:

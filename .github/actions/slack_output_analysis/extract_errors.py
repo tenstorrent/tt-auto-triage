@@ -13,10 +13,11 @@ When EXTRACT_ALL_ERRORS is True:
 All errors are extracted from the "FAILURE MESSAGE:" field as-is, without any truncation or cleanup.
 Entries without "FAILURE MESSAGE:" are skipped.
 
-Output format: [error_message, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd, full_report_link]
+Output format: [error_message, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd, full_report_link, unix_timestamp]
 All fields except error_message can be None if not available.
 is_nd is a boolean indicating if the error is marked as non-deterministic (ND).
 full_report_link is the URL to the auto-triage workflow run that analyzed this failure.
+unix_timestamp is the raw Slack timestamp; the formatted one is for display only.
 """
 
 import json
@@ -25,6 +26,8 @@ import sys
 import re
 import time
 from datetime import datetime
+
+from timestamps import format_unix
 
 # Set to True to extract all errors, False to only extract non-deterministic errors
 EXTRACT_ALL_ERRORS = True
@@ -127,34 +130,14 @@ def extract_workflow_and_job_from_full_text(entry):
 
 def format_timestamp(timestamp_str):
     """Convert Unix timestamp to readable format like 'January 3rd, 5:32pm, 26.43 seconds'."""
+    return format_unix(timestamp_str)
+
+
+def parse_unix_timestamp(timestamp_str):
+    """Return the raw Slack timestamp as a float, or None if unusable."""
     try:
-        # Parse the timestamp (it's a float string like "1767911966.500619")
-        ts_float = float(timestamp_str)
-        dt = datetime.fromtimestamp(ts_float)
-
-        # Format month name with ordinal day
-        day = dt.day
-        # Add ordinal suffix (1st, 2nd, 3rd, 4th, etc.)
-        if 10 <= day % 100 <= 20:
-            suffix = "th"
-        else:
-            suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
-
-        month_name = dt.strftime("%B")
-        date_part = f"{month_name} {day}{suffix}"
-
-        # Format time in 12-hour format with am/pm
-        hour_12 = dt.strftime("%I").lstrip("0") or "12"  # Remove leading zero, handle midnight
-        minute = dt.strftime("%M")
-        am_pm = dt.strftime("%p").lower()
-        time_part = f"{hour_12}:{minute}{am_pm}"
-
-        # Extract seconds with decimal precision
-        seconds_with_decimal = ts_float % 60
-        seconds_part = f"{seconds_with_decimal:.2f} seconds"
-
-        return f"{date_part}, {time_part}, {seconds_part}"
-    except (ValueError, OSError, TypeError):
+        return float(timestamp_str)
+    except (ValueError, TypeError):
         return None
 
 
@@ -213,6 +196,7 @@ def main():
             # Extract and format timestamp
             timestamp_str = entry.get("timestamp", "")
             formatted_timestamp = format_timestamp(timestamp_str) if timestamp_str else None
+            unix_timestamp = parse_unix_timestamp(timestamp_str) if timestamp_str else None
             # Extract job and workflow names
             # First try the direct fields
             job_name = entry.get("failing_job", "") or None
@@ -228,9 +212,9 @@ def main():
             is_nd = is_non_deterministic(entry)
             # Extract full_report_link (URL to the auto-triage workflow run)
             full_report_link = entry.get("full_report_link", "") or None
-            # Save as list: [error_message, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd, full_report_link]
+            # Save as list: [error_message, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd, full_report_link, unix_timestamp]
             # Use None if URL, timestamp, job, or workflow not found
-            errors.append([error_msg, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd, full_report_link])
+            errors.append([error_msg, failing_run_url, formatted_timestamp, job_name, workflow_name, is_nd, full_report_link, unix_timestamp])
         else:
             skipped += 1
 

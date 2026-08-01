@@ -8,6 +8,14 @@ from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 
+# Matching thresholds, shared by every stage of the pipeline so that grouping,
+# syncing, and reporting cannot disagree about what counts as the same error.
+# Both must be cleared for a match. They are high on purpose: errors that share
+# boilerplate ("TT_THROW @ path1: init failed" vs "TT_THROW @ path2: timeout")
+# score deceptively well on either metric alone.
+SEMANTIC_THRESHOLD = 85.0
+RAPIDFUZZ_THRESHOLD = 70.0
+
 # Load model once (cached)
 _model = None
 
@@ -43,7 +51,7 @@ def compare_errors(error1: str, error2: str) -> dict:
         "semantic": semantic_score
     }
 
-def find_best_matching_centroid(error_message: str, centroids: list, rapidfuzz_threshold: float = 50.0, semantic_threshold: float = 70.0) -> tuple:
+def find_best_matching_centroid(error_message: str, centroids: list, rapidfuzz_threshold: float = RAPIDFUZZ_THRESHOLD, semantic_threshold: float = SEMANTIC_THRESHOLD) -> tuple:
     """
     Find the best matching centroid for an error message.
     

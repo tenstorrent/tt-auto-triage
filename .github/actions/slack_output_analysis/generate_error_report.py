@@ -14,79 +14,26 @@ from typing import Dict, List, Any, Optional, Tuple
 
 import requests
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+from cluster_state import load_cluster_state
+from state_paths import SCRIPT_DIR
+from timestamps import resolve_unix, unix_to_iso_utc
+
 ALL_ERRORS_FILE = os.path.join(SCRIPT_DIR, "all_errors.json")
-ISSUE_DUMP_FILE = os.path.join(SCRIPT_DIR, "issue_dump.json")
 SLACK_EXPORT_FILE = os.path.join(SCRIPT_DIR, "build_slack_export_with_threads.json")
 REPORT_JSON_FILE = os.path.join(SCRIPT_DIR, "error_report.json")
 REPORT_MARKDOWN_FILE = os.path.join(SCRIPT_DIR, "error_report.md")
 
-# Import error similarity helper
-from error_similarity import find_best_matching_centroid
 
-# Similarity thresholds (same as sync_new_errors.py)
-# High thresholds to prevent matching different errors that share boilerplate
-RAPIDFUZZ_THRESHOLD = 70.0
-SEMANTIC_THRESHOLD = 85.0
+def parse_timestamp_to_utc(timestamp_str: str, unix_timestamp=None) -> Optional[str]:
+    """Convert a run timestamp to ISO 8601 UTC, e.g. "2026-01-09T13:59:58.950Z".
 
-def parse_timestamp_to_utc(timestamp_str: str) -> Optional[str]:
-    """Parse formatted timestamp string to UTC ISO format.
-    
-    Handles formats like "January 9th, 8:59am, 58.95 seconds"
-    The original timestamp from extract_errors.py is a Unix timestamp (UTC),
-    but the formatted version is in local time. We need to parse it back.
-    
-    Returns ISO 8601 format in UTC: "2026-01-09T13:59:58.950Z"
+    Prefers the raw Slack Unix timestamp. The formatted string is only parsed
+    for state written before Unix timestamps were carried through, and that
+    path cannot recover the year or the timezone reliably.
     """
-    if not timestamp_str:
-        return None
-    
-    try:
-        # Try to parse the format: "January 9th, 8:59am, 58.95 seconds"
-        parts = timestamp_str.split(", ")
-        if len(parts) >= 3:
-            date_part = parts[0]  # "January 9th"
-            time_part = parts[1]  # "8:59am"
-            seconds_part = parts[2]  # "58.95 seconds"
-            
-            # Extract seconds value
-            seconds_match = re.search(r'(\d+\.?\d*)', seconds_part)
-            seconds_value = float(seconds_match.group(1)) if seconds_match else 0
-            
-            # Remove ordinal suffix (st, nd, rd, th)
-            date_part_clean = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', date_part)
-            
-            # Parse date and time (assumes local timezone)
-            try:
-                dt_local = datetime.strptime(f"{date_part_clean}, {time_part}", "%B %d, %I:%M%p")
-                # Add seconds
-                dt_local = dt_local.replace(second=int(seconds_value), microsecond=int((seconds_value % 1) * 1000000))
-                
-                # Determine the correct year
-                current_year = datetime.now().year
-                dt_local = dt_local.replace(year=current_year)
-                now = datetime.now()
-                
-                # If the date is more than 6 months in the future, assume it's from last year
-                if dt_local > now + timedelta(days=180):
-                    dt_local = dt_local.replace(year=current_year - 1)
-                elif dt_local < now - timedelta(days=180):
-                    # Only adjust if we're in January and the date is December (likely from previous year)
-                    if now.month == 1 and dt_local.month == 12:
-                        dt_local = dt_local.replace(year=current_year - 1)
-                
-                # Convert local time to UTC
-                # Get local timezone offset
-                local_tz = datetime.now().astimezone().tzinfo
-                dt_aware = dt_local.replace(tzinfo=local_tz)
-                dt_utc = dt_aware.astimezone(timezone.utc)
-                
-                # Return ISO 8601 format with milliseconds
-                return dt_utc.strftime("%Y-%m-%dT%H:%M:%S") + f".{int(dt_utc.microsecond / 1000):03d}Z"
-            except ValueError:
-                pass
-    except Exception:
-        pass
+    unix_value = resolve_unix(unix_timestamp, timestamp_str)
+    if unix_value is not None:
+        return unix_to_iso_utc(unix_value)
     
     return None
 
@@ -243,132 +190,49 @@ def get_slack_message_link(timestamp_str: str, channel_id: str, slack_token: Opt
         print(f"  ⚠ Warning: Could not parse Slack timestamp: {e}")
         return None
 
-def parse_timestamp_to_datetime(timestamp_str: str) -> Optional[datetime]:
-    """Parse formatted timestamp string to datetime object.
-    
-    Handles formats like "January 9th, 8:59am, 58.95 seconds"
-    Returns datetime object in UTC timezone.
-    """
-    if not timestamp_str:
-        return None
-    
-    try:
-        # Try to parse the format: "January 9th, 8:59am, 58.95 seconds"
-        parts = timestamp_str.split(", ")
-        if len(parts) >= 2:
-            date_part = parts[0]  # "January 9th"
-            time_part = parts[1]  # "8:59am"
-            
-            # Remove ordinal suffix (st, nd, rd, th)
-            date_part_clean = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', date_part)
-            
-            # Parse date and time (assumes local timezone)
-            try:
-                dt_local = datetime.strptime(f"{date_part_clean}, {time_part}", "%B %d, %I:%M%p")
-                # Add seconds if available
-                if len(parts) >= 3:
-                    seconds_part = parts[2]  # "58.95 seconds"
-                    seconds_match = re.search(r'(\d+\.?\d*)', seconds_part)
-                    if seconds_match:
-                        seconds_value = float(seconds_match.group(1))
-                        dt_local = dt_local.replace(second=int(seconds_value), microsecond=int((seconds_value % 1) * 1000000))
-                
-                # Determine the correct year
-                current_year = datetime.now().year
-                dt_local = dt_local.replace(year=current_year)
-                now = datetime.now()
-                
-                # If the date is more than 6 months in the future, assume it's from last year
-                if dt_local > now + timedelta(days=180):
-                    dt_local = dt_local.replace(year=current_year - 1)
-                elif dt_local < now - timedelta(days=180):
-                    # Only adjust if we're in January and the date is December (likely from previous year)
-                    if now.month == 1 and dt_local.month == 12:
-                        dt_local = dt_local.replace(year=current_year - 1)
-                
-                # Convert local time to UTC
-                local_tz = datetime.now().astimezone().tzinfo
-                dt_aware = dt_local.replace(tzinfo=local_tz)
-                dt_utc = dt_aware.astimezone(timezone.utc)
-                
-                return dt_utc
-            except ValueError:
-                pass
-    except Exception:
-        pass
-    
-    return None
+def is_within_last_month(timestamp_str: str, unix_timestamp=None) -> bool:
+    """Check whether a run happened within the last 30 days."""
+    unix_value = resolve_unix(unix_timestamp, timestamp_str)
+    if unix_value is None:
+        return False
 
-def is_within_last_month(timestamp_str: str) -> bool:
-    """Check if a timestamp string represents a date within the last month."""
-    if not timestamp_str:
-        return False
-    
-    dt = parse_timestamp_to_datetime(timestamp_str)
-    if dt is None:
-        return False
-    
-    one_month_ago = datetime.now(timezone.utc) - timedelta(days=30)
-    return dt >= one_month_ago
+    one_month_ago = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
+    return unix_value >= one_month_ago
 
 def find_oldest_run_in_centroid(entry: Dict[str, Any], all_errors: List[List], url_to_timestamp: Dict[str, str], url_to_error_message: Dict[str, str]) -> Optional[Dict[str, Any]]:
     """Find the oldest run in the same centroid group.
-    
+
     Returns dict with: timestamp_utc, commit_hash, run_url, error_message
     """
     failing_runs = entry.get("failing_runs", [])
     if not failing_runs:
         return None
-    
+
+    run_metadata = entry.get("run_metadata", {})
     oldest_run = None
-    oldest_timestamp = None
-    
+    oldest_unix = None
+
     for url in failing_runs:
-        # Get timestamp for this URL
-        timestamp_str = url_to_timestamp.get(url, "")
-        if not timestamp_str:
+        meta = run_metadata.get(url, {})
+        timestamp_str = url_to_timestamp.get(url, "") or meta.get("timestamp", "")
+        unix_value = resolve_unix(meta.get("unix_timestamp"), timestamp_str)
+        if unix_value is None:
             continue
-        
-        # Parse timestamp to datetime for comparison
-        dt = None
-        try:
-            parts = timestamp_str.split(", ")
-            if len(parts) >= 2:
-                date_part = parts[0]
-                time_part = parts[1]
-                date_part_clean = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', date_part)
-                dt_local = datetime.strptime(f"{date_part_clean}, {time_part}", "%B %d, %I:%M%p")
-                current_year = datetime.now().year
-                dt_local = dt_local.replace(year=current_year)
-                now = datetime.now()
-                if dt_local > now + timedelta(days=180):
-                    dt_local = dt_local.replace(year=current_year - 1)
-                elif dt_local < now - timedelta(days=180):
-                    if now.month == 1 and dt_local.month == 12:
-                        dt_local = dt_local.replace(year=current_year - 1)
-                
-                # Convert to UTC for comparison
-                local_tz = datetime.now().astimezone().tzinfo
-                dt_aware = dt_local.replace(tzinfo=local_tz)
-                dt = dt_aware.astimezone(timezone.utc)
-        except Exception:
-            continue
-        
-        if dt and (oldest_timestamp is None or dt < oldest_timestamp):
-            oldest_timestamp = dt
-            # Find error message for this URL
-            error_message = url_to_error_message.get(url)
-            commit_hash = None
-            if error_message:
+
+        if oldest_unix is None or unix_value < oldest_unix:
+            oldest_unix = unix_value
+            error_message = url_to_error_message.get(url) or meta.get("error_message")
+            commit_hash = meta.get("commit_hash") or None
+            if not commit_hash and error_message:
                 commit_hash = extract_commit_hash(error_message)
-            
+
             oldest_run = {
-                "timestamp_utc": parse_timestamp_to_utc(timestamp_str),
+                "timestamp_utc": unix_to_iso_utc(unix_value),
                 "commit_hash": commit_hash,
                 "run_url": url,
                 "error_message": error_message
             }
-    
+
     return oldest_run
 
 def load_secrets():
@@ -395,7 +259,7 @@ def load_secrets():
 
 def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
     """
-    Generate error report from all_errors.json and issue_dump.json.
+    Generate error report from all_errors.json and the persisted cluster state.
     
     Returns:
         Tuple of (report_data, markdown_summary)
@@ -421,40 +285,11 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
         print(f"ERROR: {ALL_ERRORS_FILE} not found")
         sys.exit(1)
     
-    # Refresh issue dump from GitHub before loading (ensures we have latest data after rebuild)
-    # BUT skip if issue_dump.json was recently modified (e.g., by sync_new_errors.py)
-    # to avoid redundant API calls and processing
-    REFRESH_THRESHOLD_MINUTES = 5  # Skip refresh if file is newer than this
+    # Load the cluster state written by sync_new_errors.py earlier in this run.
+    print(f"\nLoading cluster state...")
+    cluster_entries = load_cluster_state()
 
-    should_refresh = True
-    if os.path.exists(ISSUE_DUMP_FILE):
-        file_mtime = os.path.getmtime(ISSUE_DUMP_FILE)
-        file_age_minutes = (datetime.now().timestamp() - file_mtime) / 60
-        if file_age_minutes < REFRESH_THRESHOLD_MINUTES:
-            print(f"\n  ✓ Using existing issue_dump.json (modified {file_age_minutes:.1f} minutes ago, threshold: {REFRESH_THRESHOLD_MINUTES} min)")
-            should_refresh = False
-
-    if should_refresh:
-        print(f"\nRefreshing issue dump from GitHub...")
-        try:
-            import download_issue_dump
-            download_issue_dump.main()
-            print(f"  ✓ Refreshed issue dump from GitHub")
-        except Exception as e:
-            print(f"  ⚠ Warning: Could not refresh issue dump: {e}")
-            print(f"  Will use existing {ISSUE_DUMP_FILE} if available")
-    
-    # Load issue dump (already filtered to only open issues by download_issue_dump.py)
-    try:
-        with open(ISSUE_DUMP_FILE, 'r', encoding='utf-8') as f:
-            issue_dump = json.load(f)
-        print(f"  ✓ Loaded {len(issue_dump)} open issue(s) from {ISSUE_DUMP_FILE}")
-    except FileNotFoundError:
-        print(f"⚠ Warning: {ISSUE_DUMP_FILE} not found, centroid URLs will be missing")
-        issue_dump = []
-    
-    # Build reverse lookup: URL -> issue entry (much faster than similarity matching)
-    # issue_dump is now built from repository issues, so it contains all open issues
+    # Build reverse lookup: URL -> cluster entry (much faster than similarity matching)
     # Normalize URLs (remove trailing slashes) for consistent matching
     def normalize_url(url: str) -> str:
         """Normalize URL for consistent matching (remove trailing slash)."""
@@ -462,10 +297,10 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
             return ""
         return url.rstrip('/')
     
-    print(f"\nBuilding URL to issue mapping...")
+    print(f"\nBuilding URL to cluster mapping...")
     url_to_entry = {}
     existing_urls = set()
-    for entry in issue_dump:
+    for entry in cluster_entries:
         failing_runs = entry.get("failing_runs", [])
         for url in failing_runs:
             if url:
@@ -475,13 +310,14 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
                 url_to_entry[url] = entry  # Also store original in case it's used
                 existing_urls.add(normalized_url)
                 existing_urls.add(url)
-    # Count unique issues by using id() to identify unique dict objects
-    unique_issues = len({id(v) for v in url_to_entry.values()})
-    print(f"  ✓ Mapped {unique_issues} unique issue(s) with {len(existing_urls)} URL(s) to issue entries")
+    # Count unique clusters by using id() to identify unique dict objects
+    unique_clusters = len({id(v) for v in url_to_entry.values()})
+    print(f"  ✓ Mapped {unique_clusters} unique cluster(s) with {len(existing_urls)} URL(s) to cluster entries")
     
     # Build URL to timestamp and error message mappings from all_errors (for finding oldest runs)
     print(f"\nBuilding URL to timestamp and error message mappings from all errors...")
     url_to_timestamp = {}
+    url_to_unix = {}
     url_to_error_message = {}
     for error_entry in all_errors:
         if len(error_entry) > 1:
@@ -491,6 +327,8 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
                     timestamp_str = error_entry[2]
                     if timestamp_str:
                         url_to_timestamp[job_url] = timestamp_str
+                if len(error_entry) > 7 and error_entry[7] is not None:
+                    url_to_unix[job_url] = error_entry[7]
                 if len(error_entry) > 0:
                     error_message = error_entry[0]
                     if error_message:
@@ -562,17 +400,18 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
     for error_entry in all_errors:
         job_url = error_entry[1] if len(error_entry) > 1 else None
         timestamp_str = error_entry[2] if len(error_entry) > 2 else ""
+        unix_timestamp = error_entry[7] if len(error_entry) > 7 else None
         
         if not job_url:
             skipped_no_url += 1
             continue
         
-        if not timestamp_str:
+        if not timestamp_str and unix_timestamp is None:
             skipped_no_timestamp += 1
             continue
         
         # Only include errors from the last month
-        if not is_within_last_month(timestamp_str):
+        if not is_within_last_month(timestamp_str, unix_timestamp):
             skipped_old += 1
             continue
         
@@ -601,6 +440,7 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
         timestamp_str = error_entry[2] if len(error_entry) > 2 else ""
         is_nd = error_entry[5] if len(error_entry) > 5 else False
         full_report_link = error_entry[6] if len(error_entry) > 6 else None
+        unix_timestamp = error_entry[7] if len(error_entry) > 7 else None
         
         if not error_message or not job_url:
             if not job_url:
@@ -619,10 +459,9 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
         processed_urls.add(job_url)  # Add both normalized and original
         
         # Extract timestamp for this error
-        timestamp_utc = parse_timestamp_to_utc(timestamp_str) if timestamp_str else None
+        timestamp_utc = parse_timestamp_to_utc(timestamp_str, unix_timestamp)
         
-        # Get commit hash from issue_dump (already extracted from issue body by download_issue_dump.py)
-        # Fallback to GitHub API if not found in issue_dump
+        # Get commit hash from the cluster state, falling back to the GitHub API
         commit_hash = None
         normalized_job_url_for_commit = normalize_url(job_url) if job_url else None
         entry_for_commit = None
@@ -669,8 +508,8 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
             if not slack_message_link and idx % 100 == 0:
                 print(f"    ⚠ Warning: Could not generate Slack link for error {idx} (timestamp: {slack_timestamp[:20]}...)")
         
-        # Look up URL in issue_dump to get centroid info (if available)
-        # Note: Errors may or may not be in issue_dump - include them either way
+        # Look up URL in the cluster state to get centroid info (if available)
+        # Note: Errors may or may not be clustered yet - include them either way
         # Normalize URL for lookup (handle trailing slash differences)
         normalized_job_url = normalize_url(job_url) if job_url else None
         
@@ -705,21 +544,22 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
                 # Get commit hash and timestamp from centroid_metadata
                 centroid_commit_hash = centroid_metadata.get("commit_hash") if centroid_metadata else None
                 centroid_timestamp_str = centroid_metadata.get("timestamp") if centroid_metadata else None
+                centroid_unix = centroid_metadata.get("unix_timestamp") if centroid_metadata else None
                 
                 # Fallback to run_metadata if centroid_metadata not available
                 run_metadata = entry.get("run_metadata", {})
-                if not centroid_commit_hash and centroid_run_url in run_metadata:
-                    centroid_commit_hash = run_metadata[centroid_run_url].get("commit_hash", "") or None
+                centroid_run_meta = run_metadata.get(centroid_run_url, {})
+                if not centroid_commit_hash and centroid_run_meta:
+                    centroid_commit_hash = centroid_run_meta.get("commit_hash", "") or None
                 
-                # Fallback to url_to_timestamp if centroid_metadata timestamp not available
                 if not centroid_timestamp_str:
-                    centroid_timestamp_str = url_to_timestamp.get(centroid_run_url, "")
+                    centroid_timestamp_str = centroid_run_meta.get("timestamp", "") or url_to_timestamp.get(centroid_run_url, "")
+                if centroid_unix is None:
+                    centroid_unix = centroid_run_meta.get("unix_timestamp")
+                if centroid_unix is None:
+                    centroid_unix = url_to_unix.get(centroid_run_url)
                 
-                # Parse timestamp if available
-                if centroid_timestamp_str:
-                    centroid_timestamp_utc = parse_timestamp_to_utc(centroid_timestamp_str)
-                else:
-                    centroid_timestamp_utc = None
+                centroid_timestamp_utc = parse_timestamp_to_utc(centroid_timestamp_str, centroid_unix)
                 
                 # Fetch commit hash from GitHub API if still missing
                 if not centroid_commit_hash and github_token:
@@ -731,7 +571,7 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
             # Find oldest run in this centroid group
             oldest_run = find_oldest_run_in_centroid(entry, all_errors, url_to_timestamp, url_to_error_message)
             
-            # Get commit hash for oldest run from issue_dump (already stored in issue body)
+            # Get commit hash for oldest run from the cluster state
             if oldest_run and oldest_run.get("run_url"):
                 oldest_url = oldest_run["run_url"]
                 oldest_commit_hash = None
@@ -771,7 +611,7 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
                 elif normalized:
                     # Show sample of what URLs we do have
                     sample_urls = list(existing_urls)[:3]
-                    print(f"      → Sample URLs in issue_dump: {sample_urls}")
+                    print(f"      → Sample URLs in cluster state: {sample_urls}")
         
         # Flatten oldest_run fields to top level (instead of nested dict)
         oldest_run_url = oldest_run.get("run_url") if oldest_run else None

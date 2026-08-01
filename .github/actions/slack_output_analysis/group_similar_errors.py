@@ -13,88 +13,44 @@ from rapidfuzz import fuzz
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
+from error_similarity import RAPIDFUZZ_THRESHOLD, SEMANTIC_THRESHOLD
+
 # Configuration
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ERRORS_FILE = os.path.join(SCRIPT_DIR, "all_errors.json")
 OUTPUT_FILE = os.path.join(SCRIPT_DIR, "grouped_errors.json")
-# High thresholds to prevent matching different errors that share boilerplate
-# e.g., "TT_THROW @ path1: Device init failed" vs "TT_THROW @ path2: Device timeout"
-SEMANTIC_THRESHOLD = 85
-RAPIDFUZZ_THRESHOLD = 70
 
 
 def parse_error_item(item: Any) -> Optional[Tuple[str, Dict[str, Any]]]:
     """Parse an error item into message and metadata.
-    
+
     Args:
-        item: Can be a string, or a list of various lengths containing error data
-        
+        item: A bare error string, or a list of the form
+            [message, url, timestamp, job_name, workflow_name, is_nd,
+             full_report_link, unix_timestamp], truncated at any point.
+
     Returns:
         Tuple of (error_message, metadata_dict) or None if invalid
     """
-    if isinstance(item, list) and len(item) >= 6:
-        # New format: [message, url, timestamp, job_name, workflow_name, is_nd]
-        return item[0], {
-            "error": item[0], 
-            "url": item[1] if item[1] else "", 
-            "timestamp": item[2] if len(item) > 2 and item[2] else "",
-            "job_name": item[3] if len(item) > 3 and item[3] is not None else "",
-            "workflow_name": item[4] if len(item) > 4 and item[4] is not None else "",
-            "is_nd": item[5] if len(item) > 5 and item[5] is not None else False
-        }
-    elif isinstance(item, list) and len(item) >= 5:
-        # Format: [message, url, timestamp, job_name, workflow_name] - no is_nd (backward compatibility)
-        return item[0], {
-            "error": item[0], 
-            "url": item[1] if item[1] else "", 
-            "timestamp": item[2] if len(item) > 2 and item[2] else "",
-            "job_name": item[3] if len(item) > 3 and item[3] is not None else "",
-            "workflow_name": item[4] if len(item) > 4 and item[4] is not None else "",
-            "is_nd": False
-        }
-    elif isinstance(item, list) and len(item) >= 3:
-        # Format: [message, url, timestamp] - no job/workflow or is_nd
-        return item[0], {
-            "error": item[0], 
-            "url": item[1] if item[1] else "", 
-            "timestamp": item[2] if item[2] else "",
-            "job_name": "",
-            "workflow_name": "",
-            "is_nd": False
-        }
-    elif isinstance(item, list) and len(item) == 2:
-        # Format: [message, url] - no timestamp, job/workflow, or is_nd
-        return item[0], {
-            "error": item[0], 
-            "url": item[1] if item[1] else "", 
-            "timestamp": "",
-            "job_name": "",
-            "workflow_name": "",
-            "is_nd": False
-        }
-    elif isinstance(item, list) and len(item) == 1:
-        # Format: [message] - no URL, timestamp, job/workflow, or is_nd
-        return item[0], {
-            "error": item[0], 
-            "url": "", 
-            "timestamp": "",
-            "job_name": "",
-            "workflow_name": "",
-            "is_nd": False
-        }
-    elif isinstance(item, str):
-        # Old format: just string
-        return item, {
-            "error": item, 
-            "url": "", 
-            "timestamp": "",
-            "job_name": "",
-            "workflow_name": "",
-            "is_nd": False
-        }
-    else:
-        # Invalid entry
+    if isinstance(item, str):
+        item = [item]
+    if not isinstance(item, list) or not item:
         return None
+
+    def field(index: int, default: Any = None) -> Any:
+        value = item[index] if len(item) > index else None
+        return default if value is None or value == "" else value
+
+    message = item[0]
+    return message, {
+        "error": message,
+        "url": field(1, ""),
+        "timestamp": field(2, ""),
+        "job_name": field(3, ""),
+        "workflow_name": field(4, ""),
+        "is_nd": field(5, False),
+        "unix_timestamp": field(7),
+    }
 
 
 def load_errors(errors_file: str) -> Tuple[List[str], List[Dict[str, Any]]]:

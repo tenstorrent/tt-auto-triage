@@ -1,0 +1,33 @@
+name: Test Slack Output Analysis
+
+on:
+  push:
+    paths:
+      - '.github/actions/slack_output_analysis/**'
+      - '.github/workflows/test-slack-output-analysis.yml'
+  pull_request:
+    paths:
+      - '.github/actions/slack_output_analysis/**'
+      - '.github/workflows/test-slack-output-analysis.yml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+
+      # The similarity model is not needed: the tests stub matching and cover
+      # the state handling around it, so this stays a fast pure-Python job.
+      - name: Install test dependencies
+        run: pip install pytest requests
+
+      - name: Run tests
+        working-directory: .github/actions/slack_output_analysis
+        run: python3 -m pytest tests/ -v
