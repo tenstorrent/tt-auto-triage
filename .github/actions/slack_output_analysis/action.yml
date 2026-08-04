@@ -174,21 +174,25 @@ runs:
           console.log(`Current run ID: ${currentRunId}`);
           
           try {
+            // Ask for successful runs directly. Filtering a page of completed
+            // runs loses the last success once enough failures accumulate behind
+            // it, and no baseline means every row counts as new and gets sent to
+            // the database again.
             const resp = await github.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
               owner,
               repo,
               workflow_id,
               branch: 'main',
-              status: 'completed',
-              per_page: 20
+              status: 'success',
+              exclude_pull_requests: true,
+              per_page: 2
             });
-            
-            // Filter to successful runs that aren't the current run
+
             // Use String() to ensure consistent type comparison
-            const runs = (resp.data.workflow_runs || []).filter(r => 
-              r.conclusion === 'success' && String(r.id) !== String(currentRunId)
+            const runs = (resp.data.workflow_runs || []).filter(r =>
+              String(r.id) !== String(currentRunId)
             );
-            
+
             const run = runs[0];
             const selectedId = run ? String(run.id) : '';
             
