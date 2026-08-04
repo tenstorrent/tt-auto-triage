@@ -16,8 +16,15 @@ import requests
 # action is checked out fresh every run.
 from state_paths import COMMIT_HASH_CACHE_FILE, JOB_NAME_CACHE_FILE, ensure_state_dir
 
+# Marks a resource the API has confirmed does not exist, as opposed to one we
+# simply failed to reach. Only confirmed absences are worth remembering: these
+# caches now persist between runs in the state artifact, so caching a transient
+# failure would make it permanent. A 401 once cost 19 errors that way, dropped
+# on later runs from cached misses without a single retry.
+ABSENT = "__not_found__"
+
 # Module-level cache for commit hashes to avoid redundant API calls
-# Maps run_id -> commit_hash (or None if not found)
+# Maps run_id -> commit_hash, or ABSENT when the run is known to be gone
 # Changed from URL to run_id as cache key since multiple jobs share the same run and commit
 _commit_hash_cache: Dict[str, Optional[str]] = {}
 _commit_cache_loaded = False
@@ -28,6 +35,58 @@ _commit_cache_modified = False
 _job_name_cache: Dict[str, Optional[str]] = {}
 _job_cache_loaded = False
 _job_cache_modified = False
+
+
+def drop_unexplained_misses(loaded: Dict, label: str) -> Dict[str, Optional[str]]:
+    """Discard cached misses that carry no evidence the resource is really gone.
+
+    Caches written before ABSENT existed stored a bare null for every failure,
+    including transient ones, so those entries cannot be trusted and are dropped
+    to be retried. Confirmed absences use the ABSENT marker and are kept.
+    """
+    kept = {key: value for key, value in loaded.items() if value is not None}
+    discarded = len(loaded) - len(kept)
+    if discarded:
+        print(f"  Discarded {discarded} unexplained {label} miss(es) so they are retried")
+    return kept
+
+
+def fetch_api_field(url: str, github_token: str, field: str, describe: str):
+    """Read one field from a GitHub API resource.
+
+    Returns (value, definitive). A definitive answer means the API told us
+    something we can cache: either the value, or that the resource is gone.
+    Anything else, an expired token or a rate limit or a network fault, is not
+    the resource's fault and must not be remembered.
+    """
+    try:
+        response = requests.get(
+            url,
+            headers={
+                "Authorization": f"token {github_token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        print(f"  ⚠ Warning: Could not reach GitHub for {describe}: {e} (will retry next run)")
+        return None, False
+
+    if response.status_code == 404:
+        # The run or job has been deleted or aged out of retention.
+        return None, True
+
+    if response.status_code != 200:
+        print(f"  ⚠ Warning: Could not fetch {describe}: HTTP {response.status_code} (will retry next run)")
+        return None, False
+
+    try:
+        value = response.json().get(field)
+    except ValueError as e:
+        print(f"  ⚠ Warning: Could not parse response for {describe}: {e} (will retry next run)")
+        return None, False
+
+    return value, True
 
 
 def load_commit_hash_cache() -> None:
@@ -45,7 +104,7 @@ def load_commit_hash_cache() -> None:
                 print(f"  ⚠ Warning: Commit hash cache is not a dict (got {type(loaded).__name__}), resetting")
                 _commit_hash_cache = {}
             else:
-                _commit_hash_cache = loaded
+                _commit_hash_cache = drop_unexplained_misses(loaded, "commit hash")
                 print(f"  ✓ Loaded commit hash cache with {len(_commit_hash_cache)} entries")
         except (json.JSONDecodeError, Exception) as e:
             print(f"  ⚠ Warning: Could not load commit hash cache: {e}")
@@ -84,7 +143,7 @@ def load_job_name_cache() -> None:
                 print(f"  ⚠ Warning: Job name cache is not a dict (got {type(loaded).__name__}), resetting")
                 _job_name_cache = {}
             else:
-                _job_name_cache = loaded
+                _job_name_cache = drop_unexplained_misses(loaded, "job name")
                 print(f"  ✓ Loaded job name cache with {len(_job_name_cache)} entries")
         except (json.JSONDecodeError, Exception) as e:
             print(f"  ⚠ Warning: Could not load job name cache: {e}")
@@ -112,8 +171,8 @@ def get_commit_hash_cache_stats() -> Dict[str, int]:
     """Get statistics about the commit hash cache."""
     return {
         "total_entries": len(_commit_hash_cache),
-        "found": sum(1 for v in _commit_hash_cache.values() if v is not None),
-        "not_found": sum(1 for v in _commit_hash_cache.values() if v is None)
+        "found": sum(1 for v in _commit_hash_cache.values() if v and v != ABSENT),
+        "not_found": sum(1 for v in _commit_hash_cache.values() if v == ABSENT)
     }
 
 
@@ -121,8 +180,8 @@ def get_job_name_cache_stats() -> Dict[str, int]:
     """Get statistics about the job name cache."""
     return {
         "total_entries": len(_job_name_cache),
-        "found": sum(1 for v in _job_name_cache.values() if v is not None),
-        "not_found": sum(1 for v in _job_name_cache.values() if v is None)
+        "found": sum(1 for v in _job_name_cache.values() if v and v != ABSENT),
+        "not_found": sum(1 for v in _job_name_cache.values() if v == ABSENT)
     }
 
 
@@ -281,40 +340,27 @@ def get_commit_hash_from_github(job_url: str, github_token: str, use_cache: bool
     except Exception:
         return None
 
-    # Check cache first
     if use_cache and cache_key in _commit_hash_cache:
         cached = _commit_hash_cache[cache_key]
-        # Return cached value (could be None if previous fetch failed)
-        return cached
+        return None if cached == ABSENT else cached
 
-    try:
-        # Fetch workflow run details
-        url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/actions/runs/{run_id}"
-        headers = {
-            "Authorization": f"token {github_token}",
-            "Accept": "application/vnd.github.v3+json"
-        }
+    commit_sha, definitive = fetch_api_field(
+        f"https://api.github.com/repos/{repo_owner}/{repo_name}/actions/runs/{run_id}",
+        github_token,
+        "head_sha",
+        f"commit hash for run {run_id}",
+    )
 
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        run_data = response.json()
-
-        # Get the commit SHA (head_sha is the full commit hash)
-        commit_sha = run_data.get("head_sha")
-        if commit_sha and len(commit_sha) == 40:
-            _commit_hash_cache[cache_key] = commit_sha
-            _commit_cache_modified = True
-            return commit_sha
-
-        _commit_hash_cache[cache_key] = None
+    if commit_sha and len(commit_sha) == 40:
+        _commit_hash_cache[cache_key] = commit_sha
         _commit_cache_modified = True
-        return None
+        return commit_sha
 
-    except Exception as e:
-        print(f"  ⚠ Warning: Could not fetch commit hash for run {run_id}: {e}")
-        _commit_hash_cache[cache_key] = None
+    if definitive:
+        _commit_hash_cache[cache_key] = ABSENT
         _commit_cache_modified = True
-        return None
+
+    return None
 
 
 def get_job_name_from_github(job_url: str, github_token: str, use_cache: bool = True) -> Optional[str]:
@@ -362,37 +408,24 @@ def get_job_name_from_github(job_url: str, github_token: str, use_cache: bool = 
     except Exception:
         return None
 
-    # Check cache first
     if use_cache and cache_key in _job_name_cache:
         cached = _job_name_cache[cache_key]
-        # Return cached value (could be None if previous fetch failed)
-        return cached
+        return None if cached == ABSENT else cached
 
-    try:
-        # Fetch job details from GitHub API
-        url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/actions/jobs/{job_id}"
-        headers = {
-            "Authorization": f"token {github_token}",
-            "Accept": "application/vnd.github.v3+json"
-        }
+    job_name, definitive = fetch_api_field(
+        f"https://api.github.com/repos/{repo_owner}/{repo_name}/actions/jobs/{job_id}",
+        github_token,
+        "name",
+        f"job name for job {job_id}",
+    )
 
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        job_data = response.json()
-
-        # Get the job name
-        job_name = job_data.get("name")
-        if job_name:
-            _job_name_cache[cache_key] = job_name
-            _job_cache_modified = True
-            return job_name
-
-        _job_name_cache[cache_key] = None
+    if job_name:
+        _job_name_cache[cache_key] = job_name
         _job_cache_modified = True
-        return None
+        return job_name
 
-    except Exception as e:
-        print(f"  ⚠ Warning: Could not fetch job name for job {job_id}: {e}")
-        _job_name_cache[cache_key] = None
+    if definitive:
+        _job_name_cache[cache_key] = ABSENT
         _job_cache_modified = True
-        return None
+
+    return None
