@@ -285,13 +285,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Ask for successful runs directly rather than filtering a page of
+      # completed ones: a day of failures is enough to push the last success off
+      # the page, and not finding it discards the clustering history.
+      - name: Find previous grouping state
+        id: prev-state
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runs = await github.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'your-workflow.yml',
+              branch: context.ref.replace('refs/heads/', ''),
+              status: 'success',
+              exclude_pull_requests: true,
+              per_page: 1
+            });
+            const run = (runs.data.workflow_runs || [])[0];
+            if (!run) {
+              core.setOutput('has_state', 'false');
+              return;
+            }
+            // Whether the artifact is present is what separates a genuine cold
+            // start from a download that must not fail quietly.
+            const artifacts = await github.paginate(
+              'GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts',
+              { owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100 }
+            );
+            const state = artifacts.find(a => a.name === 'grouping-state' && !a.expired);
+            core.setOutput('run_id', String(run.id));
+            core.setOutput('has_state', state ? 'true' : 'false');
+
+      # No continue-on-error: the step above already confirmed the artifact is
+      # there, so a failure here is real and must not be read as a first run.
+      # Swallowing it would replace the accumulated clusters with an empty state.
       - name: Download previous grouping state
-        continue-on-error: true
+        if: ${{ steps.prev-state.outputs.has_state == 'true' }}
         uses: actions/download-artifact@v4
         with:
           name: grouping-state
           path: ${{ github.workspace }}/grouping-state
-          run-id: ${{ steps.prev-run.outputs.run_id }}
+          run-id: ${{ steps.prev-state.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Group Slack errors
@@ -309,8 +344,16 @@ jobs:
         with:
           name: grouping-state
           path: grouping-state/
+          if-no-files-found: error
           retention-days: 90
 ```
+
+Two different retention windows are at work here and they are deliberately not the same number.
+`retention-days` is how long GitHub keeps the artifact, and it only has to outlive the gap between
+one run and the next; 90 days is slack for a schedule that gets paused or disabled, and it keeps the
+API caches usable since commit hashes and job names never go stale. The 30 days below is how far
+back runs are kept *inside* the state, which is what bounds cluster history. Shortening
+`retention-days` to 30 would not prune anything sooner, it would only add a way to lose the state.
 
 Without the restored artifact the action still runs, but every error becomes its own cluster and
 grouping quality rebuilds over the following month.
