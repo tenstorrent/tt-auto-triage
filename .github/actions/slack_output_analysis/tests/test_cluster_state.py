@@ -2,10 +2,12 @@
 
 import json
 import time
+from pathlib import Path
 
 import pytest
 
 import cluster_state
+import state_paths
 
 DAY = 86400
 NOW = 1_767_000_000.0
@@ -66,6 +68,13 @@ class TestLoadAndSave:
 
         with open(path, encoding="utf-8") as f:
             assert len(json.load(f)) == 1
+
+    def test_state_directory_is_outside_the_checkout(self):
+        """A default under the checkout gets committed by accident, and it did."""
+        state_dir = Path(state_paths.STATE_DIR).resolve()
+        repo_root = Path(__file__).resolve().parents[4]
+
+        assert not state_dir.is_relative_to(repo_root), f"tests would write state into the working tree at {state_dir}"
 
     def test_unicode_survives_the_round_trip(self, tmp_path):
         path = str(tmp_path / "cluster_state.json")

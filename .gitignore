@@ -8,13 +8,13 @@ secrets.json
 
 # Generated output files from slack_output_analysis
 */all_errors.json
-*/cluster_state.json
+**/cluster_state.json
 */error_report.json
 */incremental_error_report.json
 */grouped_errors.json
 */build_slack_export_with_threads.json
-*/commit_hash_cache.json
-*/job_name_cache.json
+**/commit_hash_cache.json
+**/job_name_cache.json
 */debug.log
 temp.json
 
