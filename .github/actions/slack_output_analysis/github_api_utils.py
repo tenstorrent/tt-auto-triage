@@ -23,6 +23,16 @@ from state_paths import COMMIT_HASH_CACHE_FILE, JOB_NAME_CACHE_FILE, ensure_stat
 # on later runs from cached misses without a single retry.
 ABSENT = "__not_found__"
 
+# Reads that produced no usable answer, split by whether trying again could
+# help. Unreachable counts a rejected token, a rate limit, a 5xx, a network
+# fault: conditions that pass. Unverifiable counts a 404 from outside the
+# token's scope, which will keep happening. Callers need the difference, because
+# a batch that stored nothing because the API was down should stop the run,
+# while one that stored nothing because the runs are in another repository will
+# fail the same way forever.
+_unreachable_reads = 0
+_unverifiable_absences = 0
+
 # Module-level cache for commit hashes to avoid redundant API calls
 # Maps run_id -> commit_hash, or ABSENT when the run is known to be gone
 # Changed from URL to run_id as cache key since multiple jobs share the same run and commit
@@ -51,14 +61,55 @@ def drop_unexplained_misses(loaded: Dict, label: str) -> Dict[str, Optional[str]
     return kept
 
 
-def fetch_api_field(url: str, github_token: str, field: str, describe: str):
+def read_counters() -> Dict[str, int]:
+    """API reads that produced no usable answer, by whether a retry could help."""
+    return {"unreachable": _unreachable_reads, "unverifiable": _unverifiable_absences}
+
+
+def reset_read_counters() -> None:
+    """Forget the counts, so a caller can measure one batch."""
+    global _unreachable_reads, _unverifiable_absences
+    _unreachable_reads = 0
+    _unverifiable_absences = 0
+
+
+def token_scope() -> str:
+    """The repository a workflow token is limited to, or "" outside Actions."""
+    return os.environ.get("GITHUB_REPOSITORY", "").strip()
+
+
+def absence_is_believable(repo_owner: str, repo_name: str) -> bool:
+    """Whether a 404 for this repository really means the resource is gone.
+
+    GitHub answers 404 rather than 403 for a resource a credential cannot see,
+    so from the response alone a deleted run and an invisible one are identical.
+    The workflow token is scoped to the repository it runs in, which makes a 404
+    from anywhere else at least as likely to be that boundary. Recording it as a
+    confirmed absence would write a permanent miss into a cache that now
+    survives between runs, which is exactly the poisoning the ABSENT marker was
+    introduced to prevent, arriving through permissions instead of a bad token.
+
+    With no declared scope this is not a workflow token and may legitimately
+    reach anywhere, so the API is believed.
+    """
+    scope = token_scope()
+    if not scope:
+        return True
+    return scope.lower() == f"{repo_owner}/{repo_name}".lower()
+
+
+def fetch_api_field(url: str, github_token: str, field: str, describe: str, trust_absence: bool = True):
     """Read one field from a GitHub API resource.
 
     Returns (value, definitive). A definitive answer means the API told us
     something we can cache: either the value, or that the resource is gone.
     Anything else, an expired token or a rate limit or a network fault, is not
-    the resource's fault and must not be remembered.
+    the resource's fault and must not be remembered. Pass trust_absence=False
+    when a 404 could mean the token cannot see the resource rather than that it
+    does not exist.
     """
+    global _unreachable_reads, _unverifiable_absences
+
     try:
         response = requests.get(
             url,
@@ -70,20 +121,30 @@ def fetch_api_field(url: str, github_token: str, field: str, describe: str):
         )
     except requests.RequestException as e:
         print(f"  ⚠ Warning: Could not reach GitHub for {describe}: {e} (will retry next run)")
+        _unreachable_reads += 1
         return None, False
 
     if response.status_code == 404:
+        if not trust_absence:
+            print(
+                f"  ⚠ Warning: {describe} returned 404 from outside {token_scope()}, which this token "
+                f"cannot see, so it is not recorded as deleted"
+            )
+            _unverifiable_absences += 1
+            return None, False
         # The run or job has been deleted or aged out of retention.
         return None, True
 
     if response.status_code != 200:
         print(f"  ⚠ Warning: Could not fetch {describe}: HTTP {response.status_code} (will retry next run)")
+        _unreachable_reads += 1
         return None, False
 
     try:
         value = response.json().get(field)
     except ValueError as e:
         print(f"  ⚠ Warning: Could not parse response for {describe}: {e} (will retry next run)")
+        _unreachable_reads += 1
         return None, False
 
     return value, True
@@ -106,7 +167,7 @@ def load_commit_hash_cache() -> None:
             else:
                 _commit_hash_cache = drop_unexplained_misses(loaded, "commit hash")
                 print(f"  ✓ Loaded commit hash cache with {len(_commit_hash_cache)} entries")
-        except (json.JSONDecodeError, Exception) as e:
+        except (json.JSONDecodeError, OSError) as e:
             print(f"  ⚠ Warning: Could not load commit hash cache: {e}")
             _commit_hash_cache = {}
 
@@ -145,7 +206,7 @@ def load_job_name_cache() -> None:
             else:
                 _job_name_cache = drop_unexplained_misses(loaded, "job name")
                 print(f"  ✓ Loaded job name cache with {len(_job_name_cache)} entries")
-        except (json.JSONDecodeError, Exception) as e:
+        except (json.JSONDecodeError, OSError) as e:
             print(f"  ⚠ Warning: Could not load job name cache: {e}")
             _job_name_cache = {}
 
@@ -349,6 +410,7 @@ def get_commit_hash_from_github(job_url: str, github_token: str, use_cache: bool
         github_token,
         "head_sha",
         f"commit hash for run {run_id}",
+        trust_absence=absence_is_believable(repo_owner, repo_name),
     )
 
     if commit_sha and len(commit_sha) == 40:
@@ -417,6 +479,7 @@ def get_job_name_from_github(job_url: str, github_token: str, use_cache: bool = 
         github_token,
         "name",
         f"job name for job {job_id}",
+        trust_absence=absence_is_believable(repo_owner, repo_name),
     )
 
     if job_name:

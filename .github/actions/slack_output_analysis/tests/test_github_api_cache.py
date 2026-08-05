@@ -32,6 +32,11 @@ def empty_caches(monkeypatch):
     monkeypatch.setattr(github_api_utils, "_job_name_cache", {})
     monkeypatch.setattr(github_api_utils, "_commit_cache_loaded", True)
     monkeypatch.setattr(github_api_utils, "_job_cache_loaded", True)
+    # Stated rather than inherited: whether a 404 may be cached now depends on
+    # this, so leaving it to the environment would let these tests pass for the
+    # wrong reason. RUN_URL is inside this scope.
+    monkeypatch.setenv("GITHUB_REPOSITORY", "tenstorrent/tt-metal")
+    github_api_utils.reset_read_counters()
 
 
 def respond(monkeypatch, *responses):
@@ -134,6 +139,104 @@ class TestJobNamesFollowTheSameRules:
 
         assert github_api_utils.get_job_name_from_github(RUN_URL, TOKEN) is None
         assert list(github_api_utils._job_name_cache.values()) == [ABSENT]
+
+
+class TestA404OutsideTheTokenScope:
+    """GitHub returns 404, not 403, for what a token cannot see.
+
+    The workflow token only reaches its own repository, so a 404 from elsewhere
+    is as likely to be that boundary as a deleted run. Remembering it would
+    poison the cache through permissions instead of a bad token.
+    """
+
+    OTHER_REPO_URL = "https://github.com/tenstorrent/tt-forge/actions/runs/999/job/888"
+
+    def test_it_is_not_cached_as_absent(self, monkeypatch):
+        respond(monkeypatch, FakeResponse(404))
+
+        assert github_api_utils.get_commit_hash_from_github(self.OTHER_REPO_URL, TOKEN) is None
+        assert github_api_utils._commit_hash_cache == {}
+
+    def test_it_is_tried_again_rather_than_answered_from_cache(self, monkeypatch):
+        calls = respond(monkeypatch, FakeResponse(404))
+
+        github_api_utils.get_commit_hash_from_github(self.OTHER_REPO_URL, TOKEN)
+        github_api_utils.get_commit_hash_from_github(self.OTHER_REPO_URL, TOKEN)
+
+        assert len(calls) == 2
+
+    def test_a_job_name_follows_the_same_rule(self, monkeypatch):
+        respond(monkeypatch, FakeResponse(404))
+
+        assert github_api_utils.get_job_name_from_github(self.OTHER_REPO_URL, TOKEN) is None
+        assert github_api_utils._job_name_cache == {}
+
+    def test_it_counts_as_unverifiable_not_unreachable(self, monkeypatch):
+        """Retrying cannot fix a permissions boundary, so it must not fail the run."""
+        respond(monkeypatch, FakeResponse(404))
+
+        github_api_utils.get_commit_hash_from_github(self.OTHER_REPO_URL, TOKEN)
+
+        assert github_api_utils.read_counters() == {"unreachable": 0, "unverifiable": 1}
+
+    def test_the_same_run_id_in_scope_is_still_cached(self, monkeypatch):
+        """The scope check must not disable caching for the repository we can see."""
+        respond(monkeypatch, FakeResponse(404))
+
+        github_api_utils.get_commit_hash_from_github(RUN_URL, TOKEN)
+
+        assert list(github_api_utils._commit_hash_cache.values()) == [ABSENT]
+
+    def test_without_a_declared_scope_the_api_is_believed(self, monkeypatch):
+        """A personal access token may reach anywhere, so 404 means gone."""
+        monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+        respond(monkeypatch, FakeResponse(404))
+
+        github_api_utils.get_commit_hash_from_github(self.OTHER_REPO_URL, TOKEN)
+
+        assert list(github_api_utils._commit_hash_cache.values()) == [ABSENT]
+
+    def test_scope_matching_ignores_case(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_REPOSITORY", "Tenstorrent/TT-Metal")
+        respond(monkeypatch, FakeResponse(404))
+
+        github_api_utils.get_commit_hash_from_github(RUN_URL, TOKEN)
+
+        assert list(github_api_utils._commit_hash_cache.values()) == [ABSENT]
+
+
+class TestReadCounters:
+    def test_a_rejected_token_counts_as_unreachable(self, monkeypatch):
+        respond(monkeypatch, FakeResponse(401))
+
+        github_api_utils.get_commit_hash_from_github(RUN_URL, TOKEN)
+
+        assert github_api_utils.read_counters() == {"unreachable": 1, "unverifiable": 0}
+
+    def test_a_settled_answer_counts_as_neither(self, monkeypatch):
+        respond(monkeypatch, FakeResponse(404))
+
+        github_api_utils.get_commit_hash_from_github(RUN_URL, TOKEN)
+
+        assert github_api_utils.read_counters() == {"unreachable": 0, "unverifiable": 0}
+
+    def test_a_network_fault_counts_as_unreachable(self, monkeypatch):
+        def explode(url, **kwargs):
+            raise github_api_utils.requests.RequestException("connection reset")
+
+        monkeypatch.setattr(github_api_utils.requests, "get", explode)
+
+        github_api_utils.get_commit_hash_from_github(RUN_URL, TOKEN)
+
+        assert github_api_utils.read_counters()["unreachable"] == 1
+
+    def test_resetting_forgets_previous_counts(self, monkeypatch):
+        respond(monkeypatch, FakeResponse(500))
+        github_api_utils.get_commit_hash_from_github(RUN_URL, TOKEN)
+
+        github_api_utils.reset_read_counters()
+
+        assert github_api_utils.read_counters() == {"unreachable": 0, "unverifiable": 0}
 
 
 class TestHealingAPoisonedCacheOnDisk:
