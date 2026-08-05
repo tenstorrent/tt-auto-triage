@@ -69,6 +69,33 @@ class TestLoadAndSave:
         with open(path, encoding="utf-8") as f:
             assert len(json.load(f)) == 1
 
+    def test_undatable_runs_fall_back_to_discovery_order(self):
+        """With no usable timestamps this order is all there is to go on.
+
+        Sorting failing_runs made it lexicographic, so the run reported as
+        oldest was decided by how its URL happened to sort.
+        """
+        entry = {
+            "failing_runs": ["https://x/job/9", "https://x/job/1"],
+            "run_metadata": {
+                "https://x/job/9": {"timestamp": "unknown"},
+                "https://x/job/1": {"timestamp": "unknown"},
+            },
+        }
+
+        assert cluster_state.oldest_run_url(entry) == "https://x/job/9"
+
+    def test_a_datable_run_still_wins_over_discovery_order(self):
+        entry = {
+            "failing_runs": ["https://x/job/9", "https://x/job/1"],
+            "run_metadata": {
+                "https://x/job/9": {"timestamp": "unknown"},
+                "https://x/job/1": {"unix_timestamp": NOW - DAY},
+            },
+        }
+
+        assert cluster_state.oldest_run_url(entry) == "https://x/job/1"
+
     def test_state_directory_is_outside_the_checkout(self):
         """A default under the checkout gets committed by accident, and it did."""
         state_dir = Path(state_paths.STATE_DIR).resolve()

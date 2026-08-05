@@ -103,6 +103,16 @@ class TestExistingClusters:
         assert len(clusters) == 1
         assert clusters[0]["failing_runs"] == ["https://x/job/1", "https://x/job/2"]
 
+    def test_runs_are_appended_in_discovery_order(self, always_match):
+        """Not sorted: URL order is meaningless, and it decides which run counts
+        as oldest for a cluster whose runs cannot be dated."""
+        clusters = []
+        sync_new_errors.process_new_error(error_entry(url="https://x/job/9"), clusters, {}, TOKEN)
+
+        sync_new_errors.process_new_error(error_entry(url="https://x/job/1"), clusters, {}, TOKEN)
+
+        assert clusters[0]["failing_runs"] == ["https://x/job/9", "https://x/job/1"]
+
     def test_centroid_text_does_not_drift(self, always_match):
         clusters = []
         sync_new_errors.process_new_error(error_entry(message="original"), clusters, {}, TOKEN)
@@ -334,28 +344,72 @@ class TestRefusalToRunBlind:
 
         assert exit_info.value.code == 1
 
-    def test_dropping_every_new_error_stops_the_run(self, monkeypatch, tmp_path, no_match):
-        """Reached when the token is accepted but the lookups still fail."""
+    def batch_where_every_lookup_answers(self, monkeypatch, tmp_path, status):
+        """A batch of two errors whose commit hash lookups all get `status`.
+
+        The real lookup runs against a faked HTTP response, so what the guard
+        reads afterwards is what the API actually said rather than a stubbed
+        count. Every error ends up missing a commit hash and is dropped.
+        """
         import github_api_utils
 
         recent = time.time() - 3600
+        urls = [
+            "https://github.com/tenstorrent/tt-metal/actions/runs/1/job/11",
+            "https://github.com/tenstorrent/tt-metal/actions/runs/2/job/22",
+        ]
         errors_file = tmp_path / "all_errors.json"
-        errors_file.write_text(json.dumps([error_entry(url="https://x/job/1", unix=recent),
-                                           error_entry(url="https://x/job/2", unix=recent)]), encoding="utf-8")
+        errors_file.write_text(
+            json.dumps([error_entry(url=url, unix=recent) for url in urls]), encoding="utf-8"
+        )
         state_file = tmp_path / "cluster_state.json"
+
+        class FakeResponse:
+            status_code = status
+
+            def json(self):
+                return {}
+
+        monkeypatch.setenv("GITHUB_REPOSITORY", "tenstorrent/tt-metal")
+        monkeypatch.setattr(github_api_utils, "_commit_hash_cache", {})
+        monkeypatch.setattr(github_api_utils, "_commit_cache_loaded", True)
+        monkeypatch.setattr(github_api_utils.requests, "get", lambda url, **kwargs: FakeResponse())
+        # Undoes the autouse stub so the counters are driven by the real path.
+        monkeypatch.setattr(
+            sync_new_errors, "get_commit_hash_from_github", github_api_utils.get_commit_hash_from_github
+        )
 
         monkeypatch.setattr(sync_new_errors, "load_secrets", lambda: {"GITHUB_TOKEN": "valid"})
         monkeypatch.setattr(github_api_utils, "github_token_is_valid", lambda token: True)
         monkeypatch.setattr(github_api_utils, "load_commit_hash_cache", lambda *a, **k: None)
+        monkeypatch.setattr(github_api_utils, "save_commit_hash_cache", lambda *a, **k: None)
         monkeypatch.setattr(sync_new_errors, "log_rate_limit_status", lambda *a, **k: None)
         monkeypatch.setattr(sync_new_errors, "ALL_ERRORS_FILE", str(errors_file))
-        monkeypatch.setattr(sync_new_errors, "get_commit_hash_from_github", lambda url, token: None)
         monkeypatch.setattr(sync_new_errors, "load_cluster_state", lambda *a, **k: [])
-        monkeypatch.setattr(sync_new_errors, "save_cluster_state",
-                            lambda *a, **k: state_file.write_text("saved", encoding="utf-8"))
+        monkeypatch.setattr(
+            sync_new_errors, "save_cluster_state",
+            lambda *a, **k: state_file.write_text("saved", encoding="utf-8"),
+        )
+        return state_file
+
+    def test_a_batch_lost_to_failed_reads_stops_the_run(self, monkeypatch, tmp_path, no_match):
+        """401 may not persist, so the batch has to survive for the next attempt."""
+        state_file = self.batch_where_every_lookup_answers(monkeypatch, tmp_path, 401)
 
         with pytest.raises(SystemExit) as exit_info:
             sync_new_errors.main()
 
         assert exit_info.value.code == 1
         assert not state_file.exists(), "the empty state must not overwrite what is already stored"
+
+    def test_a_batch_lost_to_settled_answers_continues(self, monkeypatch, tmp_path, no_match):
+        """404 means those runs are gone, so retrying would drop them again.
+
+        Failing here would stop the report and the upload over records that can
+        never improve, including on a quiet cycle whose only error is malformed.
+        """
+        state_file = self.batch_where_every_lookup_answers(monkeypatch, tmp_path, 404)
+
+        sync_new_errors.main()
+
+        assert state_file.exists(), "a batch that can never be stored must not block the run"

@@ -27,7 +27,12 @@ from cluster_state import (
     set_centroid_metadata,
 )
 from error_similarity import RAPIDFUZZ_THRESHOLD, SEMANTIC_THRESHOLD, find_best_matching_centroid
-from github_api_utils import get_commit_hash_from_github, log_rate_limit_status
+from github_api_utils import (
+    get_commit_hash_from_github,
+    log_rate_limit_status,
+    read_counters,
+    reset_read_counters,
+)
 from state_paths import SCRIPT_DIR
 from timestamps import resolve_unix
 
@@ -189,7 +194,11 @@ def process_new_error(
             f"  Matched existing cluster "
             f"(RapidFuzz: {best_scores['rapidfuzz']:.1f}, Semantic: {best_scores['semantic']:.1f})"
         )
-        entry["failing_runs"] = sorted(set(entry.get("failing_runs", []) + [url]))
+        # Appended rather than sorted: the duplicate check above already keeps
+        # this unique, and sorting made the list lexicographic, which decides
+        # oldest_run_url for a cluster whose runs cannot be dated. Discovery
+        # order is at least roughly chronological; URL order means nothing.
+        entry.setdefault("failing_runs", []).append(url)
         entry.setdefault("run_metadata", {})[url] = metadata
         refresh_centroid_metadata(entry)
         return True, False
@@ -323,7 +332,7 @@ def main():
             print("ERROR: the GitHub token was rejected by the API (401).")
             print("  Commit hashes cannot be fetched, so every error would be dropped.")
             print("  Refusing to run rather than reporting success having stored nothing.")
-            print("  Check whether ERROR_GROUPING_TOKEN has expired or been revoked.")
+            print("  Check whether the token supplied to the action has expired or been revoked.")
             sys.exit(1)
 
         load_commit_hash_cache()
@@ -402,6 +411,9 @@ def main():
         print(f"\n{'=' * 80}")
         print("Processing new errors...")
         print(f"{'=' * 80}")
+        # So the guard below judges this batch rather than reads made while
+        # validating clusters that were already stored.
+        reset_read_counters()
         for idx, error_entry in enumerate(new_errors, 1):
             print(f"\n[{idx}/{len(new_errors)}] {error_entry[1]}")
             changed, created = process_new_error(error_entry, clusters, all_timestamps, github_token)
@@ -414,15 +426,24 @@ def main():
     else:
         print(f"\nNo new errors to process.")
 
-    # Losing every single new error means something systemic is wrong rather
-    # than a few entries being malformed, and the state we would write is one
-    # where none of this batch was ever seen. Nothing is saved, so the next run
-    # gets another attempt at the same errors.
+    # Storing none of a batch is only worth failing over when a retry could do
+    # better. What matters is why: an API that was not answering will answer
+    # later, so saving now would record a state where none of this batch was
+    # ever seen and lose the chance. Messages missing a job name will never
+    # improve, and a quiet cycle whose only error is malformed is not evidence
+    # of anything, so failing on it would just stop the report and the upload
+    # over one bad record.
     if new_errors and new_clusters == 0 and appended == 0:
-        print(f"\nERROR: all {len(new_errors)} new error(s) were dropped, none were stored.")
-        print("  Leaving the cluster state untouched so the next run can retry them.")
-        print("  The skip reasons above say which metadata could not be resolved.")
-        sys.exit(1)
+        unreachable = read_counters()["unreachable"]
+        print(f"\nAll {len(new_errors)} new error(s) were dropped, none were stored.")
+        if unreachable:
+            print(f"ERROR: {unreachable} API read(s) failed for reasons that may not persist.")
+            print("  Leaving the cluster state untouched so the next run can retry them.")
+            print("  The warnings above name the reads that failed.")
+            sys.exit(1)
+        print("  Every drop was a settled answer rather than a failed read, so a retry")
+        print("  would drop them again. Continuing with the state otherwise unchanged.")
+        print("  The skip reasons above say which metadata was missing.")
 
     print(f"\n{'=' * 80}")
     print("Saving cluster state...")
