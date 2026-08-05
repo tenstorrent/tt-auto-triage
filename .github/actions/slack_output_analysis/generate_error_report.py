@@ -14,7 +14,7 @@ from typing import Dict, List, Any, Optional, Tuple
 
 import requests
 
-from cluster_state import load_cluster_state
+from cluster_state import RETENTION_DAYS, load_cluster_state
 from state_paths import SCRIPT_DIR
 from timestamps import resolve_unix, unix_to_iso_utc
 
@@ -190,16 +190,21 @@ def get_slack_message_link(timestamp_str: str, channel_id: str, slack_token: Opt
         print(f"  ⚠ Warning: Could not parse Slack timestamp: {e}")
         return None
 
-def is_within_last_month(timestamp_str: str, unix_timestamp=None) -> bool:
-    """Check whether a run happened within the last 30 days."""
+def is_within_retention(timestamp_str: str, unix_timestamp=None) -> bool:
+    """Check whether a run is recent enough to report on.
+
+    Shares the state's retention window rather than hardcoding it, so raising
+    STATE_RETENTION_DAYS cannot leave the report narrower than the clusters it
+    is reporting from.
+    """
     unix_value = resolve_unix(unix_timestamp, timestamp_str)
     if unix_value is None:
         return False
 
-    one_month_ago = (datetime.now(timezone.utc) - timedelta(days=30)).timestamp()
-    return unix_value >= one_month_ago
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)).timestamp()
+    return unix_value >= cutoff
 
-def find_oldest_run_in_centroid(entry: Dict[str, Any], all_errors: List[List], url_to_timestamp: Dict[str, str], url_to_error_message: Dict[str, str]) -> Optional[Dict[str, Any]]:
+def find_oldest_run_in_centroid(entry: Dict[str, Any], url_to_timestamp: Dict[str, str], url_to_error_message: Dict[str, str]) -> Optional[Dict[str, Any]]:
     """Find the oldest run in the same centroid group.
 
     Returns dict with: timestamp_utc, commit_hash, run_url, error_message
@@ -251,8 +256,6 @@ def load_secrets():
     github_token = secrets.get("github_token", "") or os.environ.get("GITHUB_TOKEN", "")
     
     return {
-        "GITHUB_REPO_OWNER": secrets.get("github_repo_owner", ""),
-        "GITHUB_REPO_NAME": secrets.get("github_repo_name", ""),
         "GITHUB_TOKEN": github_token,
         "CHANNEL_ID": secrets.get("channel_id", ""),
     }
@@ -390,8 +393,8 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
     except Exception as e:
         print(f"  ⚠ Warning: Could not load Slack export: {e}")
     
-    # Filter to only include errors from the last month
-    print(f"\nFiltering errors to only include those from the last month...")
+    # Filter to the retention window the state itself uses
+    print(f"\nFiltering errors to those from the last {RETENTION_DAYS} days...")
     recent_errors = []
     skipped_no_url = 0
     skipped_old = 0
@@ -410,8 +413,8 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
             skipped_no_timestamp += 1
             continue
         
-        # Only include errors from the last month
-        if not is_within_last_month(timestamp_str, unix_timestamp):
+        # Only include errors inside the retention window
+        if not is_within_retention(timestamp_str, unix_timestamp):
             skipped_old += 1
             continue
         
@@ -420,11 +423,11 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
     print(f"  Total errors in all_errors.json: {len(all_errors)}")
     print(f"  Skipped (no URL): {skipped_no_url}")
     print(f"  Skipped (no timestamp): {skipped_no_timestamp}")
-    print(f"  Skipped (older than 1 month): {skipped_old}")
-    print(f"  Errors from last month: {len(recent_errors)}")
+    print(f"  Skipped (older than {RETENTION_DAYS} days): {skipped_old}")
+    print(f"  Errors inside the window: {len(recent_errors)}")
     
-    # Generate report entries (for all errors from last month)
-    print(f"\nGenerating report entries for {len(recent_errors)} error(s) from last month...")
+    # Generate report entries for everything inside the window
+    print(f"\nGenerating report entries for {len(recent_errors)} error(s)...")
     report_entries = []
     matched_count = 0
     unmatched_count = 0
@@ -569,7 +572,7 @@ def generate_error_report() -> tuple[List[Dict[str, Any]], str]:
                         print(f"    ✓ Fetched centroid commit hash from GitHub API for {centroid_run_url[:60]}...")
             
             # Find oldest run in this centroid group
-            oldest_run = find_oldest_run_in_centroid(entry, all_errors, url_to_timestamp, url_to_error_message)
+            oldest_run = find_oldest_run_in_centroid(entry, url_to_timestamp, url_to_error_message)
             
             # Get commit hash for oldest run from the cluster state
             if oldest_run and oldest_run.get("run_url"):
