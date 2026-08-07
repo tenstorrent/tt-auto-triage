@@ -9,7 +9,7 @@ from typing import Any, Iterator
 
 from .helpers import api_get, gh, log, paginate_api, sanitize_text
 
-SKIP_KEYWORDS: tuple[str, ...] = ("Nightly tt-metal L2 tests",)
+SKIP_KEYWORDS: tuple[str, ...] = ()
 
 
 def _run_timestamp(run: dict[str, Any]) -> float:
