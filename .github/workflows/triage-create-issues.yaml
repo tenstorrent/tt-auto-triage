@@ -62,7 +62,10 @@ permissions:
 jobs:
   create-issues:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Real runs sit at 12-17min. The per-candidate last-passing search adds up
+    # to MAX_SEARCH_SECONDS each, and jobs that never passed run that budget to
+    # exhaustion, so leave room rather than truncating a run mid-draft.
+    timeout-minutes: 45
     steps:
       - name: Checkout tt-auto-triage
         uses: actions/checkout@v4
