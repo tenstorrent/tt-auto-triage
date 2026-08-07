@@ -92,17 +92,17 @@ def draft_issue_body(
         sha = job["last_passing_sha"][:12]
         date = job.get("last_passing_date", "N/A")
         url = job.get("last_passing_url", "")
-        timeline_lines.append(f"- Last passing job: commit `{sha}` on {date}" + (f" — {url}" if url else ""))
+        timeline_lines.append(f"- Last passing commit: `{sha}` on {date}" + (f" — {url}" if url else ""))
     if job.get("first_failing_sha"):
         sha = job["first_failing_sha"][:12]
         date = job.get("first_failing_date", "N/A")
         url = job.get("first_failing_url", "")
-        timeline_lines.append(f"- First failing run: commit `{sha}` on {date}" + (f" — {url}" if url else ""))
+        timeline_lines.append(f"- First failing commit: `{sha}` on {date}" + (f" — {url}" if url else ""))
     if job.get("last_failing_sha"):
         sha = job["last_failing_sha"][:12]
         date = job.get("last_failing_date", "N/A")
         url = job.get("last_failing_url", "")
-        timeline_lines.append(f"- Most recent failing run: commit `{sha}` on {date}" + (f" — {url}" if url else ""))
+        timeline_lines.append(f"- Most recent failing commit: `{sha}` on {date}" + (f" — {url}" if url else ""))
 
     regression_timeline = "\n".join(timeline_lines) if timeline_lines else "No temporal boundary data available."
 
