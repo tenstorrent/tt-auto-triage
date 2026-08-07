@@ -92,7 +92,7 @@ def draft_issue_body(
         sha = job["last_passing_sha"][:12]
         date = job.get("last_passing_date", "N/A")
         url = job.get("last_passing_url", "")
-        timeline_lines.append(f"- Last passing run: commit `{sha}` on {date}" + (f" — {url}" if url else ""))
+        timeline_lines.append(f"- Last passing job: commit `{sha}` on {date}" + (f" — {url}" if url else ""))
     if job.get("first_failing_sha"):
         sha = job["first_failing_sha"][:12]
         date = job.get("first_failing_date", "N/A")

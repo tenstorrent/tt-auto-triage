@@ -11,6 +11,7 @@ from typing import Any
 from .detect_failures import (
     download_job_logs,
     iter_failing_jobs,
+    resolve_last_passing_boundary,
     streak_still_failing,
 )
 from .download_data import download_workflow_data
@@ -99,6 +100,8 @@ def main() -> int:
     tracked_pairs = tracked_pairs_from_issues(open_issues)
     logs_dir = Path("build_ci/create_issues/logs")
 
+    runs_by_workflow = {name: runs for name, runs in workflow_data}
+
     summary: list[dict[str, Any]] = []
     created_so_far = 0
     candidates = list(
@@ -145,7 +148,23 @@ def main() -> int:
             continue
         enriched_job = enriched[0]
 
-        # ── Step 3: Draft issue body via LLM ────────────────────────
+        # ── Step 3: Resolve the last-passing boundary ───────────────
+        # Deferred until here because it costs API calls: only candidates that
+        # survived the gates above will actually reach the issue body.
+        last_passing = resolve_last_passing_boundary(
+            enriched_job["job_name"],
+            runs_by_workflow.get(enriched_job["workflow_name"], []),
+            TARGET_REPO,
+        )
+        if last_passing:
+            enriched_job["last_passing_sha"] = last_passing["head_sha"]
+            enriched_job["last_passing_date"] = last_passing["created_at"]
+            enriched_job["last_passing_url"] = last_passing["job_url"]
+            log(f"  Last passing: {last_passing['head_sha'][:12]} ({last_passing['created_at']})")
+        else:
+            log("  Last passing: not found within search budget")
+
+        # ── Step 4: Draft issue body via LLM ────────────────────────
         log_paths = enriched_job.get("log_paths", [])
         log("  Drafting issue via Copilot agent...")
         per_workflow_consecutive = enriched_job.get("consecutive", CONSECUTIVE_LOW_VOLUME)
@@ -176,13 +195,13 @@ def main() -> int:
             summary.append(_entry(job, "agent_skipped", reason=reason))
             continue
 
-        # ── Step 4: Dry-run gate ────────────────────────────────────
+        # ── Step 5: Dry-run gate ────────────────────────────────────
         if not CREATE_ISSUES:
             log(f"  Eligible but CREATE_ISSUES=false (dry run): {job['workflow_name']} / {job['job_name']}")
             summary.append(_entry(job, "dry_run"))
             continue
 
-        # ── Step 5: Create the issue ────────────────────────────────
+        # ── Step 6: Create the issue ────────────────────────────────
         issue_url, issue_title, issue_body = create_issue(
             enriched_job, agent_result,
         )
