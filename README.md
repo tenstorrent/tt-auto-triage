@@ -1,40 +1,20 @@
 # tt-auto-triage
 
-A GitHub Actions-based system for CI triage and signal hygiene: identify likely culprit commits for failing jobs, create and maintain deterministic-failure issues, and sync recurring Slack errors into actionable GitHub issues.
+A GitHub Actions-based system for CI triage and signal hygiene: identify likely culprit commits for failing jobs, file triage issues for jobs that fail consistently, and track recurring Slack errors as issues for data population.
 
-## Overview
+> **Not the same as the n8n "auto-triage" workflow.** There is a separate, n8n-based auto-triage workflow whose logic lives in [`tenstorrent/vulcan-orchestration`](https://github.com/tenstorrent/vulcan-orchestration/tree/main/workflows). This repo, `tt-auto-triage`, is a distinct GitHub Actions-native system — different runtime, different logic, no shared code. Don't look here for the n8n workflow's behavior, and don't look there for this repo's.
 
-This repository provides the following capabilities:
+## Summary
 
-1. **Regression Analysis**: AI-powered analysis of failing GitHub Actions workflows that:
-   - Invoked via `.github/actions/regression-analysis/action.yml`
-   - Identifies the last successful run and first failing run
-   - Downloads commit metadata between those boundaries
-   - Uses GitHub Copilot CLI (LLM) to analyze code changes and determine root causes
-   - Categorizes failures into 5 distinct cases
-   - Identifies relevant developers (codeowners, commit authors)
-   - Optionally creates auto-fix PRs for simple fixes
-   - Sends formatted Slack notifications with triage results
-2. **Deterministic Failure Issue Lifecycle**: Workflow-driven issue management for persistent CI regressions:
-   - Invoked via `.github/workflows/triage-create-issues.yaml` (or orchestrated through `.github/workflows/triage-ci.yaml`)
-   - Detects jobs that fail deterministically across consecutive runs
-   - Drafts issue content from failing logs
-   - Creates new issues (or runs in dry-run mode)
-   - Avoids duplicate issues for already tracked workflow/job pairs
-   - Produces markdown summaries for review
+Three independent pieces, each usable on its own:
 
-3. **Slack Output Analysis**: Syncs error messages from Slack channels to GitHub issues:
-   - Invoked via `.github/actions/slack_output_analysis/action.yml`
-   - Fetches error messages from Slack channels
-   - Extracts errors and generates reports
-   - Groups similar errors for analysis/reporting in rebuild mode
-   - Creates, updates, and closes GitHub issues in sync flows
-   - Generates error reports and incremental reports
+1. **Regression Analysis** (`.github/actions/regression-analysis`) — a composite action attached to a failing CI job. Finds the last successful run and the first failing run, downloads the commits in between, and uses the GitHub Copilot CLI to identify the likely culprit commit and classify the failure into one of [5 cases](#failure-case-categories). Can optionally re-run the job on real hardware to confirm determinism, draft an auto-fix PR for simple cases, and posts results to Slack. Its LLM instructions also include bug-escape guidance — prompt text that flags when a failure indicates missing lower-level test coverage and recommends shift-left additions in the triage output. This is just guidance surfaced in regression-analysis's own output, not a bug-escape detection system — the actual bug-escape finding logic runs as a separate workflow outside this repo.
 
-4. **Bug-Escape Guidance (Separate Workstream)**:
-   - Invoked as guidance in `.github/actions/regression-analysis/regression_analysis/instructions/instructions_footer_for_llm.txt`
-   - Documents when failures indicate missing lower-level coverage
-   - Recommends shift-left test additions independently of issue grouping/maintenance logic
+2. **Deterministic Failure Issue Creation** (`.github/workflows/triage-create-issues.yaml`) — a reusable workflow, typically run on a schedule, that scans recent runs across a target repo and files a tt-metal issue for jobs that are **failing consistently**, so someone actually triages/fixes them. "Consistently" is threshold-based and adapts to how often a workflow runs: a job needs a longer consecutive-failure streak to qualify if its workflow runs frequently on main, and a shorter streak if it's low-volume — so a noisy, frequently-run pipeline isn't flagged over a couple of flaky runs. Before drafting anything it re-checks that the job hasn't since recovered, then uses the Copilot CLI to draft an issue from the logs and only files it if the draft comes back medium/high confidence and no issue is already tracked for that workflow/job pair. **This repo's job stops at filing the issue** — updating, tracking, and closing it out is handled entirely by a separate n8n workflow outside this repo. See [Deterministic Failure Issue Creation](#deterministic-failure-issue-creation) below for the exact thresholds.
+
+3. **Slack Output Analysis** (`.github/actions/slack_output_analysis`) — syncs recurring error messages posted to a Slack channel into GitHub issues, grouping similar errors via text-similarity matching so repeat instances of the same error land on one issue instead of many. These issues exist purely for **data population** — tracking recurring error signal that regression-analysis posts to Slack — not to prompt someone to triage them. They are unrelated to, and created independently of, the triage issues from Deterministic Failure Issue Creation above.
+
+Everything below this point is detailed reference material — full setup, all inputs/outputs, and pipeline internals for each piece.
 
 ## Documentation
 
@@ -65,12 +45,12 @@ For internal usage guides and runbooks, see the [Regression Analysis Confluence 
 
 That's it. The action will analyze the failure, classify it, and send results to Slack.
 
-### Deterministic Failure Issue Lifecycle (Minimal Setup)
+### Deterministic Failure Issue Creation (Minimal Setup)
 
 **Prerequisites:**
 - Token with read access to workflow runs/artifacts → Store as `AGGREGATE_READ_TOKEN`
 - Token with write access to issue repo → Store as `ISSUE_WRITE_TOKEN`
-- Cursor API key for issue drafting → Store as `CURSOR_API_KEY`
+- GitHub PAT with `copilot` scope for issue drafting → Store as `COPILOT_PAT`
 
 **Minimal workflow (reusable workflow call):**
 
@@ -85,10 +65,10 @@ jobs:
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
-      CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+      COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
 ```
 
-This stage finds deterministic failures, drafts issue content from logs, and creates issues while preventing duplicates for already tracked workflow/job pairs.
+This stage finds deterministically-failing jobs (based on consecutive-failure streaks, see [Deterministic Failure Issue Creation](#deterministic-failure-issue-creation) below), drafts issue content from logs, and creates issues while preventing duplicates for already tracked workflow/job pairs. It only creates the issue — updating/closing it afterward is handled by a separate n8n workflow outside this repo.
 
 ### Slack Output Analysis (Minimal Setup)
 
@@ -108,7 +88,7 @@ This stage finds deterministic failures, drafts issue content from logs, and cre
     channel_id: ${{ secrets.SLACK_CHANNEL_ID }}
 ```
 
-This will sync errors from Slack to GitHub issues using default settings.
+This will sync errors from Slack to GitHub issues using default settings. These are data-population issues for tracking recurring Slack error signal, unrelated to the triage issues created by Deterministic Failure Issue Creation above.
 
 ---
 
@@ -225,9 +205,66 @@ jobs:
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
 ```
 
+### Deterministic Failure Issue Creation
+
+The `triage-create-issues.yaml` reusable workflow scans recent CI runs for jobs that keep failing in the same way and opens a triage issue in `issue-repo` once a job crosses its consecutive-failure threshold. This repo's involvement ends once the issue is created — there is no update/close logic here; a separate n8n workflow outside this repo owns updating and lifecycling these issues afterward.
+
+#### Basic Usage
+
+```yaml
+jobs:
+  create-issues:
+    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-create-issues.yaml@main
+    with:
+      issue-repo: "tenstorrent/tt-metal"
+      target-repo: "tenstorrent/tt-metal"
+    secrets:
+      AGGREGATE_READ_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
+      ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+      COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
+```
+
+#### Inputs
+
+- `issue-repo`: Repository to create tracking issues in (default: `tenstorrent/tt-metal`)
+- `target-repo`: Repository to read workflow run data from (default: `tenstorrent/tt-metal`)
+- `max-issues`: Maximum number of issues to create in one run, `0` = unlimited (default: `0`)
+- `workflow-filter`: Comma-separated substrings to restrict which workflow names are considered; empty means all workflows (default: `""`)
+- `llm-backend`: reserved for selecting the drafting backend — accepted by the workflow but currently a no-op; it isn't passed through to the job env or read by `tools.ci.create_issues`, so Copilot is used regardless of this value (default: `"copilot"`)
+- `consecutive-failures-high-volume`: Consecutive failures required before filing an issue for a **high-volume** workflow (default: `4`)
+- `consecutive-failures-low-volume`: Consecutive failures required before filing an issue for a **low-volume** workflow (default: `2`)
+- `high-volume-runs-per-day`: Strict cutoff (`>`) on main-branch runs in the last 24h used to classify a workflow as high-volume vs. low-volume (default: `5`)
+
+The high/low-volume split exists so that "failing consistently" means something different depending on how often a workflow runs: a workflow that runs dozens of times a day needs a longer failure streak to rule out flakiness before an issue is opened, while a workflow that only runs a couple of times a day can be flagged after just a couple of failures in a row.
+
+#### Required Secrets
+
+- `AGGREGATE_READ_TOKEN`: Token with read access to workflow runs/artifacts in `target-repo`
+- `ISSUE_WRITE_TOKEN`: Token with write access to create issues in `issue-repo`
+- `COPILOT_PAT`: GitHub PAT with `copilot` scope, used to draft issue titles/bodies from failing logs
+
+#### How It Decides to File an Issue
+
+For each job whose recent-run streak meets the consecutive-failure threshold above:
+
+1. Re-checks the job's latest run on main to confirm it hasn't since recovered (the failure-streak data can be a stale snapshot)
+2. Downloads logs for that job and drafts an issue title/body with the Copilot CLI agent
+3. Skips the job if the agent determines the failure isn't deterministic, or returns low confidence — only `medium`/`high` confidence drafts result in an issue
+4. Skips the job if an issue is already open for that workflow/job pair (tracked via metadata markers embedded in the issue body)
+5. Creates the issue, and stops there
+
+The underlying script (`tools.ci.create_issues`) supports a dry-run mode — set `CREATE_ISSUES=false` and it only records what *would* have been created — but the reusable workflow (`triage-create-issues.yaml`) always hard-codes `CREATE_ISSUES: "true"` in its step env with no input to override it, so dry-run isn't reachable by calling the workflow. To dry-run, invoke `python3 -m tools.ci.create_issues` directly with `CREATE_ISSUES` unset.
+
+Set `max-issues` to cap how many issues a single run can create, and `workflow-filter` to scope the scan to specific workflows (e.g. `"Blackhole,ops-unit-tests"`). There is no update or close step in this repo — once filed, the issue is picked up and lifecycled by a separate n8n workflow outside this repo.
+
+#### Outputs
+
+- `summary.md`: Markdown summary of created/skipped candidates, published to the job's step summary
+- `issues.json`: Artifact listing newly created and pre-existing tracked issue URLs
+
 ### Slack Output Analysis
 
-The `slack_output_analysis` action syncs error messages from Slack channels to GitHub issues.
+The `slack_output_analysis` action syncs error messages from Slack channels to GitHub issues. It creates, updates, and closes issues on its own (unlike Deterministic Failure Issue Creation, which only creates) — but these issues exist purely for **data population**, tracking recurring error signal that regression-analysis posts to Slack. They're a separate, unrelated bucket of issues from the triage issues created by [Deterministic Failure Issue Creation](#deterministic-failure-issue-creation) above, and aren't meant to drive anyone's triage queue.
 
 #### Basic Usage
 
@@ -328,14 +365,19 @@ jobs:
 6. **Retry Logic (Optional)**: Re-runs deterministic failures on supported hardware to confirm determinism
 7. **Slack Notification**: Formats and sends triage results to Slack
 
-### Deterministic Failure Issue Lifecycle Pipeline
+The LLM instructions used in the Analysis Stage (`instructions_footer_for_llm.txt`) also carry bug-escape guidance: prompt text that flags when a failure indicates missing lower-level test coverage and recommends shift-left additions in the triage output. This only shapes what regression-analysis writes about a given failure — the actual bug-escape detection/finding logic is a separate workflow that lives outside this repo.
+
+### Deterministic Failure Issue Creation Pipeline
 
 1. **Download Workflow Data**: Reads recent workflow runs and artifacts for the target repository
-2. **Detect Deterministic Failures**: Finds jobs failing for N consecutive runs
+2. **Detect Consistent Failures**: Finds jobs failing for N consecutive runs, where N adapts to the workflow's run volume (see [Inputs](#inputs) above)
 3. **Deduplicate Against Open Issues**: Skips workflow/job pairs that are already tracked
-4. **Draft Issue Content**: Uses Cursor agent output plus run logs to generate issue title/body
-5. **Create Issues**: Opens GitHub issues when `CREATE_ISSUES=true` (or records dry-run results)
-6. **Summarize Results**: Produces markdown summary output for auditing
+4. **Confirm Freshness**: Re-checks each remaining candidate against the latest run before spending log-download/LLM cost on it, in case it already recovered
+5. **Draft Issue Content**: Uses the GitHub Copilot CLI agent plus run logs to generate issue title/body, and gate on medium/high confidence
+6. **Create Issues**: Opens GitHub issues when `CREATE_ISSUES=true` — the reusable workflow always sets this, so calling it via `triage-create-issues.yaml` always creates for real; `CREATE_ISSUES=false` (dry-run, recording what would have been created) is only reachable by running `python3 -m tools.ci.create_issues` directly
+7. **Summarize Results**: Produces markdown summary output for auditing
+
+This pipeline never updates or closes an issue it created — that's out of scope for this repo. Once filed, a separate n8n workflow outside this repo takes over updating and lifecycling it.
 
 ### Slack Output Analysis Pipeline
 
@@ -345,9 +387,7 @@ jobs:
 4. **Issue Sync**: Creates/updates issues in update mode, recreates issues in rebuild mode, and applies close/cleanup logic during sync
 5. **Generate Reports**: Creates error reports and incremental reports comparing against previous runs
 
-### Bug-Escape Guidance (Separate Workstream)
-
-This is intentionally separate from issue grouping and issue maintenance workflows. It focuses on identifying likely bug escapes and proposing shift-left test coverage improvements in regression-analysis outputs.
+Unlike the pipeline above, this one does manage its own issues end-to-end (create/update/close) — but again, those issues are a separate, data-population-only bucket unrelated to the triage issues from Deterministic Failure Issue Creation.
 
 ## Requirements
 
