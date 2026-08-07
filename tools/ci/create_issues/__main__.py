@@ -104,6 +104,9 @@ def main() -> int:
 
     summary: list[dict[str, Any]] = []
     created_so_far = 0
+    # Issues created, plus those a dry run would have created. MAX_ISSUES gates
+    # on this so a dry run costs the same bounded amount of work as a real one.
+    budget_used = 0
     candidates = list(
         iter_failing_jobs(
             workflow_data,
@@ -123,7 +126,7 @@ def main() -> int:
         )
 
         # ── Early exit: MAX_ISSUES reached ──────────────────────────
-        if MAX_ISSUES and created_so_far >= MAX_ISSUES:
+        if MAX_ISSUES and budget_used >= MAX_ISSUES:
             reason = "max issues reached; remaining candidates not evaluated"
             _log_rejection(job, "global-limit", reason)
             summary.append(_entry(job, "limit_reached", reason=reason))
@@ -199,6 +202,7 @@ def main() -> int:
         if not CREATE_ISSUES:
             log(f"  Eligible but CREATE_ISSUES=false (dry run): {job['workflow_name']} / {job['job_name']}")
             summary.append(_entry(job, "dry_run"))
+            budget_used += 1
             continue
 
         # ── Step 6: Create the issue ────────────────────────────────
@@ -206,6 +210,7 @@ def main() -> int:
             enriched_job, agent_result,
         )
         created_so_far += 1
+        budget_used += 1
         open_issues.append({
             "number": issue_url.rsplit("/", 1)[-1],
             "title": issue_title,
