@@ -11,6 +11,65 @@ from .helpers import api_get, gh, log, paginate_api, sanitize_text
 
 SKIP_KEYWORDS: tuple[str, ...] = ()
 
+# Boundary search budgets. A workflow's snapshot can hold hundreds of runs
+# (merge-gate/sanity-tests average >500 on main per 15-day window, each with
+# 100+ jobs), so an unbounded walk would blow the workflow's time budget for a
+# single long-broken job. The wall-clock cap is the backstop: a run's job list
+# can take seconds to fetch on big pipelines, so a run count alone does not
+# bound the search well enough.
+MAX_RUNS_SCANNED = 40
+MAX_CONSECUTIVE_MISSING = 15
+MAX_FALLBACK_PAGES = 3
+MAX_SEARCH_SECONDS = 45.0
+
+# run_id -> {job_name: {"conclusion": str, "html_url": str}}
+# Completed runs never change their job conclusions, and this is a single-shot
+# CLI, so caching for the process lifetime is safe. Tests must clear it.
+_RUN_JOBS_CACHE: dict[int, dict[str, dict[str, str]]] = {}
+
+
+def _clear_run_jobs_cache() -> None:
+    """Reset the per-run job cache (used by tests)."""
+    _RUN_JOBS_CACHE.clear()
+
+
+def _fetch_run_jobs(
+    owner: str,
+    repo: str,
+    run_id: int,
+    token: str | None,
+) -> dict[str, dict[str, str]]:
+    """Return {job_name: {conclusion, html_url}} for a run, cached by run id.
+
+    Returns an empty mapping when the API call fails so callers can treat the
+    run as "no data" rather than crashing the whole detection pass.
+    """
+    cached = _RUN_JOBS_CACHE.get(run_id)
+    if cached is not None:
+        return cached
+
+    try:
+        all_jobs = paginate_api(
+            f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100",
+            "jobs",
+            token,
+        )
+    except Exception as exc:
+        log(f"  Warning: could not fetch jobs for run {run_id} ({type(exc).__name__}): {exc}")
+        return {}
+
+    jobs = {
+        job["name"]: {
+            "conclusion": job.get("conclusion") or "",
+            "html_url": job.get("html_url", ""),
+        }
+        for job in all_jobs
+        if job.get("name")
+    }
+    _RUN_JOBS_CACHE[run_id] = jobs
+    time.sleep(0.3)
+    return jobs
+
 
 def _run_timestamp(run: dict[str, Any]) -> float:
     """Parse a run's GitHub timestamp into epoch seconds; 0 if unparseable."""
@@ -29,7 +88,7 @@ def _run_date_iso(run: dict[str, Any]) -> str:
 def _build_boundary_info(
     oldest_failing_run: dict[str, Any] | None,
     newest_failing_run: dict[str, Any] | None,
-    last_passing_run: dict[str, Any] | None,
+    last_passing: dict[str, str] | None,
     oldest_failing_job_url: str = "",
     newest_failing_job_url: str = "",
 ) -> dict[str, Any]:
@@ -41,10 +100,15 @@ def _build_boundary_info(
     may have failed for a different reason. Their URLs point to the specific
     failing JOB, not the run.
 
+    ``last_passing`` comes from :func:`resolve_last_passing_boundary` and refers
+    to the most recent run where THIS job succeeded, which is not the same as
+    the most recent run where the whole workflow succeeded: in multi-job
+    pipelines a job routinely passes inside a run that fails overall.
+
     Fields produced (all optional — missing when data is unavailable):
       - first_failing_sha / first_failing_date / first_failing_url (job URL)
       - last_failing_sha  / last_failing_date  / last_failing_url  (job URL)
-      - last_passing_sha  / last_passing_date  / last_passing_url   (run URL)
+      - last_passing_sha  / last_passing_date  / last_passing_url  (job URL)
     """
     info: dict[str, Any] = {}
 
@@ -58,12 +122,154 @@ def _build_boundary_info(
         info["last_failing_date"] = _run_date_iso(newest_failing_run)
         info["last_failing_url"] = newest_failing_job_url
 
-    if last_passing_run:
-        info["last_passing_sha"] = last_passing_run.get("head_sha", "")
-        info["last_passing_date"] = _run_date_iso(last_passing_run)
-        info["last_passing_url"] = last_passing_run.get("html_url", "")
+    if last_passing:
+        info["last_passing_sha"] = last_passing.get("head_sha", "")
+        info["last_passing_date"] = last_passing.get("created_at", "")
+        info["last_passing_url"] = last_passing.get("job_url", "")
 
     return info
+
+
+def _is_manual(run: dict[str, Any]) -> bool:
+    """Manually dispatched runs are excluded upstream; mirror that filter."""
+    return run.get("event") == "workflow_dispatch"
+
+
+def _budget_spent(job_name: str, budget: dict[str, float]) -> bool:
+    """Report (and log) whether the last-passing search must stop."""
+    if budget["runs_left"] <= 0:
+        log(f"  Last-passing search for '{job_name}': run scan budget exhausted")
+        return True
+    if budget["missing_streak"] >= MAX_CONSECUTIVE_MISSING:
+        log(
+            f"  Last-passing search for '{job_name}': job absent from "
+            f"{MAX_CONSECUTIVE_MISSING} consecutive runs (renamed or removed?), giving up"
+        )
+        return True
+    if time.time() >= budget["deadline"]:
+        log(f"  Last-passing search for '{job_name}': {MAX_SEARCH_SECONDS:.0f}s time budget reached")
+        return True
+    return False
+
+
+def _scan_runs_for_passing_job(
+    job_name: str,
+    runs: list[dict[str, Any]],
+    owner: str,
+    repo: str,
+    token: str | None,
+    seen_run_ids: set[int],
+    budget: dict[str, float],
+) -> dict[str, str] | None:
+    """Walk runs newest→oldest looking for one where ``job_name`` succeeded.
+
+    ``seen_run_ids`` and ``budget`` are mutated so a caller can run this over
+    several run sources (snapshot, then live API pages) under one shared cap.
+    Returns None when the budget runs out or the runs are exhausted.
+    """
+    for run in runs:
+        if _budget_spent(job_name, budget):
+            return None
+
+        run_id = run.get("id")
+        if not run_id or _is_manual(run):
+            continue
+        # The snapshot keeps one entry per run attempt, so the same run id can
+        # appear more than once.
+        if run_id in seen_run_ids:
+            continue
+        seen_run_ids.add(run_id)
+        budget["runs_left"] -= 1
+
+        job = _fetch_run_jobs(owner, repo, run_id, token).get(job_name)
+        if job is None:
+            budget["missing_streak"] += 1
+            continue
+        budget["missing_streak"] = 0
+
+        if job.get("conclusion") == "success":
+            return {
+                "head_sha": run.get("head_sha", ""),
+                "created_at": _run_date_iso(run),
+                "job_url": job.get("html_url", ""),
+            }
+
+    return None
+
+
+def resolve_last_passing_boundary(
+    job_name: str,
+    runs: list[dict[str, Any]],
+    target_repo: str,
+    token: str | None = None,
+) -> dict[str, str] | None:
+    """Find the most recent run in which ``job_name`` itself succeeded.
+
+    This is deliberately JOB-level. A workflow-level check ("when did this
+    pipeline last pass?") answers a different question and is almost always
+    useless for multi-job pipelines, where a job can pass in a run that fails
+    overall and the pipeline may never be fully green.
+
+    Searches the snapshot runs first, then falls back to paginating live
+    workflow history, since a job can have last passed before the snapshot's
+    rolling window. Returns None if no passing run is found within budget, in
+    which case the issue renders "N/A".
+    """
+    if not runs:
+        return None
+    if token is None:
+        token = os.environ.get("GITHUB_TOKEN")
+    owner, repo = target_repo.split("/")
+
+    seen_run_ids: set[int] = set()
+    budget: dict[str, float] = {
+        "runs_left": MAX_RUNS_SCANNED,
+        "missing_streak": 0,
+        "deadline": time.time() + MAX_SEARCH_SECONDS,
+    }
+
+    ordered = sorted(runs, key=_run_timestamp, reverse=True)
+    found = _scan_runs_for_passing_job(
+        job_name, ordered, owner, repo, token, seen_run_ids, budget
+    )
+    if found:
+        return found
+    if _budget_spent(job_name, budget):
+        return None
+
+    # ── Fallback: the job may have last passed before the snapshot window ──
+    workflow_id = next((r.get("workflow_id") for r in ordered if r.get("workflow_id")), None)
+    if not workflow_id:
+        return None
+
+    log(f"  Last-passing search for '{job_name}': no pass in snapshot, checking older history")
+    for page in range(1, MAX_FALLBACK_PAGES + 1):
+        try:
+            data = api_get(
+                f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/"
+                f"{workflow_id}/runs?branch=main&status=completed&per_page=100&page={page}",
+                token,
+            )
+        except Exception as exc:
+            log(f"  Warning: last-passing history lookup failed ({type(exc).__name__}): {exc}")
+            return None
+
+        page_runs = data.get("workflow_runs", [])
+        if not page_runs:
+            return None
+
+        found = _scan_runs_for_passing_job(
+            job_name, page_runs, owner, repo, token, seen_run_ids, budget
+        )
+        if found:
+            return found
+        if _budget_spent(job_name, budget):
+            return None
+        if len(page_runs) < 100:
+            return None
+
+    log(f"  Last-passing search for '{job_name}': page limit reached without finding a pass")
+    return None
 
 
 def iter_failing_jobs(
@@ -128,19 +334,14 @@ def iter_failing_jobs(
             run_id = run.get("id")
             if not run_id:
                 continue
-            try:
-                all_jobs = paginate_api(
-                    f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/jobs?per_page=100",
-                    "jobs",
-                    token,
-                )
-            except Exception as exc:
-                log(f"  Warning: skipping run {run_id} for '{workflow_name}' due to API error ({type(exc).__name__}): {exc}")
+            all_jobs = _fetch_run_jobs(owner, repo, run_id, token)
+            if not all_jobs:
                 continue
             run_failed_jobs[run_id] = {
-                job["name"]: job.get("html_url", "") for job in all_jobs if job.get("conclusion") == "failure"
+                name: job.get("html_url", "")
+                for name, job in all_jobs.items()
+                if job.get("conclusion") == "failure"
             }
-            time.sleep(0.3)
 
         if len(run_failed_jobs) < consecutive:
             log(
@@ -157,26 +358,6 @@ def iter_failing_jobs(
             log(f"  '{workflow_name}': skipped before candidate creation (no common failing jobs across runs)")
             continue
 
-        # ── Temporal boundary: most-recent passing run ────────────────
-        # Walk full history (newest→oldest) to find the most-recent success
-        # before the current contiguous failure streak. The first/last failing
-        # boundaries are taken from the analyzed runs below, not from the
-        # streak start (which may have failed for a different reason).
-        all_sorted = sorted(runs, key=_run_timestamp, reverse=True)
-        in_streak = False
-        last_passing_run: dict[str, Any] | None = None
-        for run in all_sorted:
-            conclusion = run.get("conclusion")
-            if conclusion == "failure":
-                in_streak = True  # we are inside the current failure streak
-            elif conclusion == "success":
-                if in_streak:
-                    # First success after the failure streak — the boundary
-                    # between the current streak and older history.
-                    last_passing_run = run
-                # Most-recent run is a success (or boundary found) — stop.
-                break
-
         # run_ids preserves sorted_runs order (newest→oldest), so index 0 is
         # the newest analyzed failing run and index -1 the oldest.
         oldest_failing_run = sorted_runs[-1]
@@ -187,10 +368,12 @@ def iter_failing_jobs(
                 log(f"  Skipping already-tracked job: {workflow_name} / {job_name}")
                 continue
             job_urls = [run_failed_jobs[run_id].get(job_name, "") for run_id in run_ids]
+            # The last-passing boundary is resolved lazily by the caller, after
+            # the freshness and max-issues gates, because it costs API calls.
             boundary_info = _build_boundary_info(
                 oldest_failing_run,
                 newest_failing_run,
-                last_passing_run,
+                None,
                 oldest_failing_job_url=job_urls[-1] if job_urls else "",
                 newest_failing_job_url=job_urls[0] if job_urls else "",
             )

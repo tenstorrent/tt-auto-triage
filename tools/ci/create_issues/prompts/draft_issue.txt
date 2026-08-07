@@ -27,7 +27,7 @@ INSTRUCTIONS:
    - there are no contradictory terminal errors across runs (for example: timeout in one run, assertion in another),
    - your error_excerpt quotes those terminal lines directly from the provided logs (no paraphrased or inferred error text),
    - you can explicitly point to at least one terminal error line from each run supporting the same root cause,
-   - if both last passing and first failing boundaries are present, they must refer to different commits/runs (same SHA or same run URL means deterministic=false — do not file an issue and do not compensate with a warning in the issue body).
+   - if both last passing and first failing boundaries are present, they must refer to different commits/runs (same SHA, or both URLs pointing into the same run, means deterministic=false — do not file an issue and do not compensate with a warning in the issue body).
 6. Additional strictness rules:
    - If a run has multiple plausible terminal failures and you cannot confidently identify one shared root cause across all runs, set deterministic=false.
    - If failures look related but not clearly identical (same subsystem but different terminal exception class), set deterministic=false.
@@ -40,10 +40,10 @@ INSTRUCTIONS:
      **Job:** ...
      ### Regression timeline
      Include the regression timeline data provided above. Show:
-     - Last passing commit (SHA + date + run URL) — or "N/A" if unknown
+     - Last passing commit (SHA + date + job URL) — the most recent run in which THIS job succeeded, or "N/A" if unknown
      - First failing commit (SHA + date + job URL) — the oldest analyzed run confirmed failing with this error
      - Most recent failing commit (SHA + date + job URL)
-     The first/most-recent failing links point to the specific failing job, not the run.
+     All three links point to the specific job, not the run. A last passing commit whose run failed overall is expected and correct: other jobs in that pipeline can fail while this one passes.
      This helps readers immediately gauge when the regression started and how long it has persisted.
      ### Failing job URLs (last $consecutive runs)
      - (list each job URL)

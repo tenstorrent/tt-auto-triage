@@ -35,6 +35,14 @@ on:
         description: "Strict cutoff (>) for classifying a workflow as high-volume based on main runs in the last 24h."
         type: number
         default: 5
+      dry-run:
+        description: "Evaluate candidates and draft issue bodies without creating any issues. Use to validate changes before they run for real."
+        type: boolean
+        default: false
+      auto-triage-ref:
+        description: "tt-auto-triage ref to check out. Point at a branch to test unmerged changes."
+        type: string
+        default: "main"
     secrets:
       AGGREGATE_READ_TOKEN:
         description: "Token with read access to workflow runs and artifacts"
@@ -54,13 +62,16 @@ permissions:
 jobs:
   create-issues:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Real runs sit at 12-17min. The per-candidate last-passing search adds up
+    # to MAX_SEARCH_SECONDS each, and jobs that never passed run that budget to
+    # exhaustion, so leave room rather than truncating a run mid-draft.
+    timeout-minutes: 45
     steps:
       - name: Checkout tt-auto-triage
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/tt-auto-triage
-          ref: main
+          ref: ${{ inputs.auto-triage-ref }}
           persist-credentials: false
 
       - name: Set up Node.js 24 (required for Copilot CLI)
@@ -87,7 +98,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.AGGREGATE_READ_TOKEN }}
           ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
           COPILOT_PAT: ${{ secrets.COPILOT_PAT }}
-          CREATE_ISSUES: "true"
+          CREATE_ISSUES: ${{ !inputs.dry-run }}
           ISSUE_REPO: ${{ inputs.issue-repo }}
           TARGET_REPO: ${{ inputs.target-repo }}
           MAX_ISSUES: ${{ inputs.max-issues }}
