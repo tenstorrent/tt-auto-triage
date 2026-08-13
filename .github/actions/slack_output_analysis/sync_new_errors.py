@@ -1,37 +1,66 @@
 #!/usr/bin/env python3
-"""
-Sync new errors from all_errors.json to existing GitHub issues or create new ones.
-Compares new errors to existing centroids and either adds them to existing issues
-or creates new issues if no match is found.
+"""Fold newly seen errors from all_errors.json into the persisted cluster state.
 
-Assumes issues are already sorted and formatted properly.
+Each new error is compared against the existing cluster centroids. A match is
+appended to that cluster; anything unmatched starts a new cluster with itself as
+the centroid. Centroid text is frozen once a cluster exists, so a cluster's
+identity does not drift as members are added.
+
+This writes only to cluster_state.json. It creates no GitHub issues, reads no
+issue bodies, and touches no project boards.
 """
 
 import json
 import os
-import re
 import sys
 import time
-import requests
-from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 
-# ============================================================================
-# File paths
-# ============================================================================
+from cluster_state import (
+    RETENTION_DAYS,
+    all_urls,
+    load_cluster_state,
+    prune_old_runs,
+    refresh_centroid_metadata,
+    save_cluster_state,
+    set_centroid_metadata,
+)
+from error_similarity import RAPIDFUZZ_THRESHOLD, SEMANTIC_THRESHOLD, find_best_matching_centroid
+from github_api_utils import (
+    get_commit_hash_from_github,
+    log_rate_limit_status,
+    read_counters,
+    reset_read_counters,
+)
+from state_paths import SCRIPT_DIR
+from timestamps import resolve_unix
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SECRETS_FILE = os.path.join(SCRIPT_DIR, "secrets.json")
 ALL_ERRORS_FILE = os.path.join(SCRIPT_DIR, "all_errors.json")
-ISSUE_DUMP_FILE = os.path.join(SCRIPT_DIR, "issue_dump.json")
+SECRETS_FILE = os.path.join(SCRIPT_DIR, "secrets.json")
 
 # Date range filtering (from environment variables)
 DATE_RANGE_START = os.environ.get("DATE_RANGE_START", "")
 DATE_RANGE_END = os.environ.get("DATE_RANGE_END", "")
 
 
+def load_secrets() -> Dict[str, str]:
+    """Load configuration from secrets.json, falling back to the environment."""
+    secrets = {}
+    try:
+        with open(SECRETS_FILE, "r") as f:
+            secrets = json.load(f)
+    except FileNotFoundError:
+        print(f"⚠ Warning: secrets.json not found at {SECRETS_FILE}, using environment variables")
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Invalid JSON in {SECRETS_FILE}: {e}")
+        sys.exit(1)
+
+    return {"GITHUB_TOKEN": secrets.get("github_token", "") or os.environ.get("GITHUB_TOKEN", "")}
+
+
 def parse_date_to_datetime(date_str: str) -> Optional[datetime]:
-    """Convert date string like 'January 1, 2026' to datetime."""
+    """Convert a date string like 'January 1, 2026' to a datetime."""
     if not date_str or not date_str.strip():
         return None
     try:
@@ -39,920 +68,41 @@ def parse_date_to_datetime(date_str: str) -> Optional[datetime]:
     except ValueError:
         return None
 
-# Import error similarity helper
-from error_similarity import find_best_matching_centroid, compare_errors
-from github_api_utils import log_rate_limit_status, get_commit_hash_from_github
-
-# Similarity thresholds
-# These must be high enough to prevent matching different errors that share boilerplate
-# e.g., "TT_THROW @ path1: Device init failed" vs "TT_THROW @ path2: Device timeout"
-# should NOT match even though they share "TT_THROW", "device", etc.
-RAPIDFUZZ_THRESHOLD = 60.0  # Raised from 50 - requires more token overlap
-SEMANTIC_THRESHOLD = 85.0   # Raised from 70 - requires stronger semantic similarity
 
 # ============================================================================
-# CONFIGURATION - Load from secrets.json
+# Defensive validation - drop entries with missing required metadata
 # ============================================================================
 
-def load_secrets():
-    """Load configuration from secrets.json file."""
-    try:
-        with open(SECRETS_FILE, 'r') as f:
-            secrets = json.load(f)
-        return {
-            "GITHUB_TOKEN": secrets.get("github_token", ""),
-            "GITHUB_REPO_OWNER": secrets.get("github_repo_owner", ""),
-            "GITHUB_REPO_NAME": secrets.get("github_repo_name", ""),
-            "PROJECT_OWNER": secrets.get("project_owner", ""),
-            "PROJECT_NAME": secrets.get("project_name", ""),
-            "PROJECT_NUMBER": secrets.get("project_number", ""),
-            "PROJECT_FIELD_ID": secrets.get("project_field_id", "")
-        }
-    except FileNotFoundError:
-        print(f"ERROR: secrets.json not found at {SECRETS_FILE}")
-        sys.exit(1)
-    except json.JSONDecodeError as e:
-        print(f"ERROR: Invalid JSON in {SECRETS_FILE}: {e}")
-        sys.exit(1)
+def is_entry_valid(
+    url: str,
+    run_metadata: Dict[str, Dict[str, Any]],
+    all_timestamps: Dict[str, str],
+    github_token: str = "",
+) -> Tuple[bool, List[str]]:
+    """Check that an entry carries the fields the Pydantic model requires.
 
-# Load secrets
-_secrets = load_secrets()
-GITHUB_TOKEN = _secrets["GITHUB_TOKEN"]
-GITHUB_REPO_OWNER = _secrets["GITHUB_REPO_OWNER"]
-GITHUB_REPO_NAME = _secrets["GITHUB_REPO_NAME"]
-PROJECT_OWNER = _secrets["PROJECT_OWNER"]
-PROJECT_NAME = _secrets["PROJECT_NAME"]
-PROJECT_NUMBER = _secrets["PROJECT_NUMBER"]
-PROJECT_FIELD_ID = _secrets["PROJECT_FIELD_ID"]
-
-# ============================================================================
-# GitHub API Functions
-# ============================================================================
-
-def get_all_issues(open_only: bool = False) -> List[Dict[str, Any]]:
-    """Get all issues from the repository and map them to centroids.
-    
-    Args:
-        open_only: If True, only fetch open issues. If False, fetch all issues.
-    """
-    url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/issues"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    
-    all_issues = []
-    page = 1
-    per_page = 100
-    
-    while True:
-        params = {
-            "state": "open" if open_only else "all",
-            "per_page": per_page,
-            "page": page
-        }
-        
-        try:
-            response = requests.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            issues = response.json()
-            
-            # Filter out pull requests
-            actual_issues = [issue for issue in issues if "pull_request" not in issue]
-            all_issues.extend(actual_issues)
-            
-            if len(issues) < per_page:
-                break
-            
-            page += 1
-            time.sleep(0.5)  # Rate limiting
-            
-        except Exception as e:
-            print(f"ERROR: Failed to get issues: {e}")
-            break
-    
-    return all_issues
-
-def extract_centroid_from_issue_body(issue_body: str) -> str:
-    """Extract the centroid error from the issue body."""
-    # Look for the Error Message section with code block
-    pattern = r"## Error Message\s*```\s*(.+?)\s*```"
-    match = re.search(pattern, issue_body, re.DOTALL)
-    
-    if match:
-        return match.group(1).strip()
-    
-    return ""
-
-def extract_urls_from_issue_body(issue_body: str) -> List[str]:
-    """Extract all GitHub Actions run URLs from an issue body.
-    
-    This extracts URLs from markdown links in the "All Occurrences" section.
-    """
-    urls = set()
-    
-    # Extract URLs from markdown links: [text](url)
-    link_pattern = r"\[([^\]]+)\]\(([^)]+)\)"
-    matches = re.findall(link_pattern, issue_body)
-    
-    for text, url in matches:
-        # Only include GitHub Actions run URLs
-        if "github.com" in url and ("actions/runs" in url or "/job/" in url):
-            urls.add(url)
-    
-    # Also extract plain URLs
-    url_pattern = r"https://github\.com/[^/]+/[^/]+/actions/runs/\d+/job/\d+"
-    plain_urls = re.findall(url_pattern, issue_body)
-    urls.update(plain_urls)
-    
-    return list(urls)
-
-def normalize_centroid(centroid: str) -> str:
-    """Normalize a centroid string for comparison (whitespace, case)."""
-    if not centroid:
-        return ""
-    # Normalize whitespace: collapse multiple spaces/newlines to single space
-    normalized = " ".join(centroid.split())
-    return normalized.lower()
-
-def map_issues_to_centroids(issues: List[Dict[str, Any]], issue_dump: List[Dict[str, Any]]) -> Dict[str, int]:
-    """
-    Map centroid errors to issue numbers by comparing issue bodies to centroids.
-    Only maps OPEN issues - closed issues are ignored entirely.
-    
-    Uses normalized comparison to handle whitespace/formatting differences.
-    
-    Returns:
-        Dictionary mapping centroid_error string to issue_number (only for open issues)
-    """
-    centroid_to_issue = {}
-    issues_without_centroids = 0
-    centroids_not_found = 0
-    closed_issues_skipped = 0
-    
-    # Build normalized lookup for issue_dump centroids
-    normalized_to_original = {}
-    for entry in issue_dump:
-        centroid_error = entry.get("centroid_error", "")
-        if centroid_error:
-            normalized = normalize_centroid(centroid_error)
-            normalized_to_original[normalized] = centroid_error
-    
-    for issue in issues:
-        # Skip closed issues entirely - they don't exist for our purposes
-        issue_state = issue.get("state", "open")
-        if issue_state == "closed":
-            closed_issues_skipped += 1
-            continue
-        
-        issue_body = issue.get("body", "")
-        centroid_from_issue = extract_centroid_from_issue_body(issue_body)
-        
-        if not centroid_from_issue:
-            issues_without_centroids += 1
-            continue
-        
-        # Find matching centroid using normalized comparison
-        normalized_from_issue = normalize_centroid(centroid_from_issue)
-        
-        if normalized_from_issue in normalized_to_original:
-            # Found match - use the original centroid from issue_dump as key
-            original_centroid = normalized_to_original[normalized_from_issue]
-            centroid_to_issue[original_centroid] = issue["number"]
-        else:
-            # If not in issue_dump, still map using the centroid from the issue body
-            # This handles cases where issue_dump might be stale
-            centroid_to_issue[centroid_from_issue.strip()] = issue["number"]
-            centroids_not_found += 1
-    
-    if closed_issues_skipped > 0:
-        print(f"  Note: Skipped {closed_issues_skipped} closed issue(s) - they are ignored")
-    if issues_without_centroids > 0:
-        print(f"  Note: {issues_without_centroids} issue(s) had no extractable centroid")
-    if centroids_not_found > 0:
-        print(f"  Note: {centroids_not_found} issue(s) had centroids not in issue_dump (added directly)")
-    
-    return centroid_to_issue
-
-def update_issue(issue_number: int, title: str, body: str) -> Dict[str, Any]:
-    """Update an existing GitHub issue."""
-    url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/issues/{issue_number}"
-    
-    # Try with "Bearer" first (for fine-grained PATs), then fall back to "token"
-    auth_methods = [
-        ("Bearer", f"Bearer {GITHUB_TOKEN}"),
-        ("token", f"token {GITHUB_TOKEN}")
-    ]
-    
-    data = {
-        "title": title,
-        "body": body
-    }
-    
-    last_error = None
-    for method_name, auth_header in auth_methods:
-        headers = {
-            "Authorization": auth_header,
-            "Accept": "application/vnd.github.v3+json"
-        }
-        
-        try:
-            response = requests.patch(url, json=data, headers=headers)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.HTTPError as e:
-            last_error = e
-            if e.response.status_code == 403:
-                # Try next auth method
-                continue
-            else:
-                print(f"\nERROR: HTTP {e.response.status_code}")
-                print(f"Response: {e.response.text}")
-                raise
-        except Exception as e:
-            last_error = e
-            continue
-    
-    if last_error:
-        raise last_error
-    raise Exception("Failed to update issue")
-
-def close_issue(issue_number: int, reason: str = "") -> Dict[str, Any]:
-    """Close a GitHub issue.
-    
-    Args:
-        issue_number: The issue number to close
-        reason: Optional reason to add as a comment before closing
-    
-    Returns:
-        The updated issue data from GitHub API
-    """
-    url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/issues/{issue_number}"
-    
-    auth_methods = [
-        ("Bearer", f"Bearer {GITHUB_TOKEN}"),
-        ("token", f"token {GITHUB_TOKEN}")
-    ]
-    
-    # Close the issue
-    data = {"state": "closed"}
-    
-    last_error = None
-    for method_name, auth_header in auth_methods:
-        headers = {
-            "Authorization": auth_header,
-            "Accept": "application/vnd.github.v3+json"
-        }
-        
-        try:
-            # Optionally add a comment explaining why the issue was closed
-            if reason:
-                comment_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/issues/{issue_number}/comments"
-                comment_data = {"body": f"🤖 **Auto-closed**: {reason}"}
-                requests.post(comment_url, json=comment_data, headers=headers)
-            
-            response = requests.patch(url, json=data, headers=headers)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.HTTPError as e:
-            last_error = e
-            if e.response.status_code == 403:
-                continue
-            else:
-                print(f"\nERROR closing issue: HTTP {e.response.status_code}")
-                print(f"Response: {e.response.text}")
-                raise
-        except Exception as e:
-            last_error = e
-            continue
-    
-    if last_error:
-        raise last_error
-    raise Exception("Failed to close issue")
-
-def verify_repository_access() -> bool:
-    """Verify that the repository exists and is accessible."""
-    url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
-    
-    auth_methods = [
-        ("Bearer", f"Bearer {GITHUB_TOKEN}"),
-        ("token", f"token {GITHUB_TOKEN}")
-    ]
-    
-    for method_name, auth_header in auth_methods:
-        headers = {
-            "Authorization": auth_header,
-            "Accept": "application/vnd.github.v3+json"
-        }
-        
-        try:
-            response = requests.get(url, headers=headers)
-            if response.status_code == 200:
-                repo_data = response.json()
-                has_issues = repo_data.get("has_issues", True)
-                if not has_issues:
-                    print(f"\n⚠ Warning: Issues are disabled for repository {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
-                    print("  Enable issues in repository settings to create issues.")
-                    return False
-                return True
-            elif response.status_code == 404:
-                print(f"\n✗ ERROR: Repository {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME} not found (404)")
-                print("  Please verify:")
-                print(f"  1. The repository exists at https://github.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
-                print("  2. The repository name is spelled correctly")
-                print("  3. The GitHub token has access to this repository")
-                return False
-            elif response.status_code == 403:
-                # Try next auth method
-                continue
-            else:
-                print(f"\n✗ ERROR: Failed to verify repository access (HTTP {response.status_code})")
-                print(f"  Response: {response.text}")
-                return False
-        except Exception as e:
-            if method_name == "token":  # Last method
-                print(f"\n✗ ERROR: Failed to verify repository: {e}")
-                return False
-            continue
-    
-    print(f"\n✗ ERROR: Failed to verify repository access with any authentication method")
-    return False
-
-def create_issue(title: str, body: str) -> Dict[str, Any]:
-    """Create a new GitHub issue."""
-    url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/issues"
-    
-    # Try with "Bearer" first (for fine-grained PATs), then fall back to "token"
-    auth_methods = [
-        ("Bearer", f"Bearer {GITHUB_TOKEN}"),
-        ("token", f"token {GITHUB_TOKEN}")
-    ]
-    
-    data = {
-        "title": title,
-        "body": body
-    }
-    
-    last_error = None
-    for method_name, auth_header in auth_methods:
-        headers = {
-            "Authorization": auth_header,
-            "Accept": "application/vnd.github.v3+json"
-        }
-        
-        try:
-            response = requests.post(url, json=data, headers=headers)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.HTTPError as e:
-            last_error = e
-            if e.response.status_code == 403:
-                # Try next auth method
-                continue
-            elif e.response.status_code == 404:
-                print(f"\n✗ ERROR: HTTP 404 - Repository or endpoint not found")
-                print(f"  URL: {url}")
-                print(f"  Repository: {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}")
-                print(f"  Response: {e.response.text}")
-                print("\n  Possible causes:")
-                print("  1. Repository does not exist")
-                print("  2. Issues are disabled for this repository")
-                print("  3. GitHub token does not have access to this repository")
-                print(f"  4. Repository URL is incorrect (check: https://github.com/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME})")
-                raise
-            else:
-                print(f"\nERROR: HTTP {e.response.status_code}")
-                print(f"Response: {e.response.text}")
-                raise
-        except Exception as e:
-            last_error = e
-            continue
-    
-    if last_error:
-        raise last_error
-    raise Exception("Failed to create issue")
-
-def get_project_node_id() -> Optional[str]:
-    """Get the GraphQL node ID for the project."""
-    if not PROJECT_OWNER or not PROJECT_NUMBER:
-        return None
-    
-    url = "https://api.github.com/graphql"
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    
-    # Try organization first
-    query_org = """
-    query($owner: String!, $number: Int!) {
-      organization(login: $owner) {
-        projectV2(number: $number) {
-          id
-        }
-      }
-    }
-    """
-    
-    variables = {
-        "owner": PROJECT_OWNER,
-        "number": int(PROJECT_NUMBER)
-    }
-    
-    try:
-        response = requests.post(url, json={"query": query_org, "variables": variables}, headers=headers)
-        response.raise_for_status()
-        result = response.json()
-        
-        if "errors" not in result and result["data"]["organization"]:
-            return result["data"]["organization"]["projectV2"]["id"]
-    except Exception:
-        pass
-    
-    # Try user account
-    query_user = """
-    query($owner: String!, $number: Int!) {
-      user(login: $owner) {
-        projectV2(number: $number) {
-          id
-        }
-      }
-    }
-    """
-    
-    try:
-        response = requests.post(url, json={"query": query_user, "variables": variables}, headers=headers)
-        response.raise_for_status()
-        result = response.json()
-        
-        if "errors" not in result and result["data"]["user"]:
-            return result["data"]["user"]["projectV2"]["id"]
-    except Exception:
-        pass
-    
-    return None
-
-def get_issue_node_id(issue_number: int) -> str:
-    """Get the GraphQL node ID for an issue."""
-    url = "https://api.github.com/graphql"
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    
-    query = """
-    query($owner: String!, $repo: String!, $number: Int!) {
-      repository(owner: $owner, name: $repo) {
-        issue(number: $number) {
-          id
-        }
-      }
-    }
-    """
-    
-    variables = {
-        "owner": GITHUB_REPO_OWNER,
-        "repo": GITHUB_REPO_NAME,
-        "number": issue_number
-    }
-    
-    response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
-    response.raise_for_status()
-    
-    result = response.json()
-    if "errors" in result:
-        raise Exception(f"GraphQL errors: {result['errors']}")
-    
-    return result["data"]["repository"]["issue"]["id"]
-
-def add_issue_to_project(issue_number: int) -> Optional[str]:
-    """Add an issue to the project and return the project item ID."""
-    project_node_id = get_project_node_id()
-    if not project_node_id:
-        return None
-    
-    issue_node_id = get_issue_node_id(issue_number)
-    
-    url = "https://api.github.com/graphql"
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    
-    query = """
-    mutation($projectId: ID!, $contentId: ID!) {
-      addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
-        item {
-          id
-        }
-      }
-    }
-    """
-    
-    variables = {
-        "projectId": project_node_id,
-        "contentId": issue_node_id
-    }
-    
-    try:
-        response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
-        response.raise_for_status()
-        result = response.json()
-        
-        if "errors" in result:
-            return None
-        
-        return result["data"]["addProjectV2ItemById"]["item"]["id"]
-    except Exception:
-        return None
-
-def get_project_item_id_for_issue(issue_number: int) -> Optional[str]:
-    """Get the project item ID for an existing issue."""
-    project_node_id = get_project_node_id()
-    if not project_node_id:
-        return None
-    
-    url = "https://api.github.com/graphql"
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    
-    # Search through project items to find the one with this issue
-    cursor = None
-    while True:
-        query = """
-        query($projectId: ID!, $cursor: String) {
-          node(id: $projectId) {
-            ... on ProjectV2 {
-              items(first: 100, after: $cursor) {
-                pageInfo {
-                  hasNextPage
-                  endCursor
-                }
-                nodes {
-                  id
-                  content {
-                    ... on Issue {
-                      number
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-        """
-        
-        variables = {
-            "projectId": project_node_id,
-            "cursor": cursor
-        }
-        
-        try:
-            response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
-            response.raise_for_status()
-            result = response.json()
-            
-            if "errors" in result:
-                return None
-            
-            items_data = result["data"]["node"]["items"]
-            items = items_data["nodes"]
-            
-            for item in items:
-                content = item.get("content")
-                if content and content.get("number") == issue_number:
-                    return item["id"]
-            
-            page_info = items_data["pageInfo"]
-            if not page_info["hasNextPage"]:
-                break
-            
-            cursor = page_info["endCursor"]
-            time.sleep(0.3)  # Rate limiting
-            
-        except Exception as e:
-            return None
-    
-    return None
-
-def update_project_field(project_item_id: str, count: int) -> bool:
-    """Update the 'number of occurrences' field in the project."""
-    if not PROJECT_FIELD_ID:
-        return False
-    
-    project_node_id = get_project_node_id()
-    if not project_node_id:
-        return False
-    
-    url = "https://api.github.com/graphql"
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    
-    query = """
-    mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldValue!) {
-      updateProjectV2ItemFieldValue(
-        input: {
-          projectId: $projectId
-          itemId: $itemId
-          fieldId: $fieldId
-          value: $value
-        }
-      ) {
-        projectV2Item {
-          id
-        }
-      }
-    }
-    """
-    
-    variables = {
-        "projectId": project_node_id,
-        "itemId": project_item_id,
-        "fieldId": PROJECT_FIELD_ID,
-        "value": {
-            "number": count
-        }
-    }
-    
-    try:
-        response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
-        response.raise_for_status()
-        result = response.json()
-        
-        return "errors" not in result
-    except Exception:
-        return False
-
-# ============================================================================
-# Processing Functions
-# ============================================================================
-
-def format_issue_body(centroid_error: str, failing_runs: List[str], timestamps: Dict[str, str], run_metadata: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
-    """Format the issue body with centroid error and all URLs.
-    
-    Args:
-        centroid_error: The centroid error message
-        failing_runs: List of failing run URLs
-        timestamps: Dictionary mapping URLs to timestamps
-        run_metadata: Optional dictionary mapping URLs to dicts with 'job_name', 'workflow_name', 'is_nd', 'commit_hash', and 'error_message'
-    """
-    body_parts = []
-    
-    count = len(failing_runs)
-    
-    # Add number of occurrences at the top
-    body_parts.append(f"**Number of Occurrences:** {count}")
-    body_parts.append("")
-    
-    # Add centroid error as the main description (no link, just error message)
-    body_parts.append("## Error Message\n")
-    body_parts.append("```")
-    body_parts.append(centroid_error)
-    body_parts.append("```")
-    body_parts.append("")
-    
-    # Add all run URLs (sorted chronologically)
-    body_parts.append("## All Occurrences")
-    body_parts.append(f"This error has occurred {count} time(s):")
-    body_parts.append("")
-    
-    # Create list with timestamps and metadata for sorting
-    url_list = []
-    centroid_url = failing_runs[0] if failing_runs else None
-    
-    for url in failing_runs:
-        timestamp = timestamps.get(url, "")
-        
-        # Check if this is the centroid
-        is_centroid = (url == centroid_url)
-        
-        # Build label - add [CENTROID] prefix if this is the centroid
-        label = timestamp if timestamp else "Link"
-        if is_centroid:
-            label = f"[CENTROID] {label}"
-        
-        # Get job/workflow info, ND flag, commit hash, and error message if available
-        job_workflow_suffix = ""
-        commit_hash_suffix = ""
-        error_message = ""
-        is_nd = False
-        if run_metadata and url in run_metadata:
-            meta = run_metadata[url]
-            job_name = meta.get("job_name", "")
-            workflow_name = meta.get("workflow_name", "")
-            is_nd = meta.get("is_nd", False)
-            commit_hash = meta.get("commit_hash", "")
-            error_message = meta.get("error_message", "")
-            
-            if job_name or workflow_name:
-                parts = []
-                if workflow_name:
-                    parts.append(workflow_name)
-                if job_name:
-                    parts.append(job_name)
-                job_workflow_suffix = f" - {' / '.join(parts)}"
-            
-            # Add commit hash if available
-            if commit_hash:
-                commit_hash_suffix = f" (commit: {commit_hash})"
-        
-        # Add ND marker if applicable
-        if is_nd:
-            label += " (marked as ND)"
-        
-        # Parse timestamp for proper chronological sorting
-        dt = parse_timestamp(timestamp) if timestamp else None
-        # Use datetime for sorting (None for items without timestamps, which go to end)
-        url_list.append((dt, label, url, job_workflow_suffix, commit_hash_suffix, error_message))
-    
-    # Sort chronologically (newest first), items without timestamps go to the end
-    url_list.sort(key=lambda x: (x[0] is not None, x[0] if x[0] is not None else datetime.max), reverse=True)
-    
-    # Format the list
-    for idx, (dt, label, url, job_workflow_suffix, commit_hash_suffix, error_message) in enumerate(url_list, 1):
-        body_parts.append(f"{idx}. [{label}]({url}){job_workflow_suffix}{commit_hash_suffix}")
-        # Add error message as sub-bullet in a code block if available
-        if error_message:
-            # Use 4 spaces for proper markdown list continuation
-            body_parts.append("")  # Empty line before code block
-            body_parts.append("    ```")
-            # Indent each line of the error message to stay within the list context
-            for line in error_message.split("\n"):
-                body_parts.append(f"    {line}")
-            body_parts.append("    ```")
-    
-    return "\n".join(body_parts)
-
-def create_title_from_count(count: int, error_message: str = "", group_num: Optional[int] = None) -> str:
-    """Create a title with occurrence count prefix and truncated error message.
-    
-    Format: [00045] Group X: Error message... (if group_num provided) or [00045] Error message...
-    Truncates error message to fit within GitHub's 256 character limit.
-    """
-    count_str = f"{count:05d}"
-    
-    # Calculate available space for error message
-    prefix_len = len(f"[{count_str}] ")
-    if group_num is not None:
-        prefix_len += len(f"Group {group_num}: ")
-    max_error_len = 256 - prefix_len - 3  # 3 for "..."
-    
-    # Truncate error message if needed
-    if error_message and len(error_message) > max_error_len:
-        # Try to truncate at a word boundary
-        truncated = error_message[:max_error_len].rsplit(' ', 1)[0]
-        if len(truncated) < max_error_len - 20:  # If truncation removed too much, just cut at max
-            truncated = error_message[:max_error_len]
-        truncated += "..."
-    elif error_message:
-        truncated = error_message
-    else:
-        truncated = "Error"
-    
-    if group_num is not None:
-        return f"[{count_str}] Group {group_num}: {truncated}"
-    else:
-        return f"[{count_str}] {truncated}"
-
-def extract_group_num_from_title(title: str) -> Optional[int]:
-    """Extract group number from an existing issue title.
-    
-    Examples:
-        "[00045] Group 1" -> 1
-        "[00045] Error" -> None
-        "[00045] Group 42" -> 42
-    """
-    pattern = r"\[.*?\]\s*Group\s+(\d+)"
-    match = re.search(pattern, title)
-    if match:
-        return int(match.group(1))
-    return None
-
-def get_issue_title(issue_number: int) -> Optional[str]:
-    """Get the title of an existing issue."""
-    url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/issues/{issue_number}"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        issue = response.json()
-        return issue.get("title", "")
-    except Exception as e:
-        print(f"  ⚠ Warning: Could not fetch issue title: {e}")
-        return None
-
-def get_issue_state(issue_number: int) -> Optional[str]:
-    """Get the state (open/closed) of an issue by its number."""
-    url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/issues/{issue_number}"
-    headers = {
-        "Authorization": f"token {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github.v3+json"
-    }
-    
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        issue = response.json()
-        return issue.get("state")  # Returns "open" or "closed"
-    except Exception as e:
-        print(f"  ⚠ Warning: Could not fetch issue #{issue_number} state: {e}")
-        return None
-
-def parse_timestamp(timestamp_str: str) -> Optional[datetime]:
-    """Parse timestamp string to datetime object.
-    
-    Handles formats like "January 9th, 8:59am, 58.95 seconds"
-    """
-    if not timestamp_str:
-        return None
-    
-    try:
-        # Try to parse the format: "January 9th, 8:59am, 58.95 seconds"
-        parts = timestamp_str.split(", ")
-        if len(parts) >= 2:
-            date_part = parts[0]  # "January 9th"
-            time_part = parts[1]  # "8:59am"
-            
-            # Remove ordinal suffix (st, nd, rd, th)
-            date_part_clean = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', date_part)
-            
-            # Parse date and time
-            try:
-                dt = datetime.strptime(f"{date_part_clean}, {time_part}", "%B %d, %I:%M%p")
-                # Determine the correct year
-                current_year = datetime.now().year
-                dt = dt.replace(year=current_year)
-                now = datetime.now()
-                
-                # If the date is more than 6 months in the future, assume it's from last year
-                if dt > now + timedelta(days=180):
-                    dt = dt.replace(year=current_year - 1)
-                elif dt < now - timedelta(days=180):
-                    # Only adjust if we're in January and the date is December (likely from previous year)
-                    if now.month == 1 and dt.month == 12:
-                        dt = dt.replace(year=current_year - 1)
-                
-                return dt
-            except ValueError:
-                pass
-    except Exception:
-        pass
-    
-    return None
-
-# ============================================================================
-# Defensive Validation - Remove entries with missing required metadata
-# ============================================================================
-
-def is_entry_valid(url: str, run_metadata: Dict[str, Dict[str, Any]], all_timestamps: Dict[str, str], github_token: str = "") -> Tuple[bool, List[str]]:
-    """Check if an entry has all required metadata fields.
-    
-    Required fields (for Pydantic model compatibility):
-    - timestamp: Must be non-empty
-    - commit_hash: Must be non-empty (will attempt to fetch from GitHub if missing)
-    - job_name: Must be non-empty
-    
-    Args:
-        url: The job URL to validate
-        run_metadata: Dictionary of URL -> metadata
-        all_timestamps: Dictionary of URL -> timestamp
-        github_token: GitHub token for fetching missing commit hashes
-    
-    Returns:
-        Tuple of (is_valid, list_of_missing_fields)
+    Missing commit hashes are fetched from GitHub before giving up, since that
+    is the one field we can recover after the fact.
     """
     missing_fields = []
     meta = run_metadata.get(url, {})
-    
-    # Check timestamp (from all_timestamps or from metadata)
+
     timestamp = all_timestamps.get(url, "") or meta.get("timestamp", "")
     if not timestamp or timestamp.lower() == "link":
         missing_fields.append("timestamp")
-    
-    # Check commit_hash - try to fetch if missing
+
     commit_hash = meta.get("commit_hash", "")
     if not commit_hash and github_token:
-        # Attempt to fetch from GitHub API
         fetched_hash = get_commit_hash_from_github(url, github_token)
         if fetched_hash:
             meta["commit_hash"] = fetched_hash
             commit_hash = fetched_hash
     if not commit_hash:
         missing_fields.append("commit_hash")
-    
-    # Check job_name
-    job_name = meta.get("job_name", "")
-    if not job_name:
+
+    if not meta.get("job_name", ""):
         missing_fields.append("job_name")
-    
+
     return len(missing_fields) == 0, missing_fields
 
 
@@ -960,363 +110,241 @@ def validate_and_cleanup_entries(
     failing_runs: List[str],
     run_metadata: Dict[str, Dict[str, Any]],
     all_timestamps: Dict[str, str],
-    centroid_error: str,
-    github_token: str = ""
-) -> Tuple[List[str], Dict[str, Dict[str, Any]], str, List[str]]:
-    """Validate all entries and remove those with missing required metadata.
-    
-    Defensive programming: Better to have incomplete data than errors from null values.
-    
-    Args:
-        failing_runs: List of job URLs
-        run_metadata: Dictionary of URL -> metadata
-        all_timestamps: Dictionary of URL -> timestamp
-        centroid_error: The current centroid error message
-        github_token: GitHub token for API calls
-    
-    Returns:
-        Tuple of (valid_failing_runs, updated_run_metadata, new_centroid_error, removed_urls)
+    github_token: str = "",
+) -> Tuple[List[str], Dict[str, Dict[str, Any]], List[str]]:
+    """Remove runs with missing required metadata.
+
+    Better to hold incomplete data than to fail the database insert on nulls.
+
+    Returns the surviving URLs, the pruned metadata, and the removed URLs.
     """
     valid_urls = []
     removed_urls = []
-    
-    # Identify the current centroid URL (first URL in the list, or the one marked as centroid)
-    current_centroid_url = failing_runs[0] if failing_runs else None
-    
+
     for url in failing_runs:
         is_valid, missing_fields = is_entry_valid(url, run_metadata, all_timestamps, github_token)
-        
         if is_valid:
             valid_urls.append(url)
         else:
             removed_urls.append(url)
             print(f"    ⚠ Removing entry with missing metadata: {url[:60]}...")
             print(f"      Missing fields: {', '.join(missing_fields)}")
-    
-    # If centroid was removed, select a new one
-    new_centroid_error = centroid_error
-    if current_centroid_url and current_centroid_url in removed_urls and valid_urls:
-        # Select the first valid URL's error message as the new centroid
-        new_centroid_url = valid_urls[0]
-        new_centroid_meta = run_metadata.get(new_centroid_url, {})
-        new_centroid_error = new_centroid_meta.get("error_message", centroid_error)
-        print(f"    → Centroid was invalid, selecting new centroid from: {new_centroid_url[:60]}...")
-    
-    # Clean up run_metadata for removed URLs
-    updated_run_metadata = {url: meta for url, meta in run_metadata.items() if url not in removed_urls}
-    
-    return valid_urls, updated_run_metadata, new_centroid_error, removed_urls
+
+    updated_run_metadata = {u: m for u, m in run_metadata.items() if u not in removed_urls}
+    return valid_urls, updated_run_metadata, removed_urls
 
 
-def get_issue_number_for_centroid(centroid: str, centroid_to_issue: Dict[str, int]) -> Optional[int]:
-    """Get issue number for a centroid using normalized comparison."""
-    # Try exact match first
-    if centroid in centroid_to_issue:
-        return centroid_to_issue[centroid]
-    
-    # Try normalized match
-    normalized = normalize_centroid(centroid)
-    for key, issue_num in centroid_to_issue.items():
-        if normalize_centroid(key) == normalized:
-            return issue_num
-    
-    return None
+# ============================================================================
+# Cluster assignment
+# ============================================================================
 
-def process_new_error(error_entry: List, issue_dump: List[Dict[str, Any]], centroid_to_issue: Dict[str, int], all_timestamps: Dict[str, str]) -> Tuple[bool, List[Dict[str, Any]], bool]:
-    """
-    Process a new error entry and either add it to an existing issue or create a new one.
-    
-    Args:
-        error_entry: [error_message, url, timestamp, job_name, workflow_name, is_nd] from all_errors.json
-        issue_dump: Current issue_dump.json data
-        centroid_to_issue: Mapping of centroid_error to issue_number
-        all_timestamps: Dictionary mapping URLs to timestamps
-    
-    Returns:
-        Tuple of (updated, new_issue_dump, is_new_issue)
-        updated: True if issue_dump was modified
-        new_issue_dump: Updated issue_dump data
-        is_new_issue: True if a new issue was created, False if existing issue was updated
+def build_run_metadata(error_entry: List, commit_hash: Optional[str]) -> Dict[str, Any]:
+    """Build the per-run metadata record stored against a URL."""
+    return {
+        "job_name": error_entry[3] if len(error_entry) > 3 and error_entry[3] else "",
+        "workflow_name": error_entry[4] if len(error_entry) > 4 and error_entry[4] else "",
+        "is_nd": error_entry[5] if len(error_entry) > 5 and error_entry[5] is not None else False,
+        "commit_hash": commit_hash or "",
+        "error_message": error_entry[0],
+        "timestamp": error_entry[2] if len(error_entry) > 2 else "",
+        "unix_timestamp": error_entry[7] if len(error_entry) > 7 else None,
+    }
+
+
+def process_new_error(
+    error_entry: List,
+    clusters: List[Dict[str, Any]],
+    all_timestamps: Dict[str, str],
+    github_token: str,
+) -> Tuple[bool, bool]:
+    """Add one error to an existing cluster or start a new one.
+
+    Returns (changed, created_new_cluster).
     """
     error_message = error_entry[0]
     url = error_entry[1]
     timestamp = error_entry[2] if len(error_entry) > 2 else ""
-    job_name = error_entry[3] if len(error_entry) > 3 and error_entry[3] else ""
-    workflow_name = error_entry[4] if len(error_entry) > 4 and error_entry[4] else ""
-    is_nd = error_entry[5] if len(error_entry) > 5 and error_entry[5] is not None else False
-    
-    # Find best matching centroid
-    centroids = [entry["centroid_error"] for entry in issue_dump]
-    best_idx, best_scores = find_best_matching_centroid(
-        error_message, 
-        centroids, 
-        rapidfuzz_threshold=RAPIDFUZZ_THRESHOLD,
-        semantic_threshold=SEMANTIC_THRESHOLD
-    )
-    
-    if best_idx is not None:
-        # Check if this centroid belongs to a closed issue
-        entry = issue_dump[best_idx]
-        old_centroid = entry["centroid_error"]
-        issue_number = get_issue_number_for_centroid(old_centroid, centroid_to_issue)
-        
-        # If no issue number in mapping, or issue is closed, treat as no match
-        if issue_number:
-            issue_state = get_issue_state(issue_number)
-            if issue_state == "closed":
-                print(f"\n  Matched centroid belongs to closed issue #{issue_number}")
-                print(f"  Closed issues are ignored - treating as no match, will create new issue")
-                # Fall through to create new issue logic
-                best_idx = None
-            else:
-                # Issue is open - proceed with update
-                print(f"\n  Matching existing OPEN issue #{issue_number} (RapidFuzz: {best_scores['rapidfuzz']:.1f}, Semantic: {best_scores['semantic']:.1f})")
-        else:
-            # No issue number found - this centroid isn't mapped to an open issue
-            print(f"\n  Matched centroid but no open issue found - will create new issue")
-            best_idx = None
-    
-    if best_idx is not None:
-        # Add to existing OPEN issue
-        entry = issue_dump[best_idx]
-        failing_runs = entry.get("failing_runs", [])
-        run_metadata = entry.get("run_metadata", {})
-        
-        # Debug: log current state
-        print(f"  [DEBUG] Entry has {len(failing_runs)} existing runs, {len(run_metadata)} metadata entries")
-        
-        # Check if URL already exists in this issue
-        if url in failing_runs:
-            print(f"  ⚠ URL already exists in this issue, skipping duplicate")
-            return False, issue_dump, False
-        
-        # Add new URL
-        failing_runs.append(url)
-        if timestamp:
-            all_timestamps[url] = timestamp
-        
-        # Fetch commit hash from GitHub API
-        commit_hash = None
-        github_token = load_secrets().get("GITHUB_TOKEN", "")
-        if github_token:
-            commit_hash = get_commit_hash_from_github(url, github_token)
-        
-        # Store job/workflow metadata, ND flag, commit hash, error message, AND timestamp
-        # Storing timestamp in run_metadata ensures it's preserved when the issue is re-parsed
-        run_metadata[url] = {
-            "job_name": job_name,
-            "workflow_name": workflow_name,
-            "is_nd": is_nd,
-            "commit_hash": commit_hash if commit_hash else "",
-            "error_message": error_message,
-            "timestamp": timestamp  # Store timestamp so it survives issue re-parsing
-        }
-        
-        # Debug: verify error message was stored
-        print(f"  [DEBUG] Stored error_message for {url}: {len(error_message)} chars")
-        print(f"  [DEBUG] run_metadata now has {len(run_metadata)} entries")
-        
-        # Keep centroid unchanged - centroids are fixed once set
-        centroid_error = entry["centroid_error"]
-        
-        # Update entry (centroid stays the same)
-        entry["failing_runs"] = sorted(list(set(failing_runs)))  # Remove duplicates and sort
-        entry["run_metadata"] = run_metadata
-        
-        # Get issue number using the unchanged centroid (with normalized lookup)
-        issue_number = get_issue_number_for_centroid(centroid_error, centroid_to_issue)
-        
-        if issue_number:
-            try:
-                # ================================================================
-                # DEFENSIVE VALIDATION: Remove entries with missing required metadata
-                # Better to have incomplete data than errors from null values in Pydantic
-                # ================================================================
-                github_token = load_secrets().get("GITHUB_TOKEN", "")
-                print(f"  [VALIDATION] Checking {len(entry['failing_runs'])} entries for required metadata...")
-                
-                valid_urls, validated_metadata, new_centroid_error, removed_urls = validate_and_cleanup_entries(
-                    entry["failing_runs"],
-                    entry["run_metadata"],
-                    all_timestamps,
-                    entry["centroid_error"],
-                    github_token
-                )
-                
-                if removed_urls:
-                    print(f"    Removed {len(removed_urls)} invalid entry/entries")
-                
-                # Check if all entries were removed - close the issue
-                if not valid_urls:
-                    print(f"  ⚠ All entries have invalid metadata - closing issue #{issue_number}")
-                    try:
-                        close_issue(issue_number, "All entries had missing required metadata (timestamp, commit_hash, or job_name)")
-                        print(f"  ✓ Closed issue #{issue_number}")
-                        # Remove from issue_dump
-                        issue_dump.remove(entry)
-                        return True, issue_dump, False
-                    except Exception as e:
-                        print(f"  ✗ Error closing issue: {e}")
-                        return False, issue_dump, False
-                
-                # Update entry with validated data
-                entry["failing_runs"] = valid_urls
-                entry["run_metadata"] = validated_metadata
-                entry["centroid_error"] = new_centroid_error
-                
-                count = len(entry["failing_runs"])
-                # Fetch existing title to preserve group number
-                existing_title = get_issue_title(issue_number)
-                group_num = None
-                if existing_title:
-                    group_num = extract_group_num_from_title(existing_title)
-                title = create_title_from_count(count, entry["centroid_error"], group_num)
-                run_metadata = entry.get("run_metadata", {})
-                
-                # Debug: verify all URLs have metadata with error_message
-                print(f"  [DEBUG] Final state before update:")
-                print(f"    failing_runs: {len(entry['failing_runs'])} URLs")
-                print(f"    run_metadata: {len(run_metadata)} entries")
-                urls_with_error = sum(1 for m in run_metadata.values() if m.get("error_message"))
-                print(f"    URLs with error_message: {urls_with_error}")
-                
-                body = format_issue_body(entry["centroid_error"], entry["failing_runs"], all_timestamps, run_metadata)
-                
-                print(f"  Updating issue #{issue_number}...")
-                updated_issue = update_issue(issue_number, title, body)
-                print(f"  ✓ Updated issue: {updated_issue['html_url']}")
-                
-                # Update project field if configured
-                if PROJECT_FIELD_ID:
-                    project_item_id = get_project_item_id_for_issue(issue_number)
-                    if not project_item_id:
-                        project_item_id = add_issue_to_project(issue_number)
-                    if project_item_id:
-                        update_project_field(project_item_id, count)
-                
-                time.sleep(0.5)  # Rate limiting
-            except Exception as e:
-                print(f"  ✗ Error updating issue: {e}")
-                return False, issue_dump, False
-            
-            return True, issue_dump, False  # Updated existing issue
-    
-    # If we get here, either no match was found OR the matched issue was closed
-    # In either case, create a new issue
-    print(f"\n  No match found (or matched issue was closed) - creating new issue")
-    
-    # Fetch commit hash from GitHub API first (needed for validation)
-    commit_hash = None
-    github_token = load_secrets().get("GITHUB_TOKEN", "")
-    if github_token:
-        commit_hash = get_commit_hash_from_github(url, github_token)
-    
-    # Store job/workflow metadata, ND flag, commit hash, error message, AND timestamp
-    run_metadata = {}
-    run_metadata[url] = {
-        "job_name": job_name,
-        "workflow_name": workflow_name,
-        "is_nd": is_nd,
-        "commit_hash": commit_hash if commit_hash else "",
-        "error_message": error_message,
-        "timestamp": timestamp  # Store timestamp so it survives issue re-parsing
-    }
-    
+
+    commit_hash = get_commit_hash_from_github(url, github_token) if github_token else None
+    metadata = build_run_metadata(error_entry, commit_hash)
+
     if timestamp:
         all_timestamps[url] = timestamp
-    
-    # ================================================================
-    # DEFENSIVE VALIDATION: Check if new entry has required metadata
-    # Better to skip creating an issue than have errors from null values
-    # ================================================================
-    is_valid, missing_fields = is_entry_valid(url, run_metadata, all_timestamps, github_token)
+
+    is_valid, missing_fields = is_entry_valid(url, {url: metadata}, all_timestamps, github_token)
     if not is_valid:
-        print(f"  ⚠ New entry has missing required metadata, skipping issue creation")
-        print(f"    Missing fields: {', '.join(missing_fields)}")
-        print(f"    URL: {url[:80]}...")
-        return False, issue_dump, False
-    
-    # Create new entry (only after validation passes)
+        print(f"  ⚠ Skipping error with missing metadata: {', '.join(missing_fields)}")
+        return False, False
+
+    centroids = [entry["centroid_error"] for entry in clusters]
+    best_idx, best_scores = find_best_matching_centroid(
+        error_message,
+        centroids,
+        rapidfuzz_threshold=RAPIDFUZZ_THRESHOLD,
+        semantic_threshold=SEMANTIC_THRESHOLD,
+    )
+
+    if best_idx is not None:
+        entry = clusters[best_idx]
+        if url in entry.get("failing_runs", []):
+            print(f"  ⚠ URL already present in this cluster, skipping duplicate")
+            return False, False
+
+        print(
+            f"  Matched existing cluster "
+            f"(RapidFuzz: {best_scores['rapidfuzz']:.1f}, Semantic: {best_scores['semantic']:.1f})"
+        )
+        # Appended rather than sorted: the duplicate check above already keeps
+        # this unique, and sorting made the list lexicographic, which decides
+        # oldest_run_url for a cluster whose runs cannot be dated. Discovery
+        # order is at least roughly chronological; URL order means nothing.
+        entry.setdefault("failing_runs", []).append(url)
+        entry.setdefault("run_metadata", {})[url] = metadata
+        refresh_centroid_metadata(entry)
+        return True, False
+
+    print(f"  No match - starting a new cluster")
     new_entry = {
         "centroid_error": error_message,
         "failing_runs": [url],
-        "run_metadata": run_metadata
+        "run_metadata": {url: metadata},
     }
-    
-    issue_dump.append(new_entry)
-    
-    # Create GitHub issue
-    try:
-        count = 1
-        title = create_title_from_count(count, error_message)
-        body = format_issue_body(error_message, [url], all_timestamps, run_metadata)
-        
-        print(f"  Creating new issue...")
-        issue = create_issue(title, body)
-        issue_number = issue["number"]
-        print(f"  ✓ Created issue #{issue_number}: {issue['html_url']}")
-        
-        # Add to project if configured
-        if PROJECT_OWNER and PROJECT_NUMBER:
-            project_item_id = add_issue_to_project(issue_number)
-            if project_item_id and PROJECT_FIELD_ID:
-                update_project_field(project_item_id, count)
-        
-        # Update mapping for future use
-        centroid_to_issue[error_message] = issue_number
-        
-        time.sleep(0.5)  # Rate limiting
-    except Exception as e:
-        print(f"  ✗ Error creating issue: {e}")
-        # Remove the entry we just added
-        issue_dump.pop()
-        return False, issue_dump, False
-    
-    return True, issue_dump, True  # Created new issue
+    set_centroid_metadata(new_entry, url)
+    clusters.append(new_entry)
+    return True, True
+
+
+def select_new_errors(
+    all_errors: List[List],
+    existing_urls: set,
+    date_range_start: Optional[datetime] = None,
+    date_range_end: Optional[datetime] = None,
+    now_unix: Optional[float] = None,
+) -> Tuple[List[List], Dict[str, int]]:
+    """Pick out the errors worth processing, with a tally of what was dropped."""
+    if now_unix is None:
+        now_unix = time.time()
+    retention_cutoff = now_unix - (RETENTION_DAYS * 86400)
+
+    new_errors: List[List] = []
+    counts = {"no_url": 0, "already_tracked": 0, "too_old": 0, "outside_date_range": 0}
+
+    for error_entry in all_errors:
+        url = error_entry[1] if len(error_entry) > 1 else None
+        if not url:
+            counts["no_url"] += 1
+            continue
+        if url in existing_urls:
+            counts["already_tracked"] += 1
+            continue
+
+        unix_ts = resolve_unix(
+            error_entry[7] if len(error_entry) > 7 else None,
+            error_entry[2] if len(error_entry) > 2 else "",
+        )
+
+        # Without this, a wide Slack fetch window would re-add the same runs
+        # that were just pruned, and the state would never shrink.
+        if unix_ts is not None and unix_ts < retention_cutoff:
+            counts["too_old"] += 1
+            continue
+
+        if (date_range_start or date_range_end) and unix_ts is not None:
+            entry_dt = datetime.fromtimestamp(unix_ts)
+            if date_range_start and entry_dt < date_range_start:
+                counts["outside_date_range"] += 1
+                continue
+            if date_range_end and entry_dt > date_range_end:
+                counts["outside_date_range"] += 1
+                continue
+
+        new_errors.append(error_entry)
+
+    return new_errors, counts
+
+
+def validate_existing_clusters(
+    clusters: List[Dict[str, Any]],
+    all_timestamps: Dict[str, str],
+    github_token: str,
+) -> Tuple[List[Dict[str, Any]], int, int, int]:
+    """Clean the loaded state before adding to it.
+
+    Drops runs with unusable metadata, removes URLs that appear in more than one
+    cluster, and discards clusters left with nothing.
+    """
+    surviving: List[Dict[str, Any]] = []
+    seen_urls: set = set()
+    removed_invalid = 0
+    removed_duplicate = 0
+    dropped_clusters = 0
+
+    for entry in clusters:
+        failing_runs = entry.get("failing_runs", [])
+        run_metadata = entry.get("run_metadata", {})
+        if not failing_runs:
+            dropped_clusters += 1
+            continue
+
+        valid_urls, validated_metadata, removed = validate_and_cleanup_entries(
+            failing_runs, run_metadata, all_timestamps, github_token
+        )
+        removed_invalid += len(removed)
+
+        deduplicated = []
+        for url in valid_urls:
+            if url in seen_urls:
+                removed_duplicate += 1
+                validated_metadata.pop(url, None)
+            else:
+                deduplicated.append(url)
+                seen_urls.add(url)
+
+        if not deduplicated:
+            dropped_clusters += 1
+            continue
+
+        entry["failing_runs"] = deduplicated
+        entry["run_metadata"] = validated_metadata
+        refresh_centroid_metadata(entry)
+        surviving.append(entry)
+
+    return surviving, removed_invalid, removed_duplicate, dropped_clusters
+
 
 # ============================================================================
-# Main Function
+# Main
 # ============================================================================
 
 def main():
-    """Main function."""
-    print("="*80)
-    print("Syncing new errors to GitHub issues")
-    print("="*80)
+    print("=" * 80)
+    print("Syncing new errors into cluster state")
+    print("=" * 80)
 
-    # Check GitHub API rate limit at start
-    secrets = load_secrets()
-    github_token = secrets.get("GITHUB_TOKEN", "")
+    github_token = load_secrets()["GITHUB_TOKEN"]
     if github_token:
-        from github_api_utils import load_commit_hash_cache
+        from github_api_utils import github_token_is_valid, load_commit_hash_cache
+
+        # Every error needs a commit hash, and every commit hash comes from the
+        # API. Continuing with a rejected token would drop the entire batch and
+        # still exit zero, so the failure has to surface here.
+        if not github_token_is_valid(github_token):
+            print("ERROR: the GitHub token was rejected by the API (401).")
+            print("  Commit hashes cannot be fetched, so every error would be dropped.")
+            print("  Refusing to run rather than reporting success having stored nothing.")
+            print("  Check whether the token supplied to the action has expired or been revoked.")
+            sys.exit(1)
+
         load_commit_hash_cache()
         log_rate_limit_status(github_token, "start")
-    
-    # Refresh issue dump from GitHub project to ensure it's up to date
-    print(f"\n{'='*80}")
-    print("Refreshing issue dump from GitHub project...")
-    print(f"{'='*80}")
-    try:
-        # Import and run download_issue_dump to refresh issue_dump.json
-        import download_issue_dump
-        download_issue_dump.main()
-        # Check if download_issue_dump actually ran (it returns early if project not configured)
-        # The function will print a warning if project fields are missing
-        print(f"\n✓ Issue dump refresh completed (may have been skipped if project not configured)")
-    except SystemExit as e:
-        # download_issue_dump may exit if critical errors occur
-        print(f"\n⚠ Warning: Issue dump refresh exited: {e}")
-        print("  Continuing with existing issue_dump.json if it exists...")
-    except Exception as e:
-        print(f"\n⚠ Warning: Failed to refresh issue dump: {e}")
-        print("  Continuing with existing issue_dump.json if it exists...")
-        import traceback
-        traceback.print_exc()
-    
-    # Load all errors
+    else:
+        print("ERROR: no GitHub token available, so no commit hashes can be fetched")
+        print("  and every error would be dropped. Refusing to run.")
+        sys.exit(1)
+
     print(f"\nLoading errors from {ALL_ERRORS_FILE}...")
     try:
-        with open(ALL_ERRORS_FILE, 'r', encoding='utf-8') as f:
+        with open(ALL_ERRORS_FILE, "r", encoding="utf-8") as f:
             all_errors = json.load(f)
     except FileNotFoundError:
         print(f"ERROR: File not found: {ALL_ERRORS_FILE}")
@@ -1324,401 +352,122 @@ def main():
     except json.JSONDecodeError as e:
         print(f"ERROR: Invalid JSON in {ALL_ERRORS_FILE}: {e}")
         sys.exit(1)
-    
     print(f"Found {len(all_errors)} error(s)")
-    
-    # Load issue dump (now refreshed)
-    print(f"\nLoading issue dump from {ISSUE_DUMP_FILE}...")
-    try:
-        with open(ISSUE_DUMP_FILE, 'r', encoding='utf-8') as f:
-            issue_dump = json.load(f)
-    except FileNotFoundError:
-        print(f"WARNING: File not found: {ISSUE_DUMP_FILE}")
-        print("Creating new issue dump...")
-        issue_dump = []
-    except json.JSONDecodeError as e:
-        print(f"ERROR: Invalid JSON in {ISSUE_DUMP_FILE}: {e}")
-        sys.exit(1)
-    
-    print(f"Found {len(issue_dump)} existing issue(s)")
-    
-    # Build URL to error_message mapping from all_errors for backfilling (used later)
-    url_to_error_message = {}
+
+    print(f"\nLoading cluster state...")
+    clusters = load_cluster_state()
+
+    print(f"\nPruning runs older than {RETENTION_DAYS} days...")
+    clusters, pruned_runs, pruned_clusters = prune_old_runs(clusters)
+
+    # Timestamps come from the fresh Slack export first, then from state for
+    # runs that predate the current window.
+    all_timestamps: Dict[str, str] = {}
     for error_entry in all_errors:
-        if len(error_entry) >= 2 and error_entry[1]:
-            url_to_error_message[error_entry[1]] = error_entry[0]  # url -> error_message
-    
-    # Verify repository access before proceeding
-    print(f"\nVerifying repository access...")
-    if not verify_repository_access():
-        print("\n✗ Cannot proceed without repository access. Exiting.")
-        sys.exit(1)
-    print(f"✓ Repository {GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME} is accessible")
-    
-    # Get all GitHub issues and map to centroids (only open issues are mapped)
-    print(f"\nFetching GitHub issues to map centroids...")
-    issues = get_all_issues(open_only=False)  # Fetch all to filter out closed ones
-    print(f"Found {len(issues)} issue(s) in repository")
-    
-    centroid_to_issue = map_issues_to_centroids(issues, issue_dump)
-    print(f"Mapped {len(centroid_to_issue)} centroid(s) to OPEN issue numbers (closed issues ignored)")
-    
-    # Filter issue_dump to only include entries from open issues
-    # Closed issues are completely ignored - remove their centroids from issue_dump
-    print(f"\nFiltering issue_dump to exclude closed issues...")
-    original_count = len(issue_dump)
-    original_url_count = sum(len(entry.get("failing_runs", [])) for entry in issue_dump)
-    
-    # Build normalized lookup for centroid_to_issue keys
-    normalized_centroid_to_issue = {normalize_centroid(k): k for k in centroid_to_issue.keys()}
-    
-    def is_centroid_in_open_issues(centroid: str) -> bool:
-        """Check if centroid (with normalized comparison) is in an open issue."""
-        normalized = normalize_centroid(centroid)
-        return normalized in normalized_centroid_to_issue
-    
-    issue_dump = [
-        entry for entry in issue_dump
-        if is_centroid_in_open_issues(entry.get("centroid_error", ""))
-    ]
-    filtered_count = original_count - len(issue_dump)
-    filtered_url_count = original_url_count - sum(len(entry.get("failing_runs", [])) for entry in issue_dump)
-    if filtered_count > 0:
-        print(f"  Removed {filtered_count} entry/entries from closed issues ({filtered_url_count} URLs)")
-    print(f"  {len(issue_dump)} open issue(s) remaining in issue_dump")
-    
-    # Backfill missing error_messages in issue_dump from all_errors
-    # This must happen AFTER map_issues_to_centroids adds entries from repo issues
-    # This fixes issues where run_metadata exists but has no error_message
-    backfilled_count = 0
-    for entry in issue_dump:
-        run_metadata = entry.get("run_metadata", {})
-        for url, meta in run_metadata.items():
-            if not meta.get("error_message") and url in url_to_error_message:
-                meta["error_message"] = url_to_error_message[url]
-                backfilled_count += 1
-    
-    if backfilled_count > 0:
-        print(f"  ✓ Backfilled {backfilled_count} missing error_message(s) from all_errors.json")
-    
-    # Build timestamp map from all_errors
-    all_timestamps = {}
-    for error_entry in all_errors:
-        if len(error_entry) > 1 and error_entry[1]:
-            url = error_entry[1]
-            if len(error_entry) > 2:
-                all_timestamps[url] = error_entry[2]
-    
-    # CRITICAL: Also populate all_timestamps from existing issue_dump run_metadata
-    # This ensures timestamps are preserved for URLs that aren't in the current all_errors.json
-    # (e.g., older errors that were already added to issues in previous runs)
-    timestamps_from_issues = 0
-    for entry in issue_dump:
-        run_metadata = entry.get("run_metadata", {})
-        for url, meta in run_metadata.items():
-            # Only add if not already in all_timestamps (prefer fresh data from all_errors)
-            if url not in all_timestamps:
-                timestamp_from_meta = meta.get("timestamp", "")
-                if timestamp_from_meta:
-                    all_timestamps[url] = timestamp_from_meta
-                    timestamps_from_issues += 1
-    
-    if timestamps_from_issues > 0:
-        print(f"  ✓ Recovered {timestamps_from_issues} timestamp(s) from existing issue metadata")
-    
-    # ============================================================================
-    # DEFENSIVE VALIDATION PASS: Clean up existing issues with invalid metadata
-    # AND remove duplicate URLs (same URL in multiple issues)
-    # This ensures data integrity before processing new errors
-    # ============================================================================
-    print(f"\n{'='*80}")
-    print("Running defensive validation on existing issues...")
-    print(f"{'='*80}")
-    
-    issues_validated = 0
-    entries_removed_invalid = 0
-    entries_removed_duplicate = 0
-    issues_closed = 0
-    issues_updated = 0
-    
-    # Track all URLs seen across issues to detect and remove duplicates
-    global_seen_urls: set = set()
-    
-    # Create a copy to iterate over (we may modify issue_dump during iteration)
-    entries_to_process = list(issue_dump)
-    
-    for entry in entries_to_process:
-        centroid_error = entry.get("centroid_error", "")
-        failing_runs = entry.get("failing_runs", [])
-        run_metadata = entry.get("run_metadata", {})
-        
-        if not failing_runs:
-            continue
-        
-        issue_number = get_issue_number_for_centroid(centroid_error, centroid_to_issue)
-        if not issue_number:
-            continue
-        
-        issues_validated += 1
-        
-        # Step 1: Validate entries (check for missing metadata)
-        valid_urls, validated_metadata, new_centroid_error, removed_invalid = validate_and_cleanup_entries(
-            failing_runs,
-            run_metadata,
-            all_timestamps,
-            centroid_error,
-            github_token
-        )
-        
-        if removed_invalid:
-            entries_removed_invalid += len(removed_invalid)
-        
-        # Step 2: Remove duplicate URLs (already seen in previous issues)
-        deduplicated_urls = []
-        removed_duplicate = []
-        for url in valid_urls:
-            if url in global_seen_urls:
-                removed_duplicate.append(url)
-            else:
-                deduplicated_urls.append(url)
-                global_seen_urls.add(url)
-        
-        if removed_duplicate:
-            entries_removed_duplicate += len(removed_duplicate)
-            # Also remove from metadata
-            for url in removed_duplicate:
-                if url in validated_metadata:
-                    del validated_metadata[url]
-        
-        # Calculate total removals for this issue
-        total_removed = len(removed_invalid) + len(removed_duplicate)
-        
-        if total_removed > 0:
-            if removed_invalid:
-                print(f"  Issue #{issue_number}: Removed {len(removed_invalid)} invalid entry/entries")
-            if removed_duplicate:
-                print(f"  Issue #{issue_number}: Removed {len(removed_duplicate)} duplicate URL(s) (already in other issues)")
-            
-            if not deduplicated_urls:
-                # All entries removed - close the issue
-                print(f"    → All entries removed, closing issue #{issue_number}")
-                try:
-                    close_issue(issue_number, "All entries were either invalid or duplicates of entries in other issues")
-                    issues_closed += 1
-                    issue_dump.remove(entry)
-                    # Remove from centroid_to_issue mapping
-                    if centroid_error in centroid_to_issue:
-                        del centroid_to_issue[centroid_error]
-                except Exception as e:
-                    print(f"    ✗ Error closing issue: {e}")
-            else:
-                # Some entries remain - update the issue
-                # Check if centroid was removed
-                if new_centroid_error != centroid_error or deduplicated_urls != valid_urls:
-                    # Centroid may have changed or URLs were deduplicated
-                    if deduplicated_urls[0] not in [url for url in valid_urls if url == deduplicated_urls[0]]:
-                        # First URL changed, update centroid
-                        first_url_meta = validated_metadata.get(deduplicated_urls[0], {})
-                        new_centroid_error = first_url_meta.get("error_message", new_centroid_error)
-                
-                entry["failing_runs"] = deduplicated_urls
-                entry["run_metadata"] = validated_metadata
-                entry["centroid_error"] = new_centroid_error
-                
-                # Update the issue on GitHub
-                try:
-                    existing_title = get_issue_title(issue_number)
-                    group_num = extract_group_num_from_title(existing_title) if existing_title else None
-                    title = create_title_from_count(len(deduplicated_urls), new_centroid_error, group_num)
-                    body = format_issue_body(new_centroid_error, deduplicated_urls, all_timestamps, validated_metadata)
-                    
-                    update_issue(issue_number, title, body)
-                    issues_updated += 1
-                    print(f"    → Updated issue #{issue_number} with {len(deduplicated_urls)} entries")
-                except Exception as e:
-                    print(f"    ✗ Error updating issue: {e}")
-        else:
-            # No removals, but still track URLs for deduplication
-            for url in valid_urls:
-                global_seen_urls.add(url)
-    
+        if len(error_entry) > 2 and error_entry[1]:
+            all_timestamps[error_entry[1]] = error_entry[2]
+    for entry in clusters:
+        for url, meta in entry.get("run_metadata", {}).items():
+            if url not in all_timestamps and meta.get("timestamp"):
+                all_timestamps[url] = meta["timestamp"]
+
+    print(f"\n{'=' * 80}")
+    print("Validating existing clusters...")
+    print(f"{'=' * 80}")
+    clusters, removed_invalid, removed_duplicate, dropped_clusters = validate_existing_clusters(
+        clusters, all_timestamps, github_token
+    )
     print(f"\nValidation summary:")
-    print(f"  Issues validated: {issues_validated}")
-    print(f"  Issues updated: {issues_updated}")
-    print(f"  Invalid entries removed: {entries_removed_invalid}")
-    print(f"  Duplicate entries removed: {entries_removed_duplicate}")
-    print(f"  Issues closed (no entries remaining): {issues_closed}")
-    
-    # Build set of existing URLs from ALL OPEN REPOSITORY ISSUES
-    # This ensures we catch duplicates even if issues aren't in the project board
-    print(f"\nBuilding set of existing URLs from OPEN REPOSITORY ISSUES...")
-    existing_urls = set()
-    total_urls_in_repo = 0
-    open_repo_issues = [issue for issue in issues if issue.get("state") != "closed"]
-    
-    for issue in open_repo_issues:
-        issue_body = issue.get("body", "")
-        urls = extract_urls_from_issue_body(issue_body)
-        for url in urls:
-            if url:
-                existing_urls.add(url)
-                total_urls_in_repo += 1
-    
-    print(f"  Open issues in repository: {len(open_repo_issues)}")
-    print(f"  Total URLs in open repo issues: {total_urls_in_repo}")
-    print(f"  Unique URLs: {len(existing_urls)}")
-    
-    # Also report issues in repo but not in project board (for informational purposes)
-    issues_in_project = len(issue_dump)
-    orphan_count = len(open_repo_issues) - issues_in_project
-    if orphan_count > 0:
-        print(f"  Note: {orphan_count} open issue(s) in repo are NOT in the project board")
-        print(f"    They will still be tracked for duplicate detection")
-    
-    # Parse date range filters
+    print(f"  Clusters remaining: {len(clusters)}")
+    print(f"  Invalid entries removed: {removed_invalid}")
+    print(f"  Duplicate entries removed: {removed_duplicate}")
+    print(f"  Clusters dropped (no entries left): {dropped_clusters}")
+
+    existing_urls = all_urls(clusters)
+    print(f"\nTracking {len(existing_urls)} URL(s) across {len(clusters)} cluster(s)")
+
     date_range_start = parse_date_to_datetime(DATE_RANGE_START)
     date_range_end = parse_date_to_datetime(DATE_RANGE_END)
-    
     if date_range_start:
-        print(f"\nDate range start: {DATE_RANGE_START}")
+        print(f"Date range start: {DATE_RANGE_START}")
     if date_range_end:
         print(f"Date range end: {DATE_RANGE_END}")
-    
-    # Filter all_errors to only include entries with URLs not already processed
+
     print(f"\nFiltering errors to find new ones...")
-    new_errors = []
-    skipped_no_url = 0
-    skipped_existing = 0
-    skipped_date_range = 0
-    
-    for error_entry in all_errors:
-        url = error_entry[1] if len(error_entry) > 1 else None
-        timestamp_str = error_entry[2] if len(error_entry) > 2 else ""
-        
-        if not url:
-            skipped_no_url += 1
-            continue
-        
-        if url in existing_urls:
-            skipped_existing += 1
-            continue
-        
-        # Check date range filter using parsed timestamp
-        if timestamp_str and (date_range_start or date_range_end):
-            parsed_dt = parse_timestamp(timestamp_str)
-            if parsed_dt:
-                if date_range_start and parsed_dt < date_range_start:
-                    skipped_date_range += 1
-                    continue
-                if date_range_end and parsed_dt > date_range_end:
-                    skipped_date_range += 1
-                    continue
-        
-        new_errors.append(error_entry)
-    
+    new_errors, counts = select_new_errors(all_errors, existing_urls, date_range_start, date_range_end)
+
     print(f"  Total errors in all_errors.json: {len(all_errors)}")
-    print(f"  Skipped (no URL): {skipped_no_url}")
-    print(f"  Skipped (URL already in open issues): {skipped_existing}")
-    if skipped_date_range > 0:
-        print(f"  Skipped (outside date range): {skipped_date_range}")
+    print(f"  Skipped (no URL): {counts['no_url']}")
+    print(f"  Skipped (already tracked): {counts['already_tracked']}")
+    if counts["too_old"]:
+        print(f"  Skipped (older than {RETENTION_DAYS} days): {counts['too_old']}")
+    if counts["outside_date_range"]:
+        print(f"  Skipped (outside date range): {counts['outside_date_range']}")
     print(f"  New errors to process: {len(new_errors)}")
-    
-    if skipped_existing == 0 and len(all_errors) > 0 and len(open_repo_issues) == 0:
-        print(f"  ⚠ Warning: No open issues found in repository - all errors will be treated as new")
-    
-    # Process new errors if any
-    new_count = 0
-    updated_count = 0
-    
+
+    new_clusters = 0
+    appended = 0
     if new_errors:
-        # Process each new error
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print("Processing new errors...")
-        print(f"{'='*80}")
-        
+        print(f"{'=' * 80}")
+        # So the guard below judges this batch rather than reads made while
+        # validating clusters that were already stored.
+        reset_read_counters()
         for idx, error_entry in enumerate(new_errors, 1):
-            error_message = error_entry[0]
-            url = error_entry[1]
-            
-            print(f"\n[{idx}/{len(new_errors)}] Processing error...")
-            print(f"  URL: {url}")
-            
-            # Process the error
-            updated, issue_dump, is_new_issue = process_new_error(error_entry, issue_dump, centroid_to_issue, all_timestamps)
-            
-            if updated:
-                if is_new_issue:
-                    new_count += 1
+            print(f"\n[{idx}/{len(new_errors)}] {error_entry[1]}")
+            changed, created = process_new_error(error_entry, clusters, all_timestamps, github_token)
+            if changed:
+                existing_urls.add(error_entry[1])
+                if created:
+                    new_clusters += 1
                 else:
-                    updated_count += 1
-                
-                # Update existing_urls set to avoid reprocessing in same run
-                existing_urls.add(url)
+                    appended += 1
     else:
         print(f"\nNo new errors to process.")
-    
-    # Clean up old issues (newest run older than 3 months) - always run this automatically
-    print(f"\n{'='*80}")
-    print("Cleaning up old issues (newest run older than 3 months)...")
-    print(f"{'='*80}")
-    
-    # Build all_metadata from issue_dump for cleanup function
-    all_metadata = {}
-    for entry in issue_dump:
-        run_metadata = entry.get("run_metadata", {})
-        for url, meta in run_metadata.items():
-            all_metadata[url] = meta
-    
-    # Import and call cleanup function
-    cleanup_updated = 0
-    cleanup_closed = 0
-    try:
-        import maintain_issues
-        issue_dump, cleanup_updated, cleanup_closed = maintain_issues.cleanup_old_runs(
-            issue_dump, all_timestamps, centroid_to_issue, all_metadata
-        )
-        print(f"\n✓ Cleanup completed: {cleanup_closed} issue(s) closed (newest run older than 3 months)")
-    except Exception as e:
-        print(f"\n⚠ Warning: Failed to cleanup old runs: {e}")
-        import traceback
-        traceback.print_exc()
-    
-    # Save updated issue dump
-    if new_count > 0 or updated_count > 0 or cleanup_closed > 0:
-        print(f"\n{'='*80}")
-        print("Saving updated issue dump...")
-        print(f"{'='*80}")
-        
-        with open(ISSUE_DUMP_FILE, 'w', encoding='utf-8') as f:
-            json.dump(issue_dump, f, indent=2, ensure_ascii=False)
-        
-        print(f"✓ Saved {len(issue_dump)} issue(s) to {ISSUE_DUMP_FILE}")
-    
-    # Log cache effectiveness and save cache
+
+    # Storing none of a batch is only worth failing over when a retry could do
+    # better. What matters is why: an API that was not answering will answer
+    # later, so saving now would record a state where none of this batch was
+    # ever seen and lose the chance. Messages missing a job name will never
+    # improve, and a quiet cycle whose only error is malformed is not evidence
+    # of anything, so failing on it would just stop the report and the upload
+    # over one bad record.
+    if new_errors and new_clusters == 0 and appended == 0:
+        unreachable = read_counters()["unreachable"]
+        print(f"\nAll {len(new_errors)} new error(s) were dropped, none were stored.")
+        if unreachable:
+            print(f"ERROR: {unreachable} API read(s) failed for reasons that may not persist.")
+            print("  Leaving the cluster state untouched so the next run can retry them.")
+            print("  The warnings above name the reads that failed.")
+            sys.exit(1)
+        print("  Every drop was a settled answer rather than a failed read, so a retry")
+        print("  would drop them again. Continuing with the state otherwise unchanged.")
+        print("  The skip reasons above say which metadata was missing.")
+
+    print(f"\n{'=' * 80}")
+    print("Saving cluster state...")
+    print(f"{'=' * 80}")
+    save_cluster_state(clusters)
+
     if github_token:
         from github_api_utils import get_commit_hash_cache_stats, save_commit_hash_cache
 
         cache_stats = get_commit_hash_cache_stats()
-        print(f"\n{'='*60}")
-        print("Commit Hash Cache Statistics:")
-        print(f"  Total cached runs: {cache_stats['total_entries']}")
-        print(f"  Successful fetches: {cache_stats['found']}")
-        print(f"  Failed fetches: {cache_stats['not_found']}")
-        print(f"{'='*60}\n")
-
-        # Save cache to disk for next run
+        print(f"\nCommit hash cache: {cache_stats['total_entries']} run(s) cached "
+              f"({cache_stats['found']} found, {cache_stats['not_found']} missing)")
         save_commit_hash_cache()
 
-    # Summary
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("Summary:")
-    print(f"  New issues created: {new_count}")
-    print(f"  Existing issues updated: {updated_count}")
-    print(f"  Old issues closed: {cleanup_closed} issue(s) closed (newest run older than 3 months)")
-    print(f"  Errors skipped (no URL): {skipped_no_url}")
-    print(f"  Errors skipped (already exists): {skipped_existing}")
-    print(f"  Total issues in dump: {len(issue_dump)}")
-    print(f"{'='*80}")
+    print(f"  New clusters created: {new_clusters}")
+    print(f"  Errors added to existing clusters: {appended}")
+    print(f"  Runs pruned (older than {RETENTION_DAYS} days): {pruned_runs}")
+    print(f"  Clusters pruned (no recent runs): {pruned_clusters}")
+    print(f"  Total clusters in state: {len(clusters)}")
+    print(f"  Total runs in state: {sum(len(c.get('failing_runs', [])) for c in clusters)}")
+    print(f"{'=' * 80}")
+
 
 if __name__ == "__main__":
     main()

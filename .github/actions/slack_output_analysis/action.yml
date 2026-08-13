@@ -1,8 +1,8 @@
-name: sync-slack-errors-to-github
-description: Sync Slack error messages to GitHub issues, with options to update or rebuild from scratch
+name: group-slack-errors
+description: Group CI failures reported in Slack into error clusters held in a JSON state file
 inputs:
   github_token:
-    description: GitHub Personal Access Token for creating/updating issues
+    description: GitHub token used to read job metadata (commit hashes, job names) and workflow artifacts
     required: true
   slack_token:
     description: Slack Bot Token for fetching messages
@@ -10,10 +10,6 @@ inputs:
   channel_id:
     description: Slack channel ID to fetch messages from
     required: true
-  update_mode:
-    description: "Mode: 'update' to sync new errors, 'rebuild' to recreate all issues from scratch"
-    required: false
-    default: "update"
   start_date:
     description: "Start date for fetching Slack messages (format: 'January 1, 2026')"
     required: false
@@ -26,26 +22,17 @@ inputs:
     description: "Workflow file path (e.g., '.github/workflows/analyze-ND-failures.yml') for finding previous runs to create incremental report. Leave empty to skip incremental report."
     required: false
     default: ""
-  github_repo_owner:
-    description: "GitHub repository owner for creating issues. Defaults to the current repository owner."
-    required: false
-    default: ""
-  github_repo_name:
-    description: "GitHub repository name for creating issues. Defaults to the current repository name."
-    required: false
-    default: ""
-  project_owner:
-    description: "GitHub project owner (for project board integration). Leave empty to skip project board."
-    required: false
-    default: ""
-  project_name:
-    description: "GitHub project name (for project board integration). Leave empty to skip project board."
+  state_path:
+    description: "Directory holding the cluster state carried between runs. The caller restores the previous state here before the action runs and uploads it afterwards."
     required: false
     default: ""
 outputs:
   incremental_report_path:
     description: "Path to the incremental error report (new entries only)"
     value: ${{ steps.incremental.outputs.path }}
+  state_path:
+    description: "Directory containing the updated cluster state and API caches"
+    value: ${{ steps.state.outputs.path }}
 runs:
   using: composite
   steps:
@@ -61,37 +48,39 @@ runs:
         pip install slack-sdk sentence-transformers scikit-learn rapidfuzz numpy requests
       working-directory: ${{ github.action_path }}
 
+    - name: Resolve state directory
+      id: state
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        STATE_DIR="${{ inputs.state_path }}"
+        if [ -z "$STATE_DIR" ]; then
+          STATE_DIR="${{ github.workspace }}/grouping-state"
+        fi
+        mkdir -p "$STATE_DIR"
+
+        if [ -f "$STATE_DIR/cluster_state.json" ]; then
+          echo "Restored cluster state from previous run:"
+          python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(f'  {len(d)} cluster(s), {sum(len(e.get(\"failing_runs\", [])) for e in d)} run(s)')" "$STATE_DIR/cluster_state.json"
+        else
+          echo "No cluster state found in $STATE_DIR - this run will start from an empty state"
+        fi
+
+        echo "path=$STATE_DIR" >> $GITHUB_OUTPUT
+
     - name: Create secrets.json
       shell: bash
       run: |
         set -euo pipefail
-        
-        # Use provided values or default to current repository
-        REPO_OWNER="${{ inputs.github_repo_owner }}"
-        REPO_NAME="${{ inputs.github_repo_name }}"
-        
-        if [ -z "$REPO_OWNER" ]; then
-          REPO_OWNER="${{ github.repository_owner }}"
-        fi
-        
-        if [ -z "$REPO_NAME" ]; then
-          REPO_NAME="${{ github.event.repository.name }}"
-        fi
-        
         cat > "${{ github.action_path }}/secrets.json" << EOF
         {
           "github_token": "${{ inputs.github_token }}",
-          "github_repo_owner": "$REPO_OWNER",
-          "github_repo_name": "$REPO_NAME",
           "slack_token": "${{ inputs.slack_token }}",
-          "channel_id": "${{ inputs.channel_id }}",
-          "project_owner": "${{ inputs.project_owner }}",
-          "project_name": "${{ inputs.project_name }}",
-          "project_number": "",
-          "project_field_id": ""
+          "channel_id": "${{ inputs.channel_id }}"
         }
         EOF
-        echo "Created secrets.json with repo: $REPO_OWNER/$REPO_NAME"
+        echo "Created secrets.json"
       working-directory: ${{ github.action_path }}
 
     - name: Delete existing build_slack_export_with_threads.json if it exists
@@ -128,29 +117,7 @@ runs:
         DATE_RANGE_START: ${{ inputs.start_date || '' }}
         DATE_RANGE_END: ${{ inputs.end_date || '' }}
 
-    - name: Group similar errors
-      if: inputs.update_mode == 'rebuild'
-      shell: bash
-      run: |
-        set -euo pipefail
-        cd "${{ github.action_path }}"
-        python3 group_similar_errors.py
-      env:
-        PYTHONUNBUFFERED: 1
-
-    - name: Rebuild issues from scratch
-      if: inputs.update_mode == 'rebuild'
-      shell: bash
-      run: |
-        set -euo pipefail
-        cd "${{ github.action_path }}"
-        python3 create_github_issues.py
-      env:
-        PYTHONUNBUFFERED: 1
-        GITHUB_TOKEN: ${{ inputs.github_token }}
-
-    - name: Update issues with new errors
-      if: inputs.update_mode == 'update'
+    - name: Sync new errors into cluster state
       shell: bash
       run: |
         set -euo pipefail
@@ -159,6 +126,7 @@ runs:
       env:
         PYTHONUNBUFFERED: 1
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        GROUPING_STATE_DIR: ${{ steps.state.outputs.path }}
         DATE_RANGE_START: ${{ inputs.start_date || '' }}
         DATE_RANGE_END: ${{ inputs.end_date || '' }}
 
@@ -175,6 +143,7 @@ runs:
       env:
         PYTHONUNBUFFERED: 1
         GITHUB_TOKEN: ${{ inputs.github_token }}
+        GROUPING_STATE_DIR: ${{ steps.state.outputs.path }}
 
     - name: Upload error report as artifact
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -205,21 +174,25 @@ runs:
           console.log(`Current run ID: ${currentRunId}`);
           
           try {
+            // Ask for successful runs directly. Filtering a page of completed
+            // runs loses the last success once enough failures accumulate behind
+            // it, and no baseline means every row counts as new and gets sent to
+            // the database again.
             const resp = await github.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
               owner,
               repo,
               workflow_id,
               branch: 'main',
-              status: 'completed',
-              per_page: 20
+              status: 'success',
+              exclude_pull_requests: true,
+              per_page: 2
             });
-            
-            // Filter to successful runs that aren't the current run
+
             // Use String() to ensure consistent type comparison
-            const runs = (resp.data.workflow_runs || []).filter(r => 
-              r.conclusion === 'success' && String(r.id) !== String(currentRunId)
+            const runs = (resp.data.workflow_runs || []).filter(r =>
+              String(r.id) !== String(currentRunId)
             );
-            
+
             const run = runs[0];
             const selectedId = run ? String(run.id) : '';
             

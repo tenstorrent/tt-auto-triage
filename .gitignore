@@ -6,18 +6,18 @@ secrets.json
 *.pyc
 *.log
 
-# Generated output files from slack_output_analysis
-*/all_errors.json
-*/issue_dump.json
-*/error_report.json
-*/incremental_error_report.json
-*/grouped_errors.json
-*/build_slack_export_with_threads.json
-*/commit_hash_cache.json
-*/job_name_cache.json
-*/debug.log
+# Generated output files from slack_output_analysis.
+# These need **/ rather than */: a pattern containing a slash is anchored to this
+# file's directory and * does not cross separators, so */name.json only matches
+# one level down and misses these files where they are actually written.
+**/all_errors.json
+**/cluster_state.json
+**/error_report.json
+**/incremental_error_report.json
+**/build_slack_export_with_threads.json
+**/commit_hash_cache.json
+**/job_name_cache.json
 temp.json
-issue_dump.json
 
 # Test artifacts - nested auto_triage directories created during tests
 .github/actions/auto-triage/auto_triage/data/data

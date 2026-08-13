@@ -23,12 +23,11 @@ This repository provides the following capabilities:
    - Avoids duplicate issues for already tracked workflow/job pairs
    - Produces markdown summaries for review
 
-3. **Slack Output Analysis**: Syncs error messages from Slack channels to GitHub issues:
+3. **Slack Output Analysis**: Groups error messages from Slack channels into error clusters:
    - Invoked via `.github/actions/slack_output_analysis/action.yml`
    - Fetches error messages from Slack channels
-   - Extracts errors and generates reports
-   - Groups similar errors for analysis/reporting in rebuild mode
-   - Creates, updates, and closes GitHub issues in sync flows
+   - Groups similar errors using ML-based similarity matching
+   - Holds cluster state in a JSON artifact carried between runs, not in GitHub issues
    - Generates error reports and incremental reports
 
 4. **Bug-Escape Guidance (Separate Workstream)**:
@@ -227,94 +226,137 @@ jobs:
 
 ### Slack Output Analysis
 
-The `slack_output_analysis` action syncs error messages from Slack channels to GitHub issues.
+The `slack_output_analysis` action groups error messages from Slack channels into error clusters
+held in a JSON state file.
 
 #### Basic Usage
 
 ```yaml
 jobs:
-  sync-slack-errors:
+  group-slack-errors:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Sync Slack errors to GitHub issues
+      - name: Group Slack errors
         uses: tenstorrent/tt-auto-triage/.github/actions/slack_output_analysis@main
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
           channel_id: ${{ secrets.SLACK_CHANNEL_ID }}
-          update_mode: "update"
           start_date: "January 1, 2026"
+          state_path: ${{ github.workspace }}/grouping-state
 ```
 
 #### Required Inputs
 
-- `github_token`: GitHub Personal Access Token for creating/updating issues
+- `github_token`: GitHub token for reading job metadata (commit hashes, job names) and artifacts
 - `slack_token`: Slack Bot Token for fetching messages
 - `channel_id`: Slack channel ID to fetch messages from
 
 #### Optional Inputs
 
-- `update_mode`: Mode to use - `"update"` to sync new errors (default) or `"rebuild"` to recreate all issues from scratch
 - `start_date`: Start date for fetching Slack messages (format: `"January 1, 2026"`, default: `"January 1, 2026"`)
 - `end_date`: End date cutoff for fetching messages (format: `"January 31, 2026"`, default: `""` for no cutoff)
 - `workflow_file`: Workflow file path for finding previous runs to create incremental report (e.g., `".github/workflows/analyze-ND-failures.yml"`, default: `""`)
+- `state_path`: Directory holding the cluster state carried between runs (default: `<workspace>/grouping-state`)
 
 #### Outputs
 
 - `incremental_report_path`: Path to the incremental error report (new entries only)
+- `state_path`: Directory containing the updated cluster state and API caches
 
-#### Example: Manual Workflow Dispatch
+#### Example: Carrying State Between Runs
+
+Grouping quality depends on the previous run's clusters, so restore the state artifact before the
+action and upload it afterwards.
 
 ```yaml
-name: Sync Slack Errors to GitHub
-
-on:
-  workflow_dispatch:
-    inputs:
-      github_token:
-        description: 'GitHub Personal Access Token'
-        required: true
-        type: string
-      slack_token:
-        description: 'Slack Bot Token'
-        required: true
-        type: string
-      channel_id:
-        description: 'Slack channel ID'
-        required: true
-        type: string
-      update_mode:
-        description: 'Mode: update or rebuild'
-        required: false
-        default: 'update'
-        type: choice
-        options:
-          - update
-          - rebuild
-      start_date:
-        description: 'Start date (format: January 1, 2026)'
-        required: false
-        default: 'January 1, 2026'
-        type: string
-
 jobs:
-  sync-slack-errors:
+  group-slack-errors:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
 
-      - name: Sync Slack errors to GitHub issues
+      # Ask for successful runs directly rather than filtering a page of
+      # completed ones: a day of failures is enough to push the last success off
+      # the page, and not finding it discards the clustering history.
+      - name: Find previous grouping state
+        id: prev-state
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runs = await github.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'your-workflow.yml',
+              branch: context.ref.replace('refs/heads/', ''),
+              status: 'success',
+              exclude_pull_requests: true,
+              per_page: 1
+            });
+            const run = (runs.data.workflow_runs || [])[0];
+            if (!run) {
+              core.setOutput('has_state', 'false');
+              return;
+            }
+            // Whether the artifact is present is what separates a genuine cold
+            // start from a download that must not fail quietly.
+            const artifacts = await github.paginate(
+              'GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts',
+              { owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100 }
+            );
+            const state = artifacts.find(a => a.name === 'grouping-state' && !a.expired);
+            core.setOutput('run_id', String(run.id));
+            core.setOutput('has_state', state ? 'true' : 'false');
+
+      # No continue-on-error: the step above already confirmed the artifact is
+      # there, so a failure here is real and must not be read as a first run.
+      # Swallowing it would replace the accumulated clusters with an empty state.
+      - name: Download previous grouping state
+        if: ${{ steps.prev-state.outputs.has_state == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: grouping-state
+          path: ${{ github.workspace }}/grouping-state
+          run-id: ${{ steps.prev-state.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Group Slack errors
         uses: ./.github/actions/slack_output_analysis
         with:
-          github_token: ${{ inputs.github_token }}
-          slack_token: ${{ inputs.slack_token }}
-          channel_id: ${{ inputs.channel_id }}
-          update_mode: ${{ inputs.update_mode || 'update' }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
+          channel_id: ${{ secrets.SLACK_CHANNEL_ID }}
           start_date: ${{ inputs.start_date || 'January 1, 2026' }}
+          state_path: ${{ github.workspace }}/grouping-state
+
+      - name: Upload grouping state
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: grouping-state
+          path: grouping-state/
+          if-no-files-found: error
+          retention-days: 90
 ```
+
+Two different retention windows are at work here and they are deliberately not the same number.
+`retention-days` is how long GitHub keeps the artifact, and it only has to outlive the gap between
+one run and the next; 90 days is slack for a schedule that gets paused or disabled, and it keeps the
+API caches usable since commit hashes and job names never go stale. The 30 days below is how far
+back runs are kept *inside* the state, which is what bounds cluster history. Shortening
+`retention-days` to 30 would not prune anything sooner, it would only add a way to lose the state.
+
+Without the restored artifact the action still runs, but every error becomes its own cluster and
+grouping quality rebuilds over the following month.
 
 ## How It Works
 
@@ -341,9 +383,14 @@ jobs:
 
 1. **Fetch Messages**: Downloads error messages from the specified Slack channel
 2. **Extract Errors**: Extracts error messages from Slack messages (focuses on non-deterministic errors by default)
-3. **Group Similar Errors (Rebuild Mode)**: Uses ML-based similarity matching for grouped analysis/reporting
-4. **Issue Sync**: Creates/updates issues in update mode, recreates issues in rebuild mode, and applies close/cleanup logic during sync
-5. **Generate Reports**: Creates error reports and incremental reports comparing against previous runs
+3. **Sync Clusters**: Matches each new error against existing cluster centroids using ML-based
+   similarity, appending to a cluster or starting a new one. Runs older than 30 days are pruned,
+   and clusters left with no runs are dropped.
+4. **Generate Reports**: Creates error reports and incremental reports comparing against previous runs
+
+Cluster state lives in `cluster_state.json` inside the `grouping-state` artifact, alongside the
+GitHub API caches. The calling workflow restores the previous run's artifact before the action runs
+and uploads the updated one afterwards. No GitHub issues are created, read, updated, or closed.
 
 ### Bug-Escape Guidance (Separate Workstream)
 
@@ -364,6 +411,7 @@ Both actions produce artifacts that can be downloaded from workflow runs:
 - **regression-analysis-output**: Contains the final `explanation.md` and `slack_message.json` files
 - **error-report**: Contains the error report JSON (slack_output_analysis)
 - **incremental-error-report**: Contains incremental error report comparing against previous run
+- **grouping-state**: Contains `cluster_state.json` and the GitHub API caches, uploaded by the calling workflow
 
 ## Contributing
 
