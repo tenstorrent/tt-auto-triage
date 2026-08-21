@@ -1,0 +1,130 @@
+You are reviewing a previously-reported CI failure to decide whether it has been genuinely fixed,
+is a variation of the same underlying problem, or has changed to a completely different failure.
+
+Workflow: $workflow_name
+Job: $job_name
+API status: $api_status (based on the last $runs_to_evaluate completed runs)
+
+Original issue body (contains the error that was reported):
+---
+$issue_body
+---
+
+Evidence files for your analysis:
+$log_sections
+
+INSTRUCTIONS:
+1. Read ALL provided files using your file reading tools.
+
+2. For api_status == "still_failing":
+   - The job is still failing in recent runs. The failure may be:
+     (a) Exactly the same root cause → keep open (should_close=false, should_update=false)
+     (b) Same test/category of failure but with slightly different symptoms → add an
+         update comment and keep open (should_close=false, should_update=true)
+     (c) Completely different root cause on the same job → close this issue
+         (should_close=true, should_update=false)
+   - Read ALL provided failing run logs carefully.
+   - Compare the root cause of the current failure against the original error
+     described in the issue body. Focus on the underlying cause, not surface
+     details like line numbers, timestamps, or memory addresses.
+
+   SAME CATEGORY (b) examples — use should_update=true, should_close=false:
+     - Same test failing with the same assertion type (e.g. PCC/allclose check)
+       but at a slightly different position, token, or threshold value.
+     - Same module or layer failing but with a marginally different error value.
+     - Same test failing but a different sub-variant or parametrization that is
+       closely related to the original.
+   In these cases the issue is STILL VALID — do NOT close it.
+   Post an update comment noting the symptom change and linking new run URLs.
+
+   DIFFERENT ROOT CAUSE (c) examples — use should_close=true:
+     - A completely different test is now failing (different test name).
+     - A completely different assertion type (e.g. was OOM, now is a hang).
+     - A completely different module or subsystem.
+     - The failure mode has fundamentally changed (e.g. was numerical, now is
+       a crash or timeout).
+
+   You may only set should_close to true if ALL THREE of these conditions hold:
+
+   Condition A — Consistently different root cause:
+     The new failure must show a clearly different root cause (case c above) in ALL
+     $runs_to_evaluate of the provided logs. If any run shows the original
+     error, something ambiguous, or an infrastructure failure, keep open.
+
+   Condition B — Test-related, not infrastructure:
+     The new failure must be clearly caused by the test or the code under
+     test, NOT by general machine or CI infrastructure problems. If any of
+     the logs show non-deterministic infrastructure failures, keep open.
+     Examples of infrastructure failures that should NOT trigger a close:
+       - Network disconnects, "connection refused", socket timeouts
+       - Runner disconnected / "lost connection to server"
+       - Runner received shutdown signal / runner crashed
+       - Docker pull failures, runner setup failures
+       - SSH disconnection during test
+       - Out-of-memory from the runner itself (not test-induced OOM)
+       - Azure / AWS / GitHub Actions internal errors
+       - Timeout waiting for a runner or hardware to become available
+     These are non-deterministic and say nothing about the original failure.
+
+   Condition C — Confident determination:
+     You must be confident the root cause has fundamentally changed. If you are
+     uncertain whether the new failure is the same underlying issue or a
+     different one, set should_close to false (conservative — do not close on
+     uncertainty).
+
+   If conditions A-C hold: set should_close=true, should_update=false.
+   If same category (b): set should_close=false, should_update=true.
+   Otherwise: set should_close=false, should_update=false.
+
+3. For api_status == "resolved":
+   - The GitHub API says the job passed in recent runs.
+   - Read the recent passing run logs and compare them to the original failure
+     described in the issue body.
+   - Ask yourself: did the test actually run and pass, or was it silently
+     dropped from the test matrix, given an always-pass condition, or neutered
+     in some other way? A job that "passes" by not running any assertions is
+     NOT fixed.
+   - If the test genuinely ran and passed: set should_close=true.
+   - If something looks wrong (test skipped internally, assertion removed, etc.):
+     set should_close=false and explain in reason.
+   - should_update is not relevant for "resolved" — leave it false.
+
+4. For api_status == "removed":
+   - The job no longer appears in the workflow YAML at all.
+   - Read the provided YAML file. Confirm the job name is absent.
+   - Look at any commit/PR references visible in the log context.
+   - Only set should_close to true if the removal looks intentional (e.g.
+     the job was clearly erroneous, too flaky, or explicitly deleted in a PR).
+   - If there is no clear rationale for removal visible in the evidence,
+     set should_close to false.
+   - should_update is not relevant for "removed" — leave it false.
+
+5. If should_close is true, draft a closing comment in markdown that:
+   - States what the original failure was (summarise from the issue body).
+   - For still_failing: explains that the original error is no longer present
+     and the job is now failing for a completely different reason, with evidence.
+   - For resolved/removed: cites specific evidence from the logs that the
+     issue is resolved (quote log lines or reference run URLs).
+   - Links the PR or commit that most likely caused the fix, if you can
+     identify one from timestamps, commit SHAs, or PR references in the logs.
+   - Ends with: "*Closed by tt-auto-triage lifecycle bot.*"
+
+6. If should_update is true (same category, keep open), draft an update comment
+   in markdown that:
+   - Briefly notes the original failure symptom (from the issue body).
+   - Describes how the current failure differs symptomatically (e.g. "failure
+     now occurs at pos=2 instead of pos=9, and PCC has dropped below 0.99").
+   - Links the new run URLs from the evidence files.
+   - Does NOT say "Closed" — this issue stays open.
+   - Ends with: "*Updated by tt-auto-triage lifecycle bot.*"
+
+7. If should_close=false and should_update=false, leave comment_body as an
+   empty string and explain your reasoning in reason.
+
+8. For fix_pr_hint: if you can identify a specific PR URL from the log
+   evidence, include it. Otherwise leave it as an empty string.
+   Do NOT guess — only provide a URL you actually found in the evidence.
+
+Output the marker below on its own line, followed by compact JSON only:
+$marker
+{"should_close": true/false, "should_update": true/false, "reason": "brief explanation", "comment_body": "full markdown or empty string", "fix_pr_hint": "https://... or empty string"}
