@@ -14,21 +14,35 @@ ARTIFACT_NAME = "workflow-data"
 def download_workflow_data(target_repo: str) -> list[list[Any]]:
     log("Finding latest aggregate-workflow-data run...")
     raw = gh(
-        "run",
-        "list",
-        f"--workflow={WORKFLOW_FILE}",
-        f"--repo={target_repo}",
-        "--status=completed",
-        "--limit=20",
-        "--json=databaseId,conclusion",
+        "api",
+        f"repos/{target_repo}/actions/workflows/{WORKFLOW_FILE}/runs?status=success&per_page=100",
     )
-    runs = json.loads(raw)
+    runs = json.loads(raw).get("workflow_runs", [])
     if not runs:
-        raise RuntimeError("No completed aggregate-workflow-data runs found")
-    successful_run = next((run for run in runs if run.get("conclusion") == "success"), None)
-    if not successful_run:
         raise RuntimeError("No successful aggregate-workflow-data runs found")
-    run_id = successful_run["databaseId"]
+    runs.sort(key=lambda run: run.get("created_at", ""), reverse=True)
+    successful_run = None
+    for run in runs:
+        if run.get("conclusion") != "success":
+            continue
+        run_id = run["id"]
+        try:
+            artifacts = json.loads(
+                gh("api", f"repos/{target_repo}/actions/runs/{run_id}/artifacts?per_page=100")
+            ).get("artifacts", [])
+        except RuntimeError as exc:
+            log(f"  Could not inspect artifacts for run {run_id}: {exc}")
+            continue
+        if any(
+            artifact.get("name") == ARTIFACT_NAME and artifact.get("expired") is False
+            for artifact in artifacts
+        ):
+            successful_run = run
+            break
+        log(f"  Skipping successful run {run_id}: {ARTIFACT_NAME} is unavailable")
+    if successful_run is None:
+        raise RuntimeError("No successful aggregate-workflow-data run has an available artifact")
+    run_id = successful_run["id"]
     log(f"  Latest successful run: {run_id}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
