@@ -18,7 +18,7 @@ def download_workflow_data(target_repo: str) -> list[list[Any]]:
         "list",
         f"--workflow={WORKFLOW_FILE}",
         f"--repo={target_repo}",
-        "--status=completed",
+        "--status=success",
         "--limit=20",
         "--json=databaseId,conclusion",
     )
