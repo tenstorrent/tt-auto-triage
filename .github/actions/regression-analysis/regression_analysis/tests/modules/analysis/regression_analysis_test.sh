@@ -95,6 +95,7 @@ set -e
 
 # Assert that the stub copilot was invoked at least once.
 assert "regression_analysis delegates to run_llm_analysis (copilot invoked)" [ -s "$COPILOT_STUB_LOG" ]
+assert "regression_analysis passes the configured model to copilot" grep -q -- "--model claude-sonnet-5.5" "$COPILOT_STUB_LOG"
 
 # Cleanup: restore PATH and any backed-up files, and remove temp artifacts.
 export PATH="$ORIGINAL_PATH"

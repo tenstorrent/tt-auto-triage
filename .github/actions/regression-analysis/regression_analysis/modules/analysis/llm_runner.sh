@@ -9,11 +9,9 @@
 # - mode: "ci" for CI environment (no interactive approval)
 #
 # Returns: exit code from copilot invocation
-# Uses lib/common.sh
+# Uses lib/config.sh (AT_COPILOT_MODEL selects the Copilot model)
 #
 # Usage: source this file, then call run_llm_analysis.
-#
-# Upon writing this file, the current copilot model is claude sonnet 4.5
 
 if [ -n "${_LLM_RUNNER_LOADED:-}" ]; then
     return 0
@@ -21,8 +19,8 @@ fi
 _LLM_RUNNER_LOADED=1
 
 _LR_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../../lib/common.sh
-source "$_LR_DIR/../../lib/common.sh"
+# shellcheck source=../../lib/config.sh
+source "$_LR_DIR/../../lib/config.sh"
 
 # Run LLM analysis with Copilot CLI.
 # Returns the exit code from copilot.
@@ -59,6 +57,6 @@ run_llm_analysis() {
     prompt=$(printf 'You are operating in %s. Complete the following instructions for workflow '\''%s'\'' and job '\''%s'\'':\n\n%s' \
         "$env_context" "$workflow" "$job" "$(cat "$instructions_file")")
 
-    copilot -p "$prompt" --allow-all-tools
+    copilot -p "$prompt" --model "$AT_COPILOT_MODEL" --allow-all-tools
     return $?
 }

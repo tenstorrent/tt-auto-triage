@@ -23,6 +23,7 @@ cat > "$MOCK_DIR/copilot" <<'MOCK'
 if [ -n "${RESULT_COMPARATOR_DATA_DIR:-}" ] && [ -d "${RESULT_COMPARATOR_DATA_DIR}" ]; then
     echo '{"same_failure": true, "retry_error_extracted": "Mock extracted error"}' \
         > "${RESULT_COMPARATOR_DATA_DIR}/error_comparison.json"
+    echo "$*" > "${RESULT_COMPARATOR_DATA_DIR}/copilot_args.txt"
 fi
 exit 0
 MOCK
@@ -74,5 +75,7 @@ same=$(get_same_failure_from_comparison "$TMP_DIR/root/regression_analysis/data/
 assert_eq "run_copilot_error_comparison: mock writes same_failure=true" "$same" "true"
 extracted=$(get_retry_error_extracted "$TMP_DIR/root/regression_analysis/data/error_comparison.json")
 assert_eq "run_copilot_error_comparison: mock writes retry_error_extracted" "$extracted" "Mock extracted error"
+assert "run_copilot_error_comparison: passes the configured model to copilot" \
+    grep -q -- "--model claude-sonnet-5.5" "$TMP_DIR/root/regression_analysis/data/copilot_args.txt"
 
 test_summary

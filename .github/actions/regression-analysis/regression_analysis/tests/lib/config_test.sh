@@ -31,16 +31,21 @@ assert_eq "AT_SUBJOB_MISSING_CANCEL_LIMIT" "$AT_SUBJOB_MISSING_CANCEL_LIMIT" "50
 assert_eq "AT_CUTOFF_COMMIT empty"  "$AT_CUTOFF_COMMIT" ""
 assert_eq "AT_REUSE_DATA default"   "$AT_REUSE_DATA"    "false"
 
+# -- copilot model -------------------------------------------------------------
+assert_eq "AT_COPILOT_MODEL default" "$AT_COPILOT_MODEL" "claude-sonnet-5.5"
+
 # -- env override works --------------------------------------------------------
 (
     unset AT_OWNER_REPO AT_BASE_URL
     export AT_OWNER="myorg" AT_REPO="myrepo" AT_BATCH_SIZE="5" AT_CUTOFF_COMMIT="deadbeef" AT_REUSE_DATA="true"
+    export COPILOT_MODEL="claude-opus-5.5"
     # Re-source to pick up overrides (reset guard first)
     unset _REGRESSION_ANALYSIS_CONFIG_LOADED
     source "$AT_ROOT/lib/config.sh"
     [ "$AT_OWNER" = "myorg" ] && [ "$AT_REPO" = "myrepo" ] && [ "$AT_BATCH_SIZE" = "5" ] \
       && [ "$AT_OWNER_REPO" = "myorg/myrepo" ] && [ "$AT_BASE_URL" = "https://github.com/myorg/myrepo" ] \
-      && [ "$AT_CUTOFF_COMMIT" = "deadbeef" ] && [ "$AT_REUSE_DATA" = "true" ]
+      && [ "$AT_CUTOFF_COMMIT" = "deadbeef" ] && [ "$AT_REUSE_DATA" = "true" ] \
+      && [ "$AT_COPILOT_MODEL" = "claude-opus-5.5" ]
 ) && { echo "  PASS  env overrides"; _pass=$((_pass + 1)); } \
   || { echo "  FAIL  env overrides"; _fail=$((_fail + 1)); }
 

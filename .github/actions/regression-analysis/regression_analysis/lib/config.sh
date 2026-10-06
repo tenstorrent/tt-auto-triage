@@ -38,6 +38,11 @@ AT_RUN_LIMIT_WITHOUT_SUCCESS="${AT_RUN_LIMIT_WITHOUT_SUCCESS:-100}"  # max runs 
 AT_SUBJOB_MISSING_CANCEL_LIMIT="${AT_SUBJOB_MISSING_CANCEL_LIMIT:-50}"  # cancel after N consecutive runs without subjob
 
 # ==============================================================================
+# Copilot CLI  (model passed to every `copilot -p` call; COPILOT_MODEL overrides)
+# ==============================================================================
+AT_COPILOT_MODEL="${COPILOT_MODEL:-claude-sonnet-5.5}"
+
+# ==============================================================================
 # Feature flags  (mirror the action.yml inputs where relevant)
 # ==============================================================================
 AT_CUTOFF_COMMIT="${AT_CUTOFF_COMMIT:-${CUTOFF_COMMIT:-}}"           # ignore runs newer than this SHA
