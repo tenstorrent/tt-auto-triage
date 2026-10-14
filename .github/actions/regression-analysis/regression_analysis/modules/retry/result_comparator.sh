@@ -13,7 +13,7 @@
 #   determine_retry_result(retry_status, same_failure) -> result_type
 #
 # Result types: passed, failed_same, failed_different
-# Uses lib/common.sh
+# Uses lib/config.sh (AT_COPILOT_MODEL selects the Copilot model)
 #
 # Usage: source this file.
 #
@@ -25,8 +25,8 @@ _RESULT_COMPARATOR_LOADED=1
 
 _MODULE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _LIB_DIR="${_MODULE_DIR}/../../lib"
-# shellcheck source=../../lib/common.sh
-[ -f "${_LIB_DIR}/common.sh" ] && source "${_LIB_DIR}/common.sh"
+# shellcheck source=../../lib/config.sh
+[ -f "${_LIB_DIR}/config.sh" ] && source "${_LIB_DIR}/config.sh"
 
 # ==============================================================================
 # run_copilot_error_comparison(root, data_dir) -> 0 on success, 1 on failure
@@ -69,7 +69,7 @@ run_copilot_error_comparison() {
     local saved_pwd
     saved_pwd=$(pwd)
     cd "$root" || return 1
-    copilot -p "$compare_prompt" --allow-all-tools 2>/dev/null || true
+    copilot -p "$compare_prompt" --model "$AT_COPILOT_MODEL" --allow-all-tools 2>/dev/null || true
     cd "$saved_pwd" || true
 
     if [ -f "${data_dir}/error_comparison.json" ]; then

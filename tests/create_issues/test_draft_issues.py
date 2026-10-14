@@ -1,4 +1,5 @@
 import json
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -83,6 +84,31 @@ class DraftIssuesPromptAlignmentTests(unittest.TestCase):
         self.assertIn("Run 2 job URL: https://example.com/job/3", prompt)
         self.assertIn("Run 2 local log path: /tmp/run3.log", prompt)
         self.assertNotIn("Run 1 job URL: \nRun 1 local log path: /tmp/run2.log", prompt)
+
+
+class RunCopilotAgentModelTests(unittest.TestCase):
+    def _run_and_capture_cmd(self, env: dict[str, str]) -> list[str]:
+        captured: dict[str, list[str]] = {}
+
+        def _fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+        with patch.dict("os.environ", env, clear=True), patch(
+            "tools.ci.create_issues.draft_issues.subprocess.run",
+            side_effect=_fake_run,
+        ):
+            draft_issues._run_copilot_agent("prompt")
+        return captured["cmd"]
+
+    def test_passes_default_model_to_copilot(self) -> None:
+        cmd = self._run_and_capture_cmd({"PATH": "/usr/bin"})
+        self.assertEqual(cmd[cmd.index("--model") + 1], draft_issues._DEFAULT_MODEL)
+        self.assertEqual(draft_issues._DEFAULT_MODEL, "claude-sonnet-5.5")
+
+    def test_copilot_model_env_overrides_default(self) -> None:
+        cmd = self._run_and_capture_cmd({"PATH": "/usr/bin", "COPILOT_MODEL": "claude-opus-5.5"})
+        self.assertEqual(cmd[cmd.index("--model") + 1], "claude-opus-5.5")
 
 
 if __name__ == "__main__":

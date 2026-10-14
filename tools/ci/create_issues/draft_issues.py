@@ -15,6 +15,8 @@ _PROMPT_TEMPLATE = string.Template(
 
 MARKER = "===FINAL_REVIEW==="
 _AGENT_TIMEOUT = 300
+# Copilot CLI model id. COPILOT_MODEL overrides it.
+_DEFAULT_MODEL = "claude-sonnet-5.5"
 
 
 def _run_copilot_agent(prompt: str) -> str:
@@ -27,8 +29,9 @@ def _run_copilot_agent(prompt: str) -> str:
     copilot_pat = os.environ.get("COPILOT_PAT", "")
     if copilot_pat:
         safe_env["COPILOT_GITHUB_TOKEN"] = copilot_pat
+    model = os.environ.get("COPILOT_MODEL") or _DEFAULT_MODEL
     proc = subprocess.run(
-        ["copilot", "-p", prompt, "--allow-all-tools"],
+        ["copilot", "-p", prompt, "--model", model, "--allow-all-tools"],
         capture_output=True,
         text=True,
         timeout=_AGENT_TIMEOUT,

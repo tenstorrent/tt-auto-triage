@@ -174,6 +174,10 @@ jobs:
 - `SLACK_BOT_TOKEN`: Slack Bot Token for sending notifications (required if `send-slack-message` is `true`)
 - `SLACK_CHANNEL_ID`: Slack Channel ID to post messages to (required if `send-slack-message` is `true`)
 
+#### Optional Environment Variables
+
+- `COPILOT_MODEL`: Copilot CLI model for every analysis call (default: `claude-sonnet-5.5`). The same variable applies to the issue lifecycle workflow.
+
 #### Required Permissions
 
 The workflow needs the following permissions:
