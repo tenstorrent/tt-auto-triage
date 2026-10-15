@@ -1,0 +1,108 @@
+name: "(triage) Issue Lifecycle Manager"
+
+on:
+  workflow_call:
+    inputs:
+      close-issues:
+        description: "Actually close resolved issues (false = dry-run)"
+        type: boolean
+        default: false
+      check-passing-only:
+        description: "Fast mode: close passing jobs deterministically without AI (no agent invoked)"
+        type: boolean
+        default: false
+      llm-backend:
+        description: "LLM backend for lifecycle review: 'copilot' or 'cursor'"
+        type: string
+        default: "copilot"
+      issue-repo:
+        description: "Repository containing the open auto-triage issues"
+        type: string
+        default: "tenstorrent/tt-metal"
+      target-repo:
+        description: "Repository to check workflow run history against"
+        type: string
+        default: "tenstorrent/tt-metal"
+      runs-to-evaluate:
+        description: "How many recent runs to fetch and require consensus across"
+        type: string
+        default: "3"
+    secrets:
+      GITHUB_READ_TOKEN:
+        description: "Token with read access to target-repo workflow runs"
+        required: true
+      ISSUE_WRITE_TOKEN:
+        description: "Token with write/close access to issue-repo"
+        required: true
+      CURSOR_API_KEY:
+        description: "Cursor API key (required when llm-backend=cursor and check-passing-only=false)"
+        required: false
+      COPILOT_API_KEY:
+        description: "GitHub PAT for Copilot CLI auth (required when llm-backend=copilot and check-passing-only=false)"
+        required: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout tt-auto-triage (lifecycle branch)
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/tt-auto-triage
+          ref: ebanerjee/issue-lifecycle
+
+      - name: Install Cursor CLI
+        if: inputs.llm-backend == 'cursor' && inputs.check-passing-only == false
+        run: |
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Node.js 24 (required for Copilot CLI)
+        if: inputs.llm-backend == 'copilot' && inputs.check-passing-only == false
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install GitHub Copilot CLI
+        if: inputs.llm-backend == 'copilot' && inputs.check-passing-only == false
+        run: |
+          set -euo pipefail
+          npm install -g @github/copilot
+          copilot --version || { echo "::error::Copilot CLI installation failed"; exit 1; }
+
+      - name: Run issue lifecycle manager
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_READ_TOKEN }}
+          ISSUE_WRITE_TOKEN: ${{ secrets.ISSUE_WRITE_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_API_KEY }}
+          LLM_BACKEND: ${{ inputs.llm-backend }}
+          CHECK_PASSING_ONLY: ${{ inputs.check-passing-only }}
+          TARGET_REPO: ${{ inputs.target-repo }}
+          ISSUE_REPO: ${{ inputs.issue-repo }}
+          RUNS_TO_EVALUATE: ${{ inputs.runs-to-evaluate }}
+          CLOSE_ISSUES: ${{ inputs.close-issues }}
+          SUMMARY_OUTPUT: summary.md
+          PYTHONPATH: .
+        run: python3 -m tools.ci.lifecycle
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [ -f summary.md ]; then
+            cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No summary produced." >> "$GITHUB_STEP_SUMMARY"
+          fi
